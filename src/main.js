@@ -15,10 +15,12 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: "high-performance"
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0xa7d7f7, 1);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500);
+camera.position.set(-22, 18, 54);
 
 const ambient = new THREE.HemisphereLight(0xdff3ff, 0x5a7c4f, 1.7);
 scene.add(ambient);
@@ -118,7 +120,6 @@ function createNoticeTexture() {
   ctx.fillText("Mutirao do gramado: sexta", 44, 158);
   ctx.fillText("Sala de convivencia: bloco central", 44, 194);
   const texture = new THREE.CanvasTexture(c);
-  texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
 }
 
@@ -335,6 +336,18 @@ const playerRig = createCharacter({
 const player = playerRig.group;
 world.add(player);
 player.position.set(-40, 0, 38);
+
+const spawnBeacon = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.22, 0.28, 3.2, 12),
+  new THREE.MeshStandardMaterial({ color: 0x31d17c, emissive: 0x1d8b52, emissiveIntensity: 0.35, roughness: 0.5 })
+);
+spawnBeacon.position.set(-40, 1.6, 38);
+spawnBeacon.castShadow = true;
+world.add(spawnBeacon);
+
+const spawnGlow = new THREE.PointLight(0x62ff9f, 1.2, 10, 2);
+spawnGlow.position.set(-40, 2.2, 38);
+world.add(spawnGlow);
 
 const playerState = {
   sitting: false,
@@ -794,6 +807,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => keys.delete(event.code));
 
 function speak(text) {
+  if (!speechEl) return;
   speechEl.textContent = text;
   speechEl.style.opacity = "1";
   speechEl.dataset.locked = "1";
@@ -801,6 +815,7 @@ function speak(text) {
 }
 
 function setStatus(text) {
+  if (!statusEl) return;
   if (!text) {
     statusEl.textContent = "";
     statusEl.style.opacity = "0";
@@ -811,12 +826,14 @@ function setStatus(text) {
 }
 
 function clearSpeech() {
+  if (!speechEl) return;
   if (speechEl.dataset.locked === "1") return;
   speechEl.textContent = "";
   speechEl.style.opacity = "0";
 }
 
 function releaseSpeechLock(dt) {
+  if (!speechEl) return;
   if (speechEl.dataset.ttl) {
     const ttl = Math.max(0, Number(speechEl.dataset.ttl) - dt);
     speechEl.dataset.ttl = String(ttl);
@@ -1033,9 +1050,7 @@ function handleInteraction() {
 }
 
 function updateCamera() {
-  const offset = new THREE.Vector3(14, 16, 14);
-  const target = new THREE.Vector3().copy(player.position).add(offset);
-  camera.position.lerp(target, 0.07);
+  camera.position.set(player.position.x + 14, player.position.y + 18, player.position.z + 14);
   camera.lookAt(player.position.x, 1.25, player.position.z);
 }
 
@@ -1049,6 +1064,13 @@ function resize() {
 
 window.addEventListener("resize", resize);
 resize();
+
+window.addEventListener("error", (event) => {
+  if (statusEl) {
+    statusEl.textContent = `Erro na cena: ${event.message}`;
+    statusEl.style.opacity = "1";
+  }
+});
 
 function tick() {
   const dt = Math.min(clock.getDelta(), 0.033);
