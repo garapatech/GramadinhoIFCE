@@ -691,6 +691,7 @@ function createNpc(config) {
   const state = {
     name: config.name,
     rig,
+    group: npc,
     path: config.path,
     index: 0,
     speed: config.speed,
