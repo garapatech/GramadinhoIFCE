@@ -581,6 +581,8 @@ function createBench(x, z, rotation = 0) {
     label: "Banco",
     radius: 3.2,
     position: new THREE.Vector3(x, 0, z),
+    npcApproachPosition: sitSpot.clone(),
+    npcDuration: 2.6,
     interact() {
       if (playerState.sitting) return;
       playerState.sitting = true;
@@ -590,6 +592,13 @@ function createBench(x, z, rotation = 0) {
         rotation: rotation + Math.PI
       };
       speak("Sentando para descansar um pouco.", "Banco");
+    },
+    npcInteract(npc) {
+      npc.pose = {
+        type: "sit",
+        position: sitSpot.clone(),
+        rotation: rotation + Math.PI
+      };
     },
     update() {
       const pulse = 1 + Math.sin(clock.elapsedTime * 3.5) * 0.02;
@@ -641,14 +650,22 @@ function createFountain(x, z) {
   world.add(fountain);
 
   let pulse = 0;
+  function pulseWater() {
+    pulse = 1;
+  }
   interactables.push({
     kind: "fountain",
     label: "Fonte",
     radius: 3,
     position: new THREE.Vector3(x, 0, z),
+    npcApproachRadius: 2.2,
+    npcDuration: 1.7,
     interact() {
-      pulse = 1;
+      pulseWater();
       speak("A agua respinga e refresca o caminho.", "Fonte");
+    },
+    npcInteract() {
+      pulseWater();
     },
     update(dt) {
       pulse = Math.max(0, pulse - dt * 1.2);
@@ -694,16 +711,24 @@ function createNoticeBoard(x, z, rotation = 0) {
   board.rotation.y = rotation;
   world.add(board);
 
+  let pulse = 0;
   interactables.push({
     kind: "board",
     label: "Painel de avisos",
     radius: 3.1,
     position: new THREE.Vector3(x, 0, z),
+    npcApproachRadius: 1.8,
+    npcDuration: 2.1,
     interact() {
+      pulse = 1;
       speak("Biblioteca ate 21h. Mutirao do gramado sexta.", "Painel de avisos");
     },
-    update() {
-      frame.scale.setScalar(1 + Math.sin(clock.elapsedTime * 2.4) * 0.01);
+    npcInteract() {
+      pulse = 1;
+    },
+    update(dt) {
+      pulse = Math.max(0, pulse - dt * 1.3);
+      frame.scale.setScalar(1 + Math.sin(clock.elapsedTime * 2.4) * 0.01 + pulse * 0.035);
     }
   });
 }
@@ -724,19 +749,27 @@ function createBall(x, z) {
   const velocity = new THREE.Vector2(0, 0);
   let lift = 0;
   const position = new THREE.Vector3(x, 0, z);
+  function kickBall(source) {
+    const push = new THREE.Vector2(ball.position.x - source.x, ball.position.z - source.z);
+    if (push.lengthSq() < 0.001) push.set(0, -1);
+    push.normalize().multiplyScalar(5.2);
+    velocity.add(push);
+    lift = 0.24;
+  }
 
   interactables.push({
     kind: "ball",
     label: "Bola",
     radius: 2.2,
     position,
+    npcApproachRadius: 0.95,
+    npcDuration: 0.9,
     interact() {
-      const push = new THREE.Vector2(ball.position.x - player.position.x, ball.position.z - player.position.z);
-      if (push.lengthSq() < 0.001) push.set(0, -1);
-      push.normalize().multiplyScalar(5.2);
-      velocity.add(push);
-      lift = 0.24;
+      kickBall(player.position);
       speak("A bola sai rolando pelo gramado.", "Bola");
+    },
+    npcInteract(npc) {
+      kickBall(npc.group.position);
     },
     update(dt) {
       ball.position.x += velocity.x * dt;
@@ -799,16 +832,24 @@ function createBike(x, z, rotation = 0) {
   bike.rotation.y = rotation;
   world.add(bike);
 
+  let spinImpulse = 0;
   interactables.push({
     kind: "bike",
     label: "Bicicleta",
     radius: 2.4,
     position: new THREE.Vector3(x, 0, z),
+    npcApproachRadius: 1.25,
+    npcDuration: 1.3,
     interact() {
-      bike.rotation.y += Math.PI / 8;
+      spinImpulse += Math.PI / 8;
       speak("A bicicleta gira no suporte.", "Bicicleta");
     },
-    update() {
+    npcInteract() {
+      spinImpulse += Math.PI / 10;
+    },
+    update(dt) {
+      spinImpulse *= Math.max(0, 1 - dt * 3.4);
+      bike.rotation.y += spinImpulse * dt * 6;
       bike.position.y = Math.sin(clock.elapsedTime * 2) * 0.02;
     }
   });
@@ -847,14 +888,22 @@ function createLamp(x, z) {
   lamp.position.set(x, 0, z);
   world.add(lamp);
 
+  function toggleLamp() {
+    point.intensity = point.intensity > 0.4 ? 0.18 : 0.72;
+  }
   interactables.push({
     kind: "lamp",
     label: "Poste",
     radius: 2.2,
     position: new THREE.Vector3(x, 0, z),
+    npcApproachRadius: 1.1,
+    npcDuration: 1.1,
     interact() {
-      point.intensity = point.intensity > 0.4 ? 0.18 : 0.72;
+      toggleLamp();
       speak("O poste acende e apaga com um toque.", "Poste");
+    },
+    npcInteract() {
+      toggleLamp();
     },
     update() {
       head.material.emissiveIntensity = 0.35 + Math.sin(clock.elapsedTime * 5) * 0.08;
@@ -1046,24 +1095,33 @@ function createNpc(config) {
   const npc = rig.group;
   world.add(npc);
   npc.position.set(config.start.x, 0, config.start.z);
+  const home = new THREE.Vector3(config.start.x, 0, config.start.z);
+  const anchors = config.path.map(({ x, z }) => new THREE.Vector3(x, 0, z));
 
   const state = {
     name: config.name,
     rig,
     group: npc,
     path: config.path,
-    index: 0,
+    anchors,
+    home,
     speed: config.speed,
     lines: config.lines,
     lastLineIndex: -1,
     previewLine: config.lines[0],
     nearby: false,
-    wait: 0,
     pause: 0,
     talkCooldown: 0,
     radius: 3.2,
     phaseOffset: Math.random() * Math.PI * 2,
-    mapColor: `#${config.colors.shirtColor.toString(16).padStart(6, "0")}`
+    mapColor: `#${config.colors.shirtColor.toString(16).padStart(6, "0")}`,
+    interests: { ...(config.interests || {}) },
+    state: "idle",
+    stateTimer: 0.4 + rand(0, 1.4),
+    moveTarget: home.clone(),
+    focus: null,
+    pose: null,
+    lastInteraction: null
   };
   state.previewLine = pickRandomLine(state);
 
@@ -1096,6 +1154,11 @@ createNpc({
     "Eu tava te procurando, viu? Achei que ia perder a aula.",
     "Reparou no pato la perto da fonte? Acho que ele me julga."
   ],
+  interests: {
+    bench: 1.3,
+    fountain: 1.15,
+    board: 1.2
+  },
   colors: {
     shirtColor: 0x4363d8,
     pantsColor: 0x23344b,
@@ -1125,6 +1188,11 @@ createNpc({
     "Se ver alguem perdido, manda pra coordenacao no bloco central.",
     "Faz tempo que nao vejo o pessoal usar a bola, da uma chutada la."
   ],
+  interests: {
+    bike: 1.35,
+    lamp: 1.05,
+    board: 1.1
+  },
   colors: {
     shirtColor: 0xb85a31,
     pantsColor: 0x3a3d46,
@@ -1154,6 +1222,11 @@ createNpc({
     "Hoje a turma esta agitada, deve ser o calor.",
     "Lembre de devolver o livro antes de sexta, ta?"
   ],
+  interests: {
+    board: 1.45,
+    fountain: 1.15,
+    bench: 1.05
+  },
   colors: {
     shirtColor: 0x6a4c93,
     pantsColor: 0x34495e,
@@ -1184,6 +1257,11 @@ createNpc({
     "Topa correr um pouco comigo? So mais uma volta.",
     "O Seu Diego ja avisou pra nao pisar no gramado novo."
   ],
+  interests: {
+    ball: 1.45,
+    bike: 1.25,
+    fountain: 0.95
+  },
   colors: {
     shirtColor: 0xe74c3c,
     pantsColor: 0x2c3e50,
@@ -1213,6 +1291,11 @@ createNpc({
     "Eu gosto de ler perto da fonte no fim da tarde.",
     "Voce ja conheceu o pato? Ele tem opinioes fortes sobre fantasia."
   ],
+  interests: {
+    board: 1.4,
+    fountain: 1.2,
+    bench: 1.1
+  },
   colors: {
     shirtColor: 0x16a085,
     pantsColor: 0x4a3328,
@@ -1243,6 +1326,11 @@ createNpc({
     "Cuidem das arvores novas que plantamos ali na bordinha.",
     "Os patos aparecem cedo, gostam do orvalho no gramado."
   ],
+  interests: {
+    bench: 1.25,
+    fountain: 1.3,
+    ball: 1.15
+  },
   colors: {
     shirtColor: 0xf1c40f,
     pantsColor: 0x6b4226,
@@ -1273,6 +1361,11 @@ createNpc({
     "Topa posar pra um esboco rapido? E so um minuto.",
     "O Seu Diego me deixou desenhar os patos hoje cedo."
   ],
+  interests: {
+    fountain: 1.35,
+    board: 1.2,
+    bike: 0.95
+  },
   colors: {
     shirtColor: 0xff7ab6,
     pantsColor: 0x35506b,
@@ -1358,14 +1451,16 @@ function releaseSpeechLock(dt) {
 const playerVelocity = new THREE.Vector2();
 const facing = new THREE.Vector2(0, -1);
 const playerRadius = 0.55;
+const npcRadius = 0.48;
+const worldLimit = 68;
 const maxSpeed = 7.2;
 const accel = 22;
 const drag = 10;
 const clock = new THREE.Clock();
 
 function clampPlayerToWorld() {
-  player.position.x = THREE.MathUtils.clamp(player.position.x, -68, 68);
-  player.position.z = THREE.MathUtils.clamp(player.position.z, -68, 68);
+  player.position.x = THREE.MathUtils.clamp(player.position.x, -worldLimit, worldLimit);
+  player.position.z = THREE.MathUtils.clamp(player.position.z, -worldLimit, worldLimit);
 }
 
 function resolveCollisions(axis) {
@@ -1449,6 +1544,217 @@ function getDistance2D(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+function isInsideWorldBounds(x, z, radius = 0) {
+  return (
+    x >= -worldLimit + radius &&
+    x <= worldLimit - radius &&
+    z >= -worldLimit + radius &&
+    z <= worldLimit - radius
+  );
+}
+
+function isBlockedAt(x, z, radius = npcRadius) {
+  if (!isInsideWorldBounds(x, z, radius)) return true;
+  for (const box of blockers) {
+    if (
+      x > box.minX - radius &&
+      x < box.maxX + radius &&
+      z > box.minZ - radius &&
+      z < box.maxZ + radius
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function clampPointToWorld(point, radius = 0) {
+  point.x = THREE.MathUtils.clamp(point.x, -worldLimit + radius, worldLimit - radius);
+  point.z = THREE.MathUtils.clamp(point.z, -worldLimit + radius, worldLimit - radius);
+  point.y = 0;
+  return point;
+}
+
+function setNpcRestState(npc, time) {
+  setRestPose(npc.rig.refs, time, npc.phaseOffset);
+  npc.group.position.y = Math.sin(time * 1.6 + npc.phaseOffset) * 0.012;
+}
+
+function applyNpcPose(npc, time) {
+  if (npc.pose?.type === "sit") {
+    npc.group.position.lerp(npc.pose.position, 0.12);
+    npc.group.rotation.y = lerpAngle(npc.group.rotation.y, npc.pose.rotation, 0.12);
+    npc.group.position.y = 0;
+    setSittingPose(npc.rig.refs);
+    return;
+  }
+  setNpcRestState(npc, time);
+}
+
+function pickNpcWanderTarget(npc) {
+  const anchors = npc.anchors.length ? npc.anchors : [npc.home];
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const anchor = anchors[Math.floor(rand(0, anchors.length))];
+    const angle = rand(0, Math.PI * 2);
+    const distance = rand(2.4, 8.6);
+    const candidate = new THREE.Vector3(
+      anchor.x + Math.cos(angle) * distance,
+      0,
+      anchor.z + Math.sin(angle) * distance
+    );
+    clampPointToWorld(candidate, npcRadius);
+    if (!isBlockedAt(candidate.x, candidate.z, npcRadius)) {
+      return candidate;
+    }
+  }
+
+  for (const anchor of anchors) {
+    if (!isBlockedAt(anchor.x, anchor.z, npcRadius)) {
+      return anchor.clone();
+    }
+  }
+
+  return npc.home.clone();
+}
+
+function pickNpcInteractable(npc) {
+  const baseInterest = {
+    bench: 1.1,
+    fountain: 1.05,
+    board: 1,
+    ball: 0.95,
+    bike: 0.75,
+    lamp: 0.45
+  };
+  const candidates = [];
+
+  for (const item of interactables) {
+    const distance = getDistance2D(npc.group.position, item.position);
+    if (distance > 24) continue;
+
+    const itemInterest = baseInterest[item.kind] ?? 0.75;
+    const personalInterest = npc.interests[item.kind] ?? 1;
+    const distanceBonus = 1 - Math.min(distance / 24, 1);
+    const noveltyPenalty = npc.lastInteraction === item ? 0.3 : 0;
+    const score =
+      itemInterest * personalInterest +
+      distanceBonus * 0.85 +
+      rand(-0.16, 0.22) -
+      noveltyPenalty;
+
+    if (score > 1.1) {
+      candidates.push({ item, score });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].item;
+}
+
+function getNpcApproachPoint(npc, item) {
+  if (item.npcApproachPosition) {
+    return item.npcApproachPosition.clone();
+  }
+
+  const approachRadius = item.npcApproachRadius ?? Math.max(0.9, item.radius * 0.55);
+  let baseAngle = Math.atan2(
+    npc.group.position.z - item.position.z,
+    npc.group.position.x - item.position.x
+  );
+  if (!Number.isFinite(baseAngle)) {
+    baseAngle = rand(0, Math.PI * 2);
+  }
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const offset = attempt === 0 ? 0 : rand(-1.25, 1.25);
+    const angle = baseAngle + offset;
+    const candidate = new THREE.Vector3(
+      item.position.x + Math.cos(angle) * approachRadius,
+      0,
+      item.position.z + Math.sin(angle) * approachRadius
+    );
+    clampPointToWorld(candidate, npcRadius);
+    if (!isBlockedAt(candidate.x, candidate.z, npcRadius)) {
+      return candidate;
+    }
+  }
+
+  return pickNpcWanderTarget(npc);
+}
+
+function enterNpcIdle(npc, min = 0.35, max = 1.3) {
+  npc.state = "idle";
+  npc.stateTimer = min + rand(0, Math.max(0.05, max - min));
+  npc.focus = null;
+  npc.pose = null;
+}
+
+function chooseNextNpcAction(npc) {
+  npc.pose = null;
+
+  if (rand(0, 1) < 0.48) {
+    const focus = pickNpcInteractable(npc);
+    if (focus) {
+      npc.state = "approach";
+      npc.focus = focus;
+      npc.stateTimer = 5.5 + rand(0, 3.2);
+      npc.moveTarget.copy(getNpcApproachPoint(npc, focus));
+      return;
+    }
+  }
+
+  npc.state = "wander";
+  npc.focus = null;
+  npc.stateTimer = 4 + rand(0, 3.8);
+  npc.moveTarget.copy(pickNpcWanderTarget(npc));
+}
+
+function moveNpcTowards(npc, target, dt, time, arrivalRadius = 0.3) {
+  const dx = target.x - npc.group.position.x;
+  const dz = target.z - npc.group.position.z;
+  const distance = Math.hypot(dx, dz);
+
+  if (distance <= arrivalRadius) {
+    setNpcRestState(npc, time);
+    return "reached";
+  }
+
+  const dirX = dx / distance;
+  const dirZ = dz / distance;
+  const step = Math.min(distance - arrivalRadius, npc.speed * dt);
+  const nextX = npc.group.position.x + dirX * step;
+  const nextZ = npc.group.position.z + dirZ * step;
+
+  let moved = false;
+  if (!isBlockedAt(nextX, nextZ, npcRadius)) {
+    npc.group.position.x = nextX;
+    npc.group.position.z = nextZ;
+    moved = true;
+  } else if (!isBlockedAt(nextX, npc.group.position.z, npcRadius)) {
+    npc.group.position.x = nextX;
+    moved = true;
+  } else if (!isBlockedAt(npc.group.position.x, nextZ, npcRadius)) {
+    npc.group.position.z = nextZ;
+    moved = true;
+  }
+
+  if (!moved) {
+    setNpcRestState(npc, time);
+    return "blocked";
+  }
+
+  npc.group.rotation.y = lerpAngle(npc.group.rotation.y, Math.atan2(dirX, dirZ), 0.15);
+
+  const walkPhase = time * (4 + npc.speed * 0.9) + npc.phaseOffset;
+  const intensity = Math.min(npc.speed / 1.4, 1);
+  animateWalk(npc.rig.refs, walkPhase, intensity);
+  npc.group.position.y = Math.abs(Math.sin(walkPhase)) * 0.035 * intensity;
+
+  return distance - step <= arrivalRadius + 0.02 ? "reached" : "moving";
+}
+
 function getNearestTarget() {
   let best = null;
   let bestDistance = Infinity;
@@ -1485,38 +1791,89 @@ function updateNpc(npc, dt, time) {
 
   if (npc.pause > 0) {
     npc.pause -= dt;
-    if (npc.pause <= 0) npc.wait = 0.2;
-    setRestPose(npc.rig.refs, time, npc.phaseOffset);
+    applyNpcPose(npc, time);
     return;
   }
 
-  if (npc.wait > 0) {
-    npc.wait -= dt;
-    setRestPose(npc.rig.refs, time, npc.phaseOffset);
+  if (npc.state === "idle") {
+    npc.stateTimer -= dt;
+    applyNpcPose(npc, time);
+    if (npc.stateTimer <= 0) {
+      chooseNextNpcAction(npc);
+    }
     return;
   }
 
-  const target = npc.path[npc.index];
-  const dx = target.x - npc.group.position.x;
-  const dz = target.z - npc.group.position.z;
-  const distance = Math.hypot(dx, dz);
-
-  if (distance < 0.24) {
-    npc.index = (npc.index + 1) % npc.path.length;
-    npc.wait = 0.15 + rand(0, 0.2);
+  if (npc.state === "wander") {
+    npc.stateTimer -= dt;
+    const result = moveNpcTowards(npc, npc.moveTarget, dt, time, 0.26);
+    if (result === "reached") {
+      enterNpcIdle(npc, 0.25, 1);
+    } else if (result === "blocked") {
+      npc.moveTarget.copy(pickNpcWanderTarget(npc));
+      npc.stateTimer = Math.max(npc.stateTimer, 1.1);
+    } else if (npc.stateTimer <= 0) {
+      enterNpcIdle(npc, 0.25, 0.8);
+    }
     return;
   }
 
-  const dirX = dx / distance;
-  const dirZ = dz / distance;
-  npc.group.position.x += dirX * npc.speed * dt;
-  npc.group.position.z += dirZ * npc.speed * dt;
-  npc.group.rotation.y = lerpAngle(npc.group.rotation.y, Math.atan2(dirX, dirZ), 0.15);
+  if (npc.state === "approach") {
+    npc.stateTimer -= dt;
 
-  const walkPhase = time * (4 + npc.speed * 0.9) + npc.phaseOffset;
-  const intensity = Math.min(npc.speed / 1.4, 1);
-  animateWalk(npc.rig.refs, walkPhase, intensity);
-  npc.group.position.y = Math.abs(Math.sin(walkPhase)) * 0.035 * intensity;
+    if (!npc.focus) {
+      enterNpcIdle(npc, 0.2, 0.8);
+      return;
+    }
+
+    if (
+      npc.focus.kind === "ball" ||
+      !npc.focus.npcApproachPosition &&
+      getDistance2D(npc.moveTarget, npc.focus.position) > npc.focus.npcApproachRadius + 0.35
+    ) {
+      npc.moveTarget.copy(getNpcApproachPoint(npc, npc.focus));
+    }
+
+    const result = moveNpcTowards(npc, npc.moveTarget, dt, time, 0.26);
+    if (result === "reached") {
+      npc.state = "interact";
+      npc.stateTimer = npc.focus.npcDuration ?? 1.2;
+      npc.lastInteraction = npc.focus;
+      npc.focus.npcInteract?.(npc);
+    } else if (result === "blocked") {
+      npc.moveTarget.copy(getNpcApproachPoint(npc, npc.focus));
+      npc.stateTimer -= dt * 1.5;
+    }
+
+    if (npc.stateTimer <= 0) {
+      enterNpcIdle(npc, 0.3, 1.1);
+    }
+    return;
+  }
+
+  if (npc.state === "interact") {
+    npc.stateTimer -= dt;
+    applyNpcPose(npc, time);
+
+    if (!npc.pose && npc.focus?.position) {
+      const lookX = npc.focus.position.x - npc.group.position.x;
+      const lookZ = npc.focus.position.z - npc.group.position.z;
+      if (lookX * lookX + lookZ * lookZ > 0.001) {
+        npc.group.rotation.y = lerpAngle(
+          npc.group.rotation.y,
+          Math.atan2(lookX, lookZ),
+          0.14
+        );
+      }
+    }
+
+    if (npc.stateTimer <= 0) {
+      enterNpcIdle(npc, 0.5, 1.5);
+    }
+    return;
+  }
+
+  enterNpcIdle(npc, 0.35, 1.1);
 }
 
 function updateInteractionUI() {
