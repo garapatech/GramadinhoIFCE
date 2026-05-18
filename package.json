@@ -19,6 +19,6 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
-    "partykit": "^0.0.114"
+    "partykit": "^0.0.115"
   }
 }
