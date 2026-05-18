@@ -1,0 +1,37 @@
+{
+  "name": "workspace",
+
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
+
+  "mounts": [
+    "source=${localEnv:HOME}/.codex,target=/home/vscode/.codex,type=bind"
+  ],
+
+  "runArgs": [
+    "--security-opt=label=disable"
+  ],
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "usernamehw.errorlens",
+        "eamodio.gitlens",
+        "christian-kohler.path-intellisense",
+        "bradlc.vscode-tailwindcss",
+        "pmndrs.pmndrs",
+        "yoavbls.pretty-ts-errors",
+        "ms-vscode.vscode-typescript-next"
+      ]
+    }
+  }
+}
