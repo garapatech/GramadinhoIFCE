@@ -37,6 +37,36 @@ body {
   backdrop-filter: blur(10px);
 }
 
+#status,
+#speech {
+  position: absolute;
+  z-index: 2;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px 12px;
+  color: #eaf4ee;
+  background: rgba(14, 38, 23, 0.58);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  user-select: none;
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+#status {
+  left: 16px;
+  bottom: 16px;
+}
+
+#speech {
+  right: 16px;
+  top: 16px;
+}
+
 canvas {
   outline: none;
 }
