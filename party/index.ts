@@ -7,6 +7,8 @@ type PlayerState = {
   z: number;
   ry: number;
   speed: number;
+  voiceEnabled: boolean;
+  voiceMuted: boolean;
 };
 
 type ChatMsg = {
@@ -19,10 +21,53 @@ type ChatMsg = {
 const CHAT_HISTORY_LIMIT = 60;
 const MAX_NICK = 16;
 const MAX_TEXT = 240;
+const MAX_SIGNAL_SDP = 30_000;
+const MAX_SIGNAL_CANDIDATE = 8_000;
 
 function sanitize(input: unknown, limit: number): string {
   if (typeof input !== "string") return "";
   return input.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, limit);
+}
+
+function sanitizeVoiceSignal(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as any;
+  const signal: any = {};
+
+  if (raw.description && typeof raw.description === "object") {
+    const type = raw.description.type;
+    const sdp = raw.description.sdp;
+    if (
+      (type === "offer" || type === "answer") &&
+      typeof sdp === "string" &&
+      sdp.length <= MAX_SIGNAL_SDP
+    ) {
+      signal.description = { type, sdp };
+    }
+  }
+
+  if (raw.candidate && typeof raw.candidate === "object") {
+    const candidate = raw.candidate.candidate;
+    if (typeof candidate === "string" && candidate.length <= MAX_SIGNAL_CANDIDATE) {
+      signal.candidate = {
+        candidate,
+        sdpMid:
+          typeof raw.candidate.sdpMid === "string" || raw.candidate.sdpMid === null
+            ? raw.candidate.sdpMid
+            : undefined,
+        sdpMLineIndex:
+          typeof raw.candidate.sdpMLineIndex === "number"
+            ? raw.candidate.sdpMLineIndex
+            : undefined,
+        usernameFragment:
+          typeof raw.candidate.usernameFragment === "string"
+            ? raw.candidate.usernameFragment
+            : undefined,
+      };
+    }
+  }
+
+  return signal.description || signal.candidate ? signal : null;
 }
 
 export default class GameRoom implements Party.Server {
@@ -68,6 +113,8 @@ export default class GameRoom implements Party.Server {
         z: typeof msg.z === "number" ? msg.z : 38,
         ry: typeof msg.ry === "number" ? msg.ry : 0,
         speed: 0,
+        voiceEnabled: false,
+        voiceMuted: false,
       };
       this.players.set(sender.id, state);
       this.room.broadcast(JSON.stringify({ type: "join", player: state }), [sender.id]);
@@ -111,6 +158,42 @@ export default class GameRoom implements Party.Server {
           id: sender.id,
           kind: typeof msg.kind === "string" ? msg.kind.slice(0, 20) : "dance",
           duration: typeof msg.duration === "number" ? Math.min(10, msg.duration) : 4,
+        }),
+        [sender.id]
+      );
+      return;
+    }
+
+    if (msg.type === "voice-ready") {
+      const player = this.players.get(sender.id);
+      if (!player) return;
+      player.voiceEnabled = msg.enabled === true;
+      player.voiceMuted = player.voiceEnabled && msg.muted === true;
+      this.room.broadcast(
+        JSON.stringify({
+          type: "voice-ready",
+          id: sender.id,
+          nick: player.nick,
+          enabled: player.voiceEnabled,
+          muted: player.voiceMuted,
+        }),
+        [sender.id]
+      );
+      return;
+    }
+
+    if (msg.type === "voice-signal") {
+      if (!this.players.has(sender.id)) return;
+      const target = sanitize(msg.target, 128);
+      if (!target || target === sender.id) return;
+      const signal = sanitizeVoiceSignal(msg.signal);
+      if (!signal) return;
+      this.room.broadcast(
+        JSON.stringify({
+          type: "voice-signal",
+          from: sender.id,
+          target,
+          signal,
         }),
         [sender.id]
       );

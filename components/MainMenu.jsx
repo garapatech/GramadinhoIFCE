@@ -64,7 +64,7 @@ export default function MainMenu() {
       </div>
 
       <p className="menu-credit">
-        Feito com carinho • Use WASD para mover • E para interagir • Enter para o chat
+        Feito com carinho • Use WASD para mover • E para interagir • Enter para o chat • Voz para falar
       </p>
     </main>
   );

@@ -2,7 +2,7 @@
 
 Mapa 3D multijogador do gramado do IFCE — Next.js + Three.js + PartyKit.
 
-Duas (ou mais) pessoas abrindo o mesmo link conseguem se ver andando pelo gramado, com nick acima da cabeça e chat em tempo real.
+Duas (ou mais) pessoas abrindo o mesmo link conseguem se ver andando pelo gramado, com nick acima da cabeça, chat em tempo real e voz via microfone.
 
 ## Stack
 
@@ -69,6 +69,7 @@ Depois disso, qualquer push para `main` faz redeploy automático.
 - `E` — interagir com bancos, NPCs, etc.
 - `Enter` — abrir chat
 - `Esc` — sair do chat
+- Botão `Voz` — solicitar microfone e entrar no chat de voz
 
 ## Estrutura
 
@@ -78,7 +79,10 @@ components/          # MainMenu, GameView, Chat
 lib/
   game.js            # bootGame(): toda a lógica Three.js
   multiplayer.js     # wrapper do PartySocket
+  voice.js           # WebRTC do chat de voz
 party/
-  index.ts           # servidor PartyKit (estado + chat)
+  index.ts           # servidor PartyKit (estado + chat + sinalizacao WebRTC)
 partykit.json        # config do PartyKit
 ```
+
+O audio usa WebRTC entre navegadores. Em producao, `localhost` e HTTPS funcionam para solicitar microfone; redes mais restritas podem exigir servidores TURN configurados em `NEXT_PUBLIC_RTC_ICE_SERVERS`.
