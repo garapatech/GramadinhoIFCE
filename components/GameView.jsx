@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Chat from "./Chat";
+import MediaPlayerPanel from "./MediaPlayerPanel";
 import VoiceChat from "./VoiceChat";
+import { readStoredAvatar } from "../lib/avatarConfig";
 import { bootGame } from "../lib/game";
 import { connectMultiplayer } from "../lib/multiplayer";
 import { createVoiceChat, getInitialVoiceState } from "../lib/voice";
@@ -23,6 +25,9 @@ export default function GameView() {
   const [connection, setConnection] = useState("connecting");
   const [chatFocused, setChatFocused] = useState(false);
   const [chatVisible, setChatVisible] = useState(true);
+  const [avatar, setAvatar] = useState(null);
+  const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
+  const [mediaFocused, setMediaFocused] = useState(false);
   const [atmosphere, setAtmosphere] = useState({
     label: "manhã",
     clock: "06:00",
@@ -44,6 +49,7 @@ export default function GameView() {
     detail: "vagando pelo campus",
   });
   const chatFocusedRef = useRef(false);
+  const mediaFocusedRef = useRef(false);
   const serverNowRef = useRef(null);
   const serverSyncedAtRef = useRef(null);
   const emoteBar = [
@@ -85,6 +91,15 @@ export default function GameView() {
   }, [chatFocused]);
 
   useEffect(() => {
+    mediaFocusedRef.current = mediaFocused;
+  }, [mediaFocused]);
+
+  useEffect(() => {
+    setAvatar(readStoredAvatar());
+  }, []);
+
+  useEffect(() => {
+    if (!avatar) return undefined;
     let cancelled = false;
     let game = null;
     let multiplayer = null;
@@ -106,6 +121,7 @@ export default function GameView() {
 
       multiplayer = connectMultiplayer({
         nickname: nick,
+        avatar,
         onEvent: (event) => {
           if (event.type === "connected") {
             setConnection("connected");
@@ -177,7 +193,8 @@ export default function GameView() {
       game = bootGame({
         container: containerRef.current,
         nickname: nick,
-        shouldIgnoreKeys: () => chatFocusedRef.current,
+        avatar,
+        shouldIgnoreKeys: () => chatFocusedRef.current || mediaFocusedRef.current,
         getWorldTime: () => {
           const serverNow = serverNowRef.current;
           const syncedAt = serverSyncedAtRef.current;
@@ -195,6 +212,9 @@ export default function GameView() {
         onPlayerStateChange: setPlayerState,
         onEmote: (emote) => {
           multiplayer.sendEmote(emote.kind, emote.duration);
+        },
+        onMediaBoothInteract: () => {
+          setMediaPanelOpen(true);
         },
       });
       gameApiRef.current = game;
@@ -217,7 +237,11 @@ export default function GameView() {
       multiplayerRef.current = null;
       voiceRef.current = null;
     };
-  }, [nick]);
+  }, [nick, avatar]);
+
+  if (!avatar) {
+    return <div style={{ color: "#fff", padding: 24 }}>Carregando...</div>;
+  }
 
   function handleSendChat(text) {
     const trimmed = (text || "").trim();
@@ -334,6 +358,12 @@ export default function GameView() {
         <div className="speech-body" data-game="speech-body"></div>
       </div>
       <canvas data-game="scene"></canvas>
+
+      <MediaPlayerPanel
+        open={mediaPanelOpen}
+        onClose={() => setMediaPanelOpen(false)}
+        onFocusChange={setMediaFocused}
+      />
 
       <VoiceChat
         voice={voiceState}

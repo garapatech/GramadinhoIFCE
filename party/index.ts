@@ -3,12 +3,24 @@ import type * as Party from "partykit/server";
 type PlayerState = {
   id: string;
   nick: string;
+  avatar: AvatarState;
   x: number;
   z: number;
   ry: number;
   speed: number;
   voiceEnabled: boolean;
   voiceMuted: boolean;
+};
+
+type AvatarState = {
+  shirt: string;
+  pants: string;
+  shoes: string;
+  skin: string;
+  backpack: string;
+  hair: string;
+  backpackEnabled: boolean;
+  glasses: boolean;
 };
 
 type ChatMsg = {
@@ -23,10 +35,40 @@ const MAX_NICK = 16;
 const MAX_TEXT = 240;
 const MAX_SIGNAL_SDP = 30_000;
 const MAX_SIGNAL_CANDIDATE = 8_000;
+const DEFAULT_AVATAR: AvatarState = {
+  shirt: "#2f855a",
+  pants: "#24364d",
+  shoes: "#1a1a1a",
+  skin: "#f0c3a5",
+  backpack: "#b85a31",
+  hair: "#3a2516",
+  backpackEnabled: true,
+  glasses: false,
+};
 
 function sanitize(input: unknown, limit: number): string {
   if (typeof input !== "string") return "";
   return input.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, limit);
+}
+
+function sanitizeHexColor(input: unknown, fallback: string): string {
+  if (typeof input !== "string") return fallback;
+  const match = input.trim().match(/^#?([0-9a-fA-F]{6})$/);
+  return match ? `#${match[1].toLowerCase()}` : fallback;
+}
+
+function sanitizeAvatar(input: unknown): AvatarState {
+  const raw = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  return {
+    shirt: sanitizeHexColor(raw.shirt, DEFAULT_AVATAR.shirt),
+    pants: sanitizeHexColor(raw.pants, DEFAULT_AVATAR.pants),
+    shoes: sanitizeHexColor(raw.shoes, DEFAULT_AVATAR.shoes),
+    skin: sanitizeHexColor(raw.skin, DEFAULT_AVATAR.skin),
+    backpack: sanitizeHexColor(raw.backpack, DEFAULT_AVATAR.backpack),
+    hair: sanitizeHexColor(raw.hair, DEFAULT_AVATAR.hair),
+    backpackEnabled: raw.backpackEnabled !== false,
+    glasses: raw.glasses === true,
+  };
 }
 
 function sanitizeVoiceSignal(input: unknown) {
@@ -121,6 +163,7 @@ export default class GameRoom implements Party.Server {
       const state: PlayerState = {
         id: sender.id,
         nick,
+        avatar: sanitizeAvatar(msg.avatar),
         x: typeof msg.x === "number" ? msg.x : -40,
         z: typeof msg.z === "number" ? msg.z : 38,
         ry: typeof msg.ry === "number" ? msg.ry : 0,

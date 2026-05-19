@@ -2,12 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import AvatarCustomizer from "./AvatarCustomizer";
+import { getDefaultAvatar, readStoredAvatar, writeStoredAvatar } from "../lib/avatarConfig";
 
 const STORAGE_KEY = "gramadinho.nick";
 
 export default function MainMenu() {
   const router = useRouter();
   const [nick, setNick] = useState("");
+  const [avatar, setAvatar] = useState(getDefaultAvatar);
+  const [avatarReady, setAvatarReady] = useState(false);
+  const [customizerOpen, setCustomizerOpen] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -15,8 +20,15 @@ export default function MainMenu() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setNick(saved);
     } catch {}
+    setAvatar(readStoredAvatar());
+    setAvatarReady(true);
     router.prefetch("/play");
   }, [router]);
+
+  useEffect(() => {
+    if (!avatarReady) return;
+    writeStoredAvatar(avatar);
+  }, [avatar, avatarReady]);
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -32,6 +44,7 @@ export default function MainMenu() {
     try {
       localStorage.setItem(STORAGE_KEY, trimmed);
     } catch {}
+    writeStoredAvatar(avatar);
     router.push(`/play?nick=${encodeURIComponent(trimmed)}`);
   }
 
@@ -57,6 +70,16 @@ export default function MainMenu() {
             autoFocus
           />
           <p className="error-msg">{error || " "}</p>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setCustomizerOpen((open) => !open)}
+          >
+            {customizerOpen ? "Fechar visual" : "Personalizar personagem"}
+          </button>
+          {customizerOpen && (
+            <AvatarCustomizer avatar={avatar} onChange={setAvatar} />
+          )}
           <button type="submit" className="btn-play">
             Jogar
           </button>
