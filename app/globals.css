@@ -1948,6 +1948,7 @@ canvas {
   color: #2d2316;
   justify-content: space-between;
   gap: 10px;
+  pointer-events: auto;
 }
 
 .voice.on,
