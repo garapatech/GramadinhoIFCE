@@ -2,6 +2,7 @@
 
 const STATUS_LABEL = {
   idle: "voz desligada",
+  listening: "ouvindo voz",
   requesting: "solicitando microfone",
   connecting: "conectando voz",
   calling: "chamando",
@@ -19,28 +20,35 @@ export default function VoiceChat({
   onStart,
   onStop,
   onToggleMute,
+  onUnlockAudio,
 }) {
   const state = voice || {};
+  const isBlocked = state.status === "blocked";
   const disabled =
-    state.status === "requesting" ||
+    (!isBlocked && state.status === "requesting") ||
     connection !== "connected" ||
     !state.ready ||
     state.supported === false;
   const canSpeak = state.enabled && state.status !== "requesting";
-  const hasPeers = (state.listenerCount || 0) > 0;
+  const hasPeers = (state.peerCount || 0) > 0;
   const label =
     state.error ||
     STATUS_LABEL[state.status] ||
     (state.enabled ? "voz ativa" : "voz desligada");
 
   return (
-    <div className={`voice${state.enabled ? " on" : ""}${state.error ? " error" : ""}`}>
+    <div className={`voice${state.enabled ? " on" : ""}${state.receivingCount > 0 ? " listening" : ""}${state.error ? " error" : ""}`}>
       <div className="voice-info">
         <span className="voice-dot" aria-hidden="true"></span>
         <span className="voice-label">{label}</span>
         {state.enabled && (
           <span className="voice-count">
-            {hasPeers ? `${state.listenerCount} na voz` : "sem ouvintes"}
+            {hasPeers ? `${state.peerCount} conectado(s)` : "sem conexoes"}
+          </span>
+        )}
+        {!state.enabled && state.receivingCount > 0 && (
+          <span className="voice-count">
+            {`${state.receivingCount} falando`}
           </span>
         )}
       </div>
@@ -50,11 +58,11 @@ export default function VoiceChat({
           <button
             type="button"
             className="voice-btn primary"
-            onClick={() => onStart?.()}
+            onClick={() => (isBlocked ? onUnlockAudio?.() : onStart?.())}
             disabled={disabled}
-            title="Ativar chat de voz"
+            title={isBlocked ? "Liberar audio remoto" : "Ativar chat de voz"}
           >
-            Voz
+            {isBlocked ? "Liberar" : "Voz"}
           </button>
         ) : (
           <>

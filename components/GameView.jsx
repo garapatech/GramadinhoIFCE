@@ -151,6 +151,10 @@ export default function GameView() {
     voiceRef.current?.setMuted?.(!voiceState.muted);
   }
 
+  function handleUnlockAudio() {
+    voiceRef.current?.unlockAudio?.();
+  }
+
   return (
     <div id="app" ref={containerRef}>
       <div className="hud">
@@ -175,6 +179,7 @@ export default function GameView() {
         onStart={handleStartVoice}
         onStop={handleStopVoice}
         onToggleMute={handleToggleMute}
+        onUnlockAudio={handleUnlockAudio}
       />
 
       <Chat

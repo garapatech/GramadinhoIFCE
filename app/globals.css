@@ -429,6 +429,10 @@ canvas {
   border-color: rgba(98, 255, 159, 0.42);
 }
 
+.voice.listening {
+  border-color: rgba(246, 210, 123, 0.42);
+}
+
 .voice.error {
   border-color: rgba(255, 132, 112, 0.55);
 }
@@ -455,6 +459,11 @@ canvas {
 .voice.on .voice-dot {
   background: #62ff9f;
   box-shadow: 0 0 0 3px rgba(98, 255, 159, 0.18);
+}
+
+.voice.listening .voice-dot {
+  background: #f6d27b;
+  box-shadow: 0 0 0 3px rgba(246, 210, 123, 0.18);
 }
 
 .voice.error .voice-dot {
