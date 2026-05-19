@@ -9,6 +9,7 @@ type PlayerState = {
   ry: number;
   speed: number;
   activity: PlayerActivity;
+  jumpY: number;
   voiceEnabled: boolean;
   voiceMuted: boolean;
 };
@@ -153,6 +154,11 @@ function sanitizeEntityKind(input: unknown): SharedEntityKind | null {
   return input === "bike" ? "bike" : null;
 }
 
+function sanitizeJumpY(input: unknown): number {
+  if (typeof input !== "number" || !Number.isFinite(input)) return 0;
+  return Math.max(0, Math.min(4, input));
+}
+
 export default class GameRoom implements Party.Server {
   players = new Map<string, PlayerState>();
   entities = new Map<string, SharedEntityState>();
@@ -212,6 +218,7 @@ export default class GameRoom implements Party.Server {
         ry: typeof msg.ry === "number" ? msg.ry : 0,
         speed: 0,
         activity: "idle",
+        jumpY: 0,
         voiceEnabled: false,
         voiceMuted: false,
       };
@@ -237,6 +244,7 @@ export default class GameRoom implements Party.Server {
       if (typeof msg.ry === "number") cur.ry = msg.ry;
       if (typeof msg.speed === "number") cur.speed = msg.speed;
       cur.activity = sanitizeActivity(msg.activity);
+      cur.jumpY = sanitizeJumpY(msg.jumpY);
       this.room.broadcast(
         JSON.stringify({
           type: "state",
@@ -246,6 +254,7 @@ export default class GameRoom implements Party.Server {
           ry: cur.ry,
           speed: cur.speed,
           activity: cur.activity,
+          jumpY: cur.jumpY,
         }),
         [sender.id]
       );
