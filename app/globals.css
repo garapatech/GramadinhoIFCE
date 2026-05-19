@@ -1690,6 +1690,10 @@ canvas {
   min-width: 0;
 }
 
+.game-left-stack {
+  align-items: flex-start;
+}
+
 .game-right-stack {
   align-items: flex-end;
 }
@@ -1755,9 +1759,11 @@ canvas {
 }
 
 .hud {
+  width: fit-content;
   max-width: none;
   gap: 10px;
-  padding: 16px 14px 12px;
+  max-width: min(100%, 560px);
+  padding: 14px 12px 10px;
   color: var(--ui-ink);
   font-size: 11px;
   letter-spacing: 0.06em;
@@ -1918,7 +1924,8 @@ canvas {
 }
 
 .status-box {
-  max-width: 500px;
+  width: fit-content;
+  max-width: min(100%, 420px);
   padding: 0 14px;
   font-size: 11px;
   font-weight: 800;
@@ -1942,12 +1949,16 @@ canvas {
 }
 
 .voice {
-  width: 100%;
-  min-height: 60px;
-  padding: 16px 14px 12px;
+  width: fit-content;
+  min-width: 0;
+  max-width: min(100%, 340px);
+  min-height: 56px;
+  padding: 14px 12px 10px;
   color: #2d2316;
-  justify-content: space-between;
+  align-items: center;
   gap: 10px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   pointer-events: auto;
 }
 
@@ -1958,6 +1969,10 @@ canvas {
 }
 
 .voice-info {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   gap: 9px;
   font-size: 11px;
 }
@@ -1969,6 +1984,8 @@ canvas {
 }
 
 .voice-label {
+  min-width: 0;
+  flex: 0 1 auto;
   color: #2d2316;
 }
 
@@ -1988,6 +2005,10 @@ canvas {
   background: linear-gradient(180deg, #fff5d8, #ddc18c);
   color: #2e2418;
   cursor: pointer;
+}
+
+.voice-actions {
+  margin-left: auto;
 }
 
 .voice-btn.primary,
@@ -2010,7 +2031,7 @@ canvas {
 }
 
 .minimap {
-  width: min(100%, 252px);
+  width: min(100%, 236px);
   padding: 16px 12px 12px;
   user-select: none;
 }
@@ -2052,7 +2073,7 @@ canvas {
 }
 
 .speech {
-  width: min(720px, 100%);
+  width: min(640px, 100%);
   padding: 0;
   opacity: 0;
   max-height: 0;
@@ -2115,7 +2136,7 @@ canvas {
 }
 
 .emote-bar {
-  width: min(100%, 620px);
+  width: min(100%, 560px);
   max-width: none;
   transform: none;
   justify-content: center;
@@ -2156,7 +2177,7 @@ canvas {
 
 .chat {
   width: 100%;
-  max-width: 340px;
+  max-width: 320px;
   gap: 6px;
   pointer-events: none;
 }
@@ -2260,8 +2281,8 @@ canvas {
 }
 
 .media-panel {
-  width: min(100%, 320px);
-  max-height: min(46vh, 460px);
+  width: min(100%, 300px);
+  max-height: min(44vh, 440px);
   padding: 16px 12px 12px;
   color: #2b2115;
   pointer-events: auto;
