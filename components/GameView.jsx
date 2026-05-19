@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Chat from "./Chat";
+import VoiceChat from "./VoiceChat";
 import { bootGame } from "../lib/game";
 import { connectMultiplayer } from "../lib/multiplayer";
+import { createVoiceChat, getInitialVoiceState } from "../lib/voice";
 
 export default function GameView() {
   const router = useRouter();
@@ -14,8 +16,10 @@ export default function GameView() {
   const containerRef = useRef(null);
   const gameApiRef = useRef(null);
   const multiplayerRef = useRef(null);
+  const voiceRef = useRef(null);
   const localIdRef = useRef(null);
   const [chatMessages, setChatMessages] = useState([]);
+  const [voiceState, setVoiceState] = useState(getInitialVoiceState);
   const [connection, setConnection] = useState("connecting");
   const [chatFocused, setChatFocused] = useState(false);
   const [chatVisible, setChatVisible] = useState(true);
@@ -84,9 +88,21 @@ export default function GameView() {
     let cancelled = false;
     let game = null;
     let multiplayer = null;
+    let voice = null;
 
     function boot() {
       if (cancelled || !containerRef.current) return;
+
+      voice = createVoiceChat({
+        onChange: setVoiceState,
+        sendReady: ({ enabled, muted }) => {
+          multiplayer?.sendVoiceReady(enabled, muted);
+        },
+        sendSignal: (target, signal) => {
+          multiplayer?.sendVoiceSignal(target, signal);
+        },
+      });
+      voiceRef.current = voice;
 
       multiplayer = connectMultiplayer({
         nickname: nick,
@@ -103,6 +119,8 @@ export default function GameView() {
               serverNowRef.current = event.serverNow;
               serverSyncedAtRef.current = Date.now();
             }
+            voice?.setLocalId(event.you);
+            voice?.syncPlayers(event.players || []);
             if (event.history) {
               setChatMessages(event.history.map((m) => decorateMessage(m)));
             }
@@ -118,12 +136,18 @@ export default function GameView() {
             }
           } else if (event.type === "join") {
             if (game && event.player) game.addRemotePlayer(event.player);
+            if (event.player) voice?.addPlayer(event.player);
           } else if (event.type === "state") {
             if (game) game.updateRemotePlayer(event);
           } else if (event.type === "leave") {
             if (game) game.removeRemotePlayer(event.id);
+            voice?.removePlayer(event.id);
           } else if (event.type === "emote") {
             if (game) game.triggerRemoteEmote(event.id, event.kind, event.duration);
+          } else if (event.type === "voice-ready") {
+            voice?.handleReady(event);
+          } else if (event.type === "voice-signal") {
+            voice?.handleSignal(event);
           } else if (event.type === "chat") {
             setChatMessages((prev) => {
               const next = [...prev, decorateMessage(event)];
@@ -184,10 +208,14 @@ export default function GameView() {
         gameApiRef.current?.destroy?.();
       } catch {}
       try {
+        voiceRef.current?.close?.();
+      } catch {}
+      try {
         multiplayerRef.current?.close?.();
       } catch {}
       gameApiRef.current = null;
       multiplayerRef.current = null;
+      voiceRef.current = null;
     };
   }, [nick]);
 
@@ -211,6 +239,22 @@ export default function GameView() {
     const target =
       message.id === localIdRef.current ? "__local__" : message.id;
     gameApiRef.current?.triggerReaction?.(target, "like");
+  }
+
+  function handleStartVoice() {
+    voiceRef.current?.start?.();
+  }
+
+  function handleStopVoice() {
+    voiceRef.current?.stop?.();
+  }
+
+  function handleToggleMute() {
+    voiceRef.current?.setMuted?.(!voiceState.muted);
+  }
+
+  function handleUnlockAudio() {
+    voiceRef.current?.unlockAudio?.();
   }
 
   return (
@@ -291,13 +335,22 @@ export default function GameView() {
       </div>
       <canvas data-game="scene"></canvas>
 
-        <Chat
-          messages={chatMessages}
-          onSend={handleSendChat}
-          onReact={handleReactToMessage}
-          onFocusChange={setChatFocused}
-          connection={connection}
-          myNick={nick}
+      <VoiceChat
+        voice={voiceState}
+        connection={connection}
+        onStart={handleStartVoice}
+        onStop={handleStopVoice}
+        onToggleMute={handleToggleMute}
+        onUnlockAudio={handleUnlockAudio}
+      />
+
+      <Chat
+        messages={chatMessages}
+        onSend={handleSendChat}
+        onReact={handleReactToMessage}
+        onFocusChange={setChatFocused}
+        connection={connection}
+        myNick={nick}
         visible={chatVisible}
         onToggleVisible={() => setChatVisible((v) => !v)}
       />

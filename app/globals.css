@@ -765,6 +765,126 @@ canvas {
   outline: none;
 }
 
+/* ============ Voice ============ */
+.voice {
+  position: absolute;
+  z-index: 6;
+  top: 88px;
+  left: 14px;
+  width: min(340px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  color: #f1f7f3;
+  background: rgba(14, 38, 23, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(12, 30, 18, 0.2);
+  backdrop-filter: blur(8px);
+}
+
+.voice.on {
+  border-color: rgba(98, 255, 159, 0.42);
+}
+
+.voice.listening {
+  border-color: rgba(246, 210, 123, 0.42);
+}
+
+.voice.error {
+  border-color: rgba(255, 132, 112, 0.55);
+}
+
+.voice-info {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.voice-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #93a698;
+  box-shadow: 0 0 0 3px rgba(147, 166, 152, 0.15);
+}
+
+.voice.on .voice-dot {
+  background: #62ff9f;
+  box-shadow: 0 0 0 3px rgba(98, 255, 159, 0.18);
+}
+
+.voice.listening .voice-dot {
+  background: #f6d27b;
+  box-shadow: 0 0 0 3px rgba(246, 210, 123, 0.18);
+}
+
+.voice.error .voice-dot {
+  background: #ff8470;
+  box-shadow: 0 0 0 3px rgba(255, 132, 112, 0.18);
+}
+
+.voice-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-count {
+  flex: 0 0 auto;
+  color: #f6d27b;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.voice-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.voice-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f7f3;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.voice-btn.primary {
+  background: linear-gradient(180deg, #4cba6d 0%, #2f8a4e 100%);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.voice-btn:hover:not(:disabled) {
+  color: #f6d27b;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.voice-btn.primary:hover:not(:disabled) {
+  color: #ffffff;
+  background: linear-gradient(180deg, #58c97a 0%, #329754 100%);
+}
+
+.voice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ============ Chat ============ */
 .chat {
   position: absolute;
