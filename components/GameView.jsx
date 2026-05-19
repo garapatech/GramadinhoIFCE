@@ -10,6 +10,16 @@ import { bootGame } from "../lib/game";
 import { connectMultiplayer } from "../lib/multiplayer";
 import { createVoiceChat, getInitialVoiceState } from "../lib/voice";
 
+const ACTIVITY_LABEL = {
+  idle: "parado",
+  walking: "andando",
+  running: "correndo",
+  crouching: "agachado",
+  sitting: "sentado",
+  riding: "pedalando",
+  emoting: "emote",
+};
+
 export default function GameView() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -27,6 +37,8 @@ export default function GameView() {
   const [connection, setConnection] = useState("connecting");
   const [chatFocused, setChatFocused] = useState(false);
   const [chatVisible, setChatVisible] = useState(true);
+  const [playersVisible, setPlayersVisible] = useState(false);
+  const [onlinePlayers, setOnlinePlayers] = useState([]);
   const [avatar, setAvatar] = useState(null);
   const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
   const [mediaFocused, setMediaFocused] = useState(false);
@@ -57,7 +69,7 @@ export default function GameView() {
   const emoteBar = [
     { kind: "dance", label: "Dançar", short: "G", glyph: "🕺" },
     { kind: "laugh", label: "Rir", short: "1", glyph: "😂" },
-    { kind: "think", label: "Pensar", short: "2", glyph: "🤔" },
+    { kind: "sixseven", label: "67", short: "2", glyph: "🤲" },
     { kind: "wave", label: "Acenar", short: "3", glyph: "👋" },
     { kind: "point", label: "Apontar", short: "4", glyph: "👉" },
     { kind: "cheer", label: "Comemorar", short: "5", glyph: "🎉" },
@@ -65,6 +77,7 @@ export default function GameView() {
 
   function getEmoteDuration(kind) {
     if (kind === "dance") return 8.0;
+    if (kind === "sixseven") return 3.4;
     if (kind === "glitch") return 2.2;
     if (kind === "cheer") return 3.2;
     return 2.4;
@@ -88,6 +101,32 @@ export default function GameView() {
     );
   }
 
+  function upsertOnlinePlayer(player) {
+    if (!player?.id) return;
+    setOnlinePlayers((prev) => {
+      const nextPlayer = {
+        id: player.id,
+        nick: player.nick || "Player",
+        activity: player.activity || "idle",
+        voiceEnabled: player.voiceEnabled === true,
+        voiceMuted: player.voiceMuted === true,
+        isYou: player.id === localIdRef.current,
+      };
+      const exists = prev.some((entry) => entry.id === player.id);
+      const next = exists
+        ? prev.map((entry) => entry.id === player.id ? { ...entry, ...nextPlayer } : entry)
+        : [...prev, nextPlayer];
+      return next.sort((a, b) => Number(b.isYou) - Number(a.isYou) || a.nick.localeCompare(b.nick));
+    });
+  }
+
+  function patchOnlinePlayer(id, patch) {
+    if (!id) return;
+    setOnlinePlayers((prev) =>
+      prev.map((entry) => entry.id === id ? { ...entry, ...patch } : entry)
+    );
+  }
+
   useEffect(() => {
     chatFocusedRef.current = chatFocused;
   }, [chatFocused]);
@@ -98,6 +137,27 @@ export default function GameView() {
 
   useEffect(() => {
     setAvatar(readStoredAvatar());
+  }, []);
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.code !== "Tab") return;
+      e.preventDefault();
+      setPlayersVisible(true);
+    }
+
+    function onKeyUp(e) {
+      if (e.code !== "Tab") return;
+      e.preventDefault();
+      setPlayersVisible(false);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, []);
 
   useEffect(() => {
@@ -133,6 +193,26 @@ export default function GameView() {
             setConnection("error");
           } else if (event.type === "init") {
             localIdRef.current = event.you;
+            setOnlinePlayers([
+              {
+                id: event.you,
+                nick,
+                activity: "idle",
+                voiceEnabled: false,
+                voiceMuted: false,
+                isYou: true,
+              },
+              ...(Array.isArray(event.players) ? event.players : [])
+                .filter((player) => player?.id && player.id !== event.you)
+                .map((player) => ({
+                  id: player.id,
+                  nick: player.nick || "Player",
+                  activity: player.activity || "idle",
+                  voiceEnabled: player.voiceEnabled === true,
+                  voiceMuted: player.voiceMuted === true,
+                  isYou: false,
+                })),
+            ]);
             npcAuthorityIdRef.current =
               typeof event.npcAuthority === "string" ? event.npcAuthority : null;
             npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
@@ -165,9 +245,11 @@ export default function GameView() {
               serverSyncedAtRef.current = Date.now();
             }
           } else if (event.type === "join") {
+            upsertOnlinePlayer(event.player);
             if (game && event.player) game.addRemotePlayer(event.player);
             if (event.player) voice?.addPlayer(event.player);
           } else if (event.type === "state") {
+            patchOnlinePlayer(event.id, { activity: event.activity || "idle" });
             if (game) game.updateRemotePlayer(event);
           } else if (event.type === "entity-state") {
             if (game) game.updateSharedEntity?.(event);
@@ -181,11 +263,16 @@ export default function GameView() {
             npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
             if (game) game.applyNpcSnapshots?.(npcSnapshotRef.current);
           } else if (event.type === "leave") {
+            setOnlinePlayers((prev) => prev.filter((player) => player.id !== event.id));
             if (game) game.removeRemotePlayer(event.id);
             voice?.removePlayer(event.id);
           } else if (event.type === "emote") {
             if (game) game.triggerRemoteEmote(event.id, event.kind, event.duration);
           } else if (event.type === "voice-ready") {
+            patchOnlinePlayer(event.id, {
+              voiceEnabled: event.enabled === true,
+              voiceMuted: event.muted === true,
+            });
             voice?.handleReady(event);
           } else if (event.type === "voice-signal") {
             voice?.handleSignal(event);
@@ -229,6 +316,7 @@ export default function GameView() {
           return Date.now() / 1000;
         },
         onLocalState: (state) => {
+          patchOnlinePlayer(localIdRef.current, { activity: state.activity || "idle" });
           multiplayer.sendState(state);
         },
         onLocalEntityState: (state) => {
@@ -321,53 +409,29 @@ export default function GameView() {
       <canvas data-game="scene"></canvas>
 
       <div className="game-overlay">
+        {playersVisible && (
+          <div className="players-panel" role="dialog" aria-label="Jogadores online">
+            <div className="players-panel-head">
+              <span>Jogadores online</span>
+              <strong>{onlinePlayers.length}</strong>
+            </div>
+            <div className="players-list">
+              {onlinePlayers.map((player) => (
+                <div key={player.id} className={`players-row${player.isYou ? " you" : ""}`}>
+                  <span className="players-dot" aria-hidden="true" />
+                  <span className="players-name">{player.nick}{player.isYou ? " (você)" : ""}</span>
+                  <span className="players-activity">{ACTIVITY_LABEL[player.activity] || player.activity || "parado"}</span>
+                  <span className={`players-voice${player.voiceEnabled ? " on" : ""}`}>
+                    {player.voiceEnabled ? (player.voiceMuted ? "mutado" : "voz") : "sem voz"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="game-header-area">
           <div className="game-left-stack">
-            <button
-              type="button"
-              onClick={() => router.push("/")}
-              className="menu-back"
-            >
-              ← Menu
-            </button>
-
-            <div className="hud">
-              <div className="hud-brand">
-                <span className="hud-nick">{nick}</span>
-                <span className="hud-campus">Gramadinho IFCE</span>
-              </div>
-              <div className="hud-stack">
-                <div className="hud-row">
-                  <span className="hud-time" title={`Campus ${atmosphere.label} • clima ${atmosphere.mood}`}>
-                    {atmosphere.clock} • {atmosphere.label}
-                  </span>
-                  <span className="hud-state" title={`Estado atual do campus: ${atmosphere.mood}`}>
-                    {atmosphere.mood}
-                  </span>
-                  <span className="hud-weather" title={`Clima atual do campus: ${atmosphere.weatherLabel}`}>
-                    {atmosphere.weatherLabel}
-                  </span>
-                </div>
-                <div className="hud-row hud-row-actions">
-                  <span
-                    className={`hud-player hud-player-${playerState.kind}`}
-                    title={`Estado do player: ${playerState.detail}`}
-                  >
-                    {playerState.label}
-                  </span>
-                  <span
-                    className="hud-camera"
-                    title="C alterna entre câmera travada e livre. F foca o alvo mais próximo no modo livre"
-                  >
-                    câmera {cameraMode.label}{cameraMode.focusLabel ? ` • foco ${cameraMode.focusLabel}` : ""}
-                  </span>
-                  <span className="hud-audio hud-audio-on" title="Som ambiente do campus e rádio interna sempre ativos">
-                    som {audioState.label}
-                  </span>
-                </div>
-              </div>
-            </div>
-
             <VoiceChat
               voice={voiceState}
               connection={connection}
@@ -376,8 +440,6 @@ export default function GameView() {
               onToggleMute={handleToggleMute}
               onUnlockAudio={handleUnlockAudio}
             />
-
-            <div className="status-box" data-game="status" data-active="0" aria-live="polite"></div>
           </div>
 
           <div className="game-right-stack">
@@ -397,21 +459,37 @@ export default function GameView() {
               </div>
             </div>
 
+            <div className="game-emote-shell">
+              <div className="emote-bar" aria-label="Emotes rápidos">
+                {emoteBar.map((emote) => (
+                  <button
+                    key={emote.kind}
+                    type="button"
+                    className="emote-chip"
+                    onClick={() => gameApiRef.current?.triggerLocalEmote?.(emote.kind, getEmoteDuration(emote.kind))}
+                    title={`${emote.label} (${emote.short})`}
+                  >
+                    <span className="emote-glyph" aria-hidden="true">{emote.glyph}</span>
+                    <span className="emote-label">{emote.label}</span>
+                    <span className="emote-short">{emote.short}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="menu-back"
+            >
+              ← Menu
+            </button>
+
             <MediaPlayerPanel
               open={mediaPanelOpen}
               onClose={() => setMediaPanelOpen(false)}
               onFocusChange={setMediaFocused}
             />
-          </div>
-        </div>
-
-        <div className="game-middle-row">
-          <div className="speech" data-game="speech" aria-live="polite">
-            <div className="speech-header">
-              <span className="speech-name" data-game="speech-name">Aviso</span>
-              <span className="speech-hint" data-game="speech-hint">[E]</span>
-            </div>
-            <div className="speech-body" data-game="speech-body"></div>
           </div>
         </div>
 
@@ -426,24 +504,6 @@ export default function GameView() {
             visible={chatVisible}
             onToggleVisible={() => setChatVisible((v) => !v)}
           />
-
-          <div className="game-emote-shell">
-            <div className="emote-bar" aria-label="Emotes rápidos">
-              {emoteBar.map((emote) => (
-                <button
-                  key={emote.kind}
-                  type="button"
-                  className="emote-chip"
-                  onClick={() => gameApiRef.current?.triggerLocalEmote?.(emote.kind, getEmoteDuration(emote.kind))}
-                  title={`${emote.label} (${emote.short})`}
-                >
-                  <span className="emote-glyph" aria-hidden="true">{emote.glyph}</span>
-                  <span className="emote-label">{emote.label}</span>
-                  <span className="emote-short">{emote.short}</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

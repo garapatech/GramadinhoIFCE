@@ -1706,22 +1706,131 @@ canvas {
 }
 
 .game-bottom-row {
-  display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-  gap: 10px;
+  display: flex;
   align-items: end;
 }
 
 .game-emote-shell {
   display: flex;
-  justify-content: center;
-  align-items: end;
-  min-width: 0;
+  justify-content: flex-end;
+  align-items: stretch;
+  width: min(100%, 236px);
   pointer-events: none;
 }
 
 .game-emote-shell .emote-bar {
   pointer-events: auto;
+}
+
+.game-right-stack .menu-back {
+  width: min(100%, 236px);
+}
+
+.players-panel {
+  position: absolute;
+  z-index: 20;
+  top: 18px;
+  left: 50%;
+  width: min(420px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  padding: 14px 12px 12px;
+  color: #2b2115;
+  border-radius: 7px;
+  border: var(--ui-border) solid var(--ui-edge);
+  box-shadow:
+    0 var(--ui-lip) 0 var(--ui-shadow),
+    0 var(--ui-float) 18px rgba(27, 20, 10, 0.26);
+  background:
+    linear-gradient(180deg, var(--ui-grass-light) 0 10px, var(--ui-grass-dark) 10px 14px, transparent 14px),
+    linear-gradient(180deg, rgba(255, 248, 231, 0.98), rgba(228, 208, 154, 0.98));
+  pointer-events: none;
+}
+
+.players-panel-head,
+.players-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.players-panel-head {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ui-leaf);
+}
+
+.players-panel-head strong {
+  min-width: 28px;
+  padding: 3px 7px 2px;
+  text-align: center;
+  color: #5a360b;
+  border: 2px solid var(--ui-edge);
+  border-radius: 5px;
+  background: linear-gradient(180deg, #f6d27b, #d79d3b);
+  box-shadow: 0 2px 0 rgba(58, 42, 25, 0.65);
+}
+
+.players-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(42vh, 300px);
+  overflow: hidden auto;
+}
+
+.players-row {
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  min-height: 34px;
+  padding: 5px 7px;
+  border: 2px solid rgba(58, 42, 25, 0.22);
+  border-radius: 5px;
+  background: rgba(255, 250, 240, 0.62);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.players-row.you {
+  border-color: rgba(45, 107, 42, 0.48);
+  background: rgba(137, 212, 94, 0.18);
+}
+
+.players-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #4cba6d;
+  box-shadow: 0 0 0 2px rgba(45, 107, 42, 0.18);
+}
+
+.players-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #2b2115;
+}
+
+.players-activity,
+.players-voice {
+  padding: 3px 6px 2px;
+  border: 2px solid rgba(58, 42, 25, 0.32);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.34);
+  color: #4d3b27;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.players-voice.on {
+  color: #244920;
+  background: linear-gradient(180deg, #ebfadf, #8bc65a);
+  border-color: rgba(36, 73, 32, 0.45);
 }
 
 .hud,
@@ -2136,12 +2245,17 @@ canvas {
 }
 
 .emote-bar {
-  width: min(100%, 560px);
-  max-width: none;
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   transform: none;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 10px 6px;
+  gap: 6px;
+  padding: 9px 8px 7px;
   border-radius: 8px;
   border: var(--ui-border) solid var(--ui-edge);
   box-shadow:
@@ -2153,24 +2267,34 @@ canvas {
 }
 
 .emote-chip {
+  width: 100%;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 4px;
   border-radius: 6px;
   border: 2px solid var(--ui-edge);
   background: linear-gradient(180deg, #fff7df, #ddc794);
   color: #312317;
   box-shadow: 0 3px 0 rgba(58, 42, 25, 0.65);
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: 6px 5px;
+  font-size: 8.5px;
   font-weight: 900;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
+.emote-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
 .emote-glyph {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .emote-short {
-  padding: 2px 6px 1px;
+  padding: 1px 4px;
   background: linear-gradient(180deg, #f6d27b, #d79d3b);
   color: #5a360b;
 }
@@ -2337,10 +2461,6 @@ canvas {
   .game-header-area {
     grid-template-columns: minmax(300px, 1fr) minmax(220px, 260px);
   }
-
-  .game-bottom-row {
-    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 900px) {
@@ -2417,10 +2537,11 @@ canvas {
 
   .game-emote-shell {
     justify-content: stretch;
+    width: 100%;
   }
 
   .emote-bar {
-    justify-content: flex-start;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .chat-messages {
