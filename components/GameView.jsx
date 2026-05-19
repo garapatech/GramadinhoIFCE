@@ -317,116 +317,135 @@ export default function GameView() {
   }
 
   return (
-    <div id="app" ref={containerRef}>
-      <div className="hud">
-        <div className="hud-brand">
-          <span className="hud-nick">{nick}</span>
-          <span className="hud-campus">Gramadinho IFCE</span>
-        </div>
-        <div className="hud-stack">
-          <div className="hud-row">
-            <span className="hud-time" title={`Campus ${atmosphere.label} • clima ${atmosphere.mood}`}>
-              {atmosphere.clock} • {atmosphere.label}
-            </span>
-            <span className="hud-state" title={`Estado atual do campus: ${atmosphere.mood}`}>
-              {atmosphere.mood}
-            </span>
-            <span className="hud-weather" title={`Clima atual do campus: ${atmosphere.weatherLabel}`}>
-              {atmosphere.weatherLabel}
-            </span>
-          </div>
-          <div className="hud-row hud-row-actions">
-            <span
-              className={`hud-player hud-player-${playerState.kind}`}
-              title={`Estado do player: ${playerState.detail}`}
-            >
-              {playerState.label}
-            </span>
-            <span
-              className="hud-camera"
-              title="C alterna entre câmera travada e livre. F foca o alvo mais próximo no modo livre"
-            >
-              câmera {cameraMode.label}{cameraMode.focusLabel ? ` • foco ${cameraMode.focusLabel}` : ""}
-            </span>
-            <span className="hud-audio hud-audio-on" title="Som ambiente do campus e rádio interna sempre ativos">
-              som {audioState.label}
-            </span>
-          </div>
-        </div>
-      </div>
-      <div className="status-box" data-game="status" aria-live="polite"></div>
-      <div className="emote-bar" aria-label="Emotes rápidos">
-        {emoteBar.map((emote) => (
-          <button
-            key={emote.kind}
-            type="button"
-            className="emote-chip"
-            onClick={() => gameApiRef.current?.triggerLocalEmote?.(emote.kind, getEmoteDuration(emote.kind))}
-            title={`${emote.label} (${emote.short})`}
-          >
-            <span className="emote-glyph" aria-hidden="true">{emote.glyph}</span>
-            <span className="emote-label">{emote.label}</span>
-            <span className="emote-short">{emote.short}</span>
-          </button>
-        ))}
-      </div>
-      <div className="minimap" aria-hidden="true">
-        <div className="minimap-head">
-          <div className="minimap-title-group">
-            <span className="minimap-kicker">Campus map</span>
-            <strong className="minimap-title">Mapa do campus</strong>
-          </div>
-          <span className="minimap-compass" title="Norte">N</span>
-        </div>
-        <canvas data-game="minimap-canvas" width="220" height="220"></canvas>
-        <div className="minimap-legend">
-          <span><i className="legend-swatch legend-player" /> voce</span>
-          <span><i className="legend-swatch legend-remote" /> outros</span>
-          <span><i className="legend-swatch legend-path" /> caminho</span>
-        </div>
-      </div>
-      <div className="speech" data-game="speech" aria-live="polite">
-        <div className="speech-header">
-          <span className="speech-name" data-game="speech-name">Aviso</span>
-          <span className="speech-hint" data-game="speech-hint">[E]</span>
-        </div>
-        <div className="speech-body" data-game="speech-body"></div>
-      </div>
+    <div id="app" ref={containerRef} className="game-shell">
       <canvas data-game="scene"></canvas>
 
-      <MediaPlayerPanel
-        open={mediaPanelOpen}
-        onClose={() => setMediaPanelOpen(false)}
-        onFocusChange={setMediaFocused}
-      />
+      <div className="game-overlay">
+        <div className="game-header-area">
+          <div className="game-left-stack">
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="menu-back"
+            >
+              ← Menu
+            </button>
 
-      <VoiceChat
-        voice={voiceState}
-        connection={connection}
-        onStart={handleStartVoice}
-        onStop={handleStopVoice}
-        onToggleMute={handleToggleMute}
-        onUnlockAudio={handleUnlockAudio}
-      />
+            <div className="hud">
+              <div className="hud-brand">
+                <span className="hud-nick">{nick}</span>
+                <span className="hud-campus">Gramadinho IFCE</span>
+              </div>
+              <div className="hud-stack">
+                <div className="hud-row">
+                  <span className="hud-time" title={`Campus ${atmosphere.label} • clima ${atmosphere.mood}`}>
+                    {atmosphere.clock} • {atmosphere.label}
+                  </span>
+                  <span className="hud-state" title={`Estado atual do campus: ${atmosphere.mood}`}>
+                    {atmosphere.mood}
+                  </span>
+                  <span className="hud-weather" title={`Clima atual do campus: ${atmosphere.weatherLabel}`}>
+                    {atmosphere.weatherLabel}
+                  </span>
+                </div>
+                <div className="hud-row hud-row-actions">
+                  <span
+                    className={`hud-player hud-player-${playerState.kind}`}
+                    title={`Estado do player: ${playerState.detail}`}
+                  >
+                    {playerState.label}
+                  </span>
+                  <span
+                    className="hud-camera"
+                    title="C alterna entre câmera travada e livre. F foca o alvo mais próximo no modo livre"
+                  >
+                    câmera {cameraMode.label}{cameraMode.focusLabel ? ` • foco ${cameraMode.focusLabel}` : ""}
+                  </span>
+                  <span className="hud-audio hud-audio-on" title="Som ambiente do campus e rádio interna sempre ativos">
+                    som {audioState.label}
+                  </span>
+                </div>
+              </div>
+            </div>
 
-      <Chat
-        messages={chatMessages}
-        onSend={handleSendChat}
-        onReact={handleReactToMessage}
-        onFocusChange={setChatFocused}
-        connection={connection}
-        myNick={nick}
-        visible={chatVisible}
-        onToggleVisible={() => setChatVisible((v) => !v)}
-      />
+            <VoiceChat
+              voice={voiceState}
+              connection={connection}
+              onStart={handleStartVoice}
+              onStop={handleStopVoice}
+              onToggleMute={handleToggleMute}
+              onUnlockAudio={handleUnlockAudio}
+            />
 
-      <button
-        type="button"
-        onClick={() => router.push("/")}
-        className="menu-back"
-      >
-        ← Menu
-      </button>
+            <div className="status-box" data-game="status" data-active="0" aria-live="polite"></div>
+          </div>
+
+          <div className="game-right-stack">
+            <div className="minimap" aria-hidden="true">
+              <div className="minimap-head">
+                <div className="minimap-title-group">
+                  <span className="minimap-kicker">Campus map</span>
+                  <strong className="minimap-title">Mapa do campus</strong>
+                </div>
+                <span className="minimap-compass" title="Norte">N</span>
+              </div>
+              <canvas data-game="minimap-canvas" width="220" height="220"></canvas>
+              <div className="minimap-legend">
+                <span><i className="legend-swatch legend-player" /> voce</span>
+                <span><i className="legend-swatch legend-remote" /> outros</span>
+                <span><i className="legend-swatch legend-path" /> caminho</span>
+              </div>
+            </div>
+
+            <MediaPlayerPanel
+              open={mediaPanelOpen}
+              onClose={() => setMediaPanelOpen(false)}
+              onFocusChange={setMediaFocused}
+            />
+          </div>
+        </div>
+
+        <div className="game-middle-row">
+          <div className="speech" data-game="speech" aria-live="polite">
+            <div className="speech-header">
+              <span className="speech-name" data-game="speech-name">Aviso</span>
+              <span className="speech-hint" data-game="speech-hint">[E]</span>
+            </div>
+            <div className="speech-body" data-game="speech-body"></div>
+          </div>
+        </div>
+
+        <div className="game-bottom-row">
+          <Chat
+            messages={chatMessages}
+            onSend={handleSendChat}
+            onReact={handleReactToMessage}
+            onFocusChange={setChatFocused}
+            connection={connection}
+            myNick={nick}
+            visible={chatVisible}
+            onToggleVisible={() => setChatVisible((v) => !v)}
+          />
+
+          <div className="game-emote-shell">
+            <div className="emote-bar" aria-label="Emotes rápidos">
+              {emoteBar.map((emote) => (
+                <button
+                  key={emote.kind}
+                  type="button"
+                  className="emote-chip"
+                  onClick={() => gameApiRef.current?.triggerLocalEmote?.(emote.kind, getEmoteDuration(emote.kind))}
+                  title={`${emote.label} (${emote.short})`}
+                >
+                  <span className="emote-glyph" aria-hidden="true">{emote.glyph}</span>
+                  <span className="emote-label">{emote.label}</span>
+                  <span className="emote-short">{emote.short}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
