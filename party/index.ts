@@ -35,6 +35,18 @@ type SharedEntityState = {
   mountedBy: string | null;
 };
 
+type NpcAnim = "idle" | "walk" | "run" | "sit" | "dance" | "celebrate";
+
+type NpcState = {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  ry: number;
+  speed: number;
+  anim: NpcAnim;
+};
+
 type AvatarState = {
   shirt: string;
   pants: string;
@@ -59,6 +71,8 @@ const MAX_TEXT = 240;
 const MAX_SIGNAL_SDP = 30_000;
 const MAX_SIGNAL_CANDIDATE = 8_000;
 const MAX_ENTITY_ID = 96;
+const MAX_NPC_ID = 96;
+const MAX_NPCS = 32;
 const DEFAULT_AVATAR: AvatarState = {
   shirt: "#2f855a",
   pants: "#24364d",
@@ -159,9 +173,51 @@ function sanitizeJumpY(input: unknown): number {
   return Math.max(0, Math.min(4, input));
 }
 
+function sanitizeFiniteNumber(input: unknown, fallback = 0, min = -256, max = 256): number {
+  if (typeof input !== "number" || !Number.isFinite(input)) return fallback;
+  return Math.max(min, Math.min(max, input));
+}
+
+function sanitizeNpcAnim(input: unknown): NpcAnim {
+  switch (input) {
+    case "walk":
+    case "run":
+    case "sit":
+    case "dance":
+    case "celebrate":
+      return input;
+    default:
+      return "idle";
+  }
+}
+
+function sanitizeNpcStates(input: unknown): NpcState[] {
+  if (!Array.isArray(input)) return [];
+  const result: NpcState[] = [];
+
+  for (const item of input.slice(0, MAX_NPCS)) {
+    const raw = item && typeof item === "object" ? (item as Record<string, unknown>) : null;
+    const id = sanitize(raw?.id, MAX_NPC_ID);
+    if (!id) continue;
+    result.push({
+      id,
+      x: sanitizeFiniteNumber(raw?.x, 0, -128, 128),
+      y: sanitizeFiniteNumber(raw?.y, 0, -8, 8),
+      z: sanitizeFiniteNumber(raw?.z, 0, -128, 128),
+      ry: sanitizeFiniteNumber(raw?.ry, 0, -Math.PI * 4, Math.PI * 4),
+      speed: sanitizeFiniteNumber(raw?.speed, 0, 0, 32),
+      anim: sanitizeNpcAnim(raw?.anim),
+    });
+  }
+
+  return result;
+}
+
 export default class GameRoom implements Party.Server {
   players = new Map<string, PlayerState>();
   entities = new Map<string, SharedEntityState>();
+  npcStates: NpcState[] = [];
+  npcAuthority: string | null = null;
   history: ChatMsg[] = [];
   clockTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -182,6 +238,8 @@ export default class GameRoom implements Party.Server {
         you: conn.id,
         players: Array.from(this.players.values()),
         entities: Array.from(this.entities.values()),
+        npcAuthority: this.npcAuthority,
+        npcs: this.npcStates,
         history: this.history.slice(-30),
         serverNow: Date.now(),
       })
@@ -223,6 +281,15 @@ export default class GameRoom implements Party.Server {
         voiceMuted: false,
       };
       this.players.set(sender.id, state);
+      if (!this.npcAuthority) {
+        this.npcAuthority = sender.id;
+        this.room.broadcast(
+          JSON.stringify({
+            type: "npc-authority",
+            id: this.npcAuthority,
+          })
+        );
+      }
       this.room.broadcast(JSON.stringify({ type: "join", player: state }), [sender.id]);
       const sysMsg: ChatMsg = {
         id: "__system__",
@@ -233,6 +300,19 @@ export default class GameRoom implements Party.Server {
       this.history.push(sysMsg);
       this.trim();
       this.room.broadcast(JSON.stringify({ type: "chat", ...sysMsg }));
+      return;
+    }
+
+    if (msg.type === "npc-state") {
+      if (!this.players.has(sender.id) || sender.id !== this.npcAuthority) return;
+      this.npcStates = sanitizeNpcStates(msg.npcs);
+      this.room.broadcast(
+        JSON.stringify({
+          type: "npc-state",
+          npcs: this.npcStates,
+        }),
+        [sender.id]
+      );
       return;
     }
 
@@ -386,6 +466,19 @@ export default class GameRoom implements Party.Server {
         JSON.stringify({
           type: "entity-state",
           ...entity,
+        })
+      );
+    }
+    if (this.npcAuthority === conn.id) {
+      const nextAuthority = this.players.keys().next();
+      this.npcAuthority = nextAuthority.done ? null : nextAuthority.value;
+      if (!this.npcAuthority) {
+        this.npcStates = [];
+      }
+      this.room.broadcast(
+        JSON.stringify({
+          type: "npc-authority",
+          id: this.npcAuthority,
         })
       );
     }

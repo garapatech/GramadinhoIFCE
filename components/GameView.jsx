@@ -20,6 +20,8 @@ export default function GameView() {
   const multiplayerRef = useRef(null);
   const voiceRef = useRef(null);
   const localIdRef = useRef(null);
+  const npcAuthorityIdRef = useRef(null);
+  const npcSnapshotRef = useRef([]);
   const [chatMessages, setChatMessages] = useState([]);
   const [voiceState, setVoiceState] = useState(getInitialVoiceState);
   const [connection, setConnection] = useState("connecting");
@@ -131,6 +133,9 @@ export default function GameView() {
             setConnection("error");
           } else if (event.type === "init") {
             localIdRef.current = event.you;
+            npcAuthorityIdRef.current =
+              typeof event.npcAuthority === "string" ? event.npcAuthority : null;
+            npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
               serverSyncedAtRef.current = Date.now();
@@ -150,6 +155,10 @@ export default function GameView() {
                 game.updateSharedEntity?.(entity);
               }
             }
+            if (game) {
+              game.setNpcAuthority?.(npcAuthorityIdRef.current === event.you);
+              game.applyNpcSnapshots?.(npcSnapshotRef.current);
+            }
           } else if (event.type === "clock") {
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
@@ -162,6 +171,15 @@ export default function GameView() {
             if (game) game.updateRemotePlayer(event);
           } else if (event.type === "entity-state") {
             if (game) game.updateSharedEntity?.(event);
+          } else if (event.type === "npc-authority") {
+            npcAuthorityIdRef.current =
+              typeof event.id === "string" ? event.id : null;
+            if (game && localIdRef.current) {
+              game.setNpcAuthority?.(npcAuthorityIdRef.current === localIdRef.current);
+            }
+          } else if (event.type === "npc-state") {
+            npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
+            if (game) game.applyNpcSnapshots?.(npcSnapshotRef.current);
           } else if (event.type === "leave") {
             if (game) game.removeRemotePlayer(event.id);
             voice?.removePlayer(event.id);
@@ -216,6 +234,9 @@ export default function GameView() {
         onLocalEntityState: (state) => {
           multiplayer.sendEntityState(state);
         },
+        onNpcState: (npcs) => {
+          multiplayer.sendNpcState(npcs);
+        },
         onAtmosphereChange: setAtmosphere,
         onCameraModeChange: setCameraMode,
         onAudioStateChange: setAudioState,
@@ -227,6 +248,10 @@ export default function GameView() {
           setMediaPanelOpen(true);
         },
       });
+      game.setNpcAuthority?.(
+        !!localIdRef.current && npcAuthorityIdRef.current === localIdRef.current
+      );
+      game.applyNpcSnapshots?.(npcSnapshotRef.current);
       gameApiRef.current = game;
     }
 
