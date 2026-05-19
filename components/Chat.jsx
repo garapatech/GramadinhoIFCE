@@ -12,6 +12,7 @@ const STATUS_LABEL = {
 export default function Chat({
   messages,
   onSend,
+  onReact,
   onFocusChange,
   connection,
   myNick,
@@ -78,9 +79,26 @@ export default function Chat({
             const isSystem = m.id === "__system__";
             const isYou = !isSystem && m.nick === myNick;
             return (
-              <div key={i} className={`chat-msg${isSystem ? " system" : ""}${isYou ? " you" : ""}`}>
-                <span className="nick">{isSystem ? "•" : m.nick}:</span>
-                <span>{m.text}</span>
+              <div key={m.key || i} className={`chat-msg${isSystem ? " system" : ""}${isYou ? " you" : ""}`}>
+                <div className="chat-msg-line">
+                  <span className="nick">{isSystem ? "•" : m.nick}:</span>
+                  <span>{m.text}</span>
+                </div>
+                {!isSystem && (
+                  <div className="chat-msg-actions">
+                    <button
+                      type="button"
+                      className="chat-react"
+                      onClick={() => onReact?.(m)}
+                      title="Curtir esta mensagem"
+                    >
+                      👍 Curtir
+                    </button>
+                    <span className={`chat-like-count${m.likeCount ? " active" : ""}`}>
+                      {m.likeCount ? `+${m.likeCount}` : "0"}
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })}

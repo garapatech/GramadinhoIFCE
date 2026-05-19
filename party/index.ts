@@ -28,6 +28,7 @@ function sanitize(input: unknown, limit: number): string {
 export default class GameRoom implements Party.Server {
   players = new Map<string, PlayerState>();
   history: ChatMsg[] = [];
+  clockTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(readonly room: Party.Room) {}
 
@@ -46,8 +47,19 @@ export default class GameRoom implements Party.Server {
         you: conn.id,
         players: Array.from(this.players.values()),
         history: this.history.slice(-30),
+        serverNow: Date.now(),
       })
     );
+    if (!this.clockTimer) {
+      this.clockTimer = setInterval(() => {
+        this.room.broadcast(
+          JSON.stringify({
+            type: "clock",
+            serverNow: Date.now(),
+          })
+        );
+      }, 2000);
+    }
   }
 
   onMessage(message: string, sender: Party.Connection) {
@@ -111,6 +123,25 @@ export default class GameRoom implements Party.Server {
           id: sender.id,
           kind: typeof msg.kind === "string" ? msg.kind.slice(0, 20) : "dance",
           duration: typeof msg.duration === "number" ? Math.min(10, msg.duration) : 4,
+        }),
+        [sender.id]
+      );
+      return;
+    }
+
+    if (msg.type === "reaction") {
+      const targetKey = sanitize(msg.targetKey, 96);
+      if (!targetKey) return;
+      const targetId = targetKey.includes(":")
+        ? targetKey.slice(0, targetKey.lastIndexOf(":"))
+        : targetKey;
+      this.room.broadcast(
+        JSON.stringify({
+          type: "reaction",
+          id: sender.id,
+          targetKey,
+          targetId,
+          kind: typeof msg.kind === "string" ? msg.kind.slice(0, 20) : "like",
         }),
         [sender.id]
       );
