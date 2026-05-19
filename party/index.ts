@@ -8,8 +8,30 @@ type PlayerState = {
   z: number;
   ry: number;
   speed: number;
+  activity: PlayerActivity;
   voiceEnabled: boolean;
   voiceMuted: boolean;
+};
+
+type PlayerActivity =
+  | "idle"
+  | "walking"
+  | "running"
+  | "crouching"
+  | "sitting"
+  | "riding"
+  | "emoting";
+
+type SharedEntityKind = "bike";
+
+type SharedEntityState = {
+  id: string;
+  kind: SharedEntityKind;
+  x: number;
+  z: number;
+  ry: number;
+  speed: number;
+  mountedBy: string | null;
 };
 
 type AvatarState = {
@@ -35,6 +57,7 @@ const MAX_NICK = 16;
 const MAX_TEXT = 240;
 const MAX_SIGNAL_SDP = 30_000;
 const MAX_SIGNAL_CANDIDATE = 8_000;
+const MAX_ENTITY_ID = 96;
 const DEFAULT_AVATAR: AvatarState = {
   shirt: "#2f855a",
   pants: "#24364d",
@@ -112,8 +135,27 @@ function sanitizeVoiceSignal(input: unknown) {
   return signal.description || signal.candidate ? signal : null;
 }
 
+function sanitizeActivity(input: unknown): PlayerActivity {
+  switch (input) {
+    case "walking":
+    case "running":
+    case "crouching":
+    case "sitting":
+    case "riding":
+    case "emoting":
+      return input;
+    default:
+      return "idle";
+  }
+}
+
+function sanitizeEntityKind(input: unknown): SharedEntityKind | null {
+  return input === "bike" ? "bike" : null;
+}
+
 export default class GameRoom implements Party.Server {
   players = new Map<string, PlayerState>();
+  entities = new Map<string, SharedEntityState>();
   history: ChatMsg[] = [];
   clockTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -133,6 +175,7 @@ export default class GameRoom implements Party.Server {
         type: "init",
         you: conn.id,
         players: Array.from(this.players.values()),
+        entities: Array.from(this.entities.values()),
         history: this.history.slice(-30),
         serverNow: Date.now(),
       })
@@ -168,6 +211,7 @@ export default class GameRoom implements Party.Server {
         z: typeof msg.z === "number" ? msg.z : 38,
         ry: typeof msg.ry === "number" ? msg.ry : 0,
         speed: 0,
+        activity: "idle",
         voiceEnabled: false,
         voiceMuted: false,
       };
@@ -192,6 +236,7 @@ export default class GameRoom implements Party.Server {
       if (typeof msg.z === "number") cur.z = msg.z;
       if (typeof msg.ry === "number") cur.ry = msg.ry;
       if (typeof msg.speed === "number") cur.speed = msg.speed;
+      cur.activity = sanitizeActivity(msg.activity);
       this.room.broadcast(
         JSON.stringify({
           type: "state",
@@ -200,6 +245,35 @@ export default class GameRoom implements Party.Server {
           z: cur.z,
           ry: cur.ry,
           speed: cur.speed,
+          activity: cur.activity,
+        }),
+        [sender.id]
+      );
+      return;
+    }
+
+    if (msg.type === "entity-state") {
+      if (!this.players.has(sender.id)) return;
+      const kind = sanitizeEntityKind(msg.kind);
+      const id = sanitize(msg.id, MAX_ENTITY_ID);
+      if (!kind || !id) return;
+
+      const prev = this.entities.get(id);
+      const next: SharedEntityState = {
+        id,
+        kind,
+        x: typeof msg.x === "number" ? msg.x : prev?.x ?? 0,
+        z: typeof msg.z === "number" ? msg.z : prev?.z ?? 0,
+        ry: typeof msg.ry === "number" ? msg.ry : prev?.ry ?? 0,
+        speed: typeof msg.speed === "number" ? msg.speed : prev?.speed ?? 0,
+        mountedBy: msg.mounted === true ? sender.id : null,
+      };
+
+      this.entities.set(id, next);
+      this.room.broadcast(
+        JSON.stringify({
+          type: "entity-state",
+          ...next,
         }),
         [sender.id]
       );
@@ -296,6 +370,16 @@ export default class GameRoom implements Party.Server {
     const player = this.players.get(conn.id);
     this.players.delete(conn.id);
     this.room.broadcast(JSON.stringify({ type: "leave", id: conn.id }));
+    for (const entity of this.entities.values()) {
+      if (entity.mountedBy !== conn.id) continue;
+      entity.mountedBy = null;
+      this.room.broadcast(
+        JSON.stringify({
+          type: "entity-state",
+          ...entity,
+        })
+      );
+    }
     if (player) {
       const sysMsg: ChatMsg = {
         id: "__system__",

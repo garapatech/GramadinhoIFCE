@@ -145,6 +145,11 @@ export default function GameView() {
                 if (p.id !== event.you) game.addRemotePlayer(p);
               }
             }
+            if (game && event.entities) {
+              for (const entity of event.entities) {
+                game.updateSharedEntity?.(entity);
+              }
+            }
           } else if (event.type === "clock") {
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
@@ -155,6 +160,8 @@ export default function GameView() {
             if (event.player) voice?.addPlayer(event.player);
           } else if (event.type === "state") {
             if (game) game.updateRemotePlayer(event);
+          } else if (event.type === "entity-state") {
+            if (game) game.updateSharedEntity?.(event);
           } else if (event.type === "leave") {
             if (game) game.removeRemotePlayer(event.id);
             voice?.removePlayer(event.id);
@@ -205,6 +212,9 @@ export default function GameView() {
         },
         onLocalState: (state) => {
           multiplayer.sendState(state);
+        },
+        onLocalEntityState: (state) => {
+          multiplayer.sendEntityState(state);
         },
         onAtmosphereChange: setAtmosphere,
         onCameraModeChange: setCameraMode,
