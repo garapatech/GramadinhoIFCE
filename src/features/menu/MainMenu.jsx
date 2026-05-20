@@ -69,17 +69,14 @@ export default function MainMenu() {
             maxLength={16}
             autoFocus
           />
-          <p className="error-msg">{error || " "}</p>
+          <p className="error-msg">{error || " "}</p>
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => setCustomizerOpen((open) => !open)}
+            onClick={() => setCustomizerOpen(true)}
           >
-            {customizerOpen ? "Fechar visual" : "Personalizar personagem"}
+            Personalizar personagem
           </button>
-          {customizerOpen && (
-            <AvatarCustomizer avatar={avatar} onChange={setAvatar} />
-          )}
           <button type="submit" className="btn-play">
             Jogar
           </button>
@@ -89,6 +86,14 @@ export default function MainMenu() {
       <p className="menu-credit">
         Feito com carinho • WASD para mover • E para interagir • Enter para o chat • G/Shift+G/1/2/3/4/5 para emotes • Voz para falar
       </p>
+
+      {customizerOpen && (
+        <AvatarCustomizer
+          avatar={avatar}
+          onChange={setAvatar}
+          onClose={() => setCustomizerOpen(false)}
+        />
+      )}
     </main>
   );
 }
