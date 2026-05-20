@@ -3322,3 +3322,141 @@ canvas {
 .pvp-quit-btn:hover {
   background: #e05030;
 }
+
+/* ============ Natação ============ */
+
+.swim-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  z-index: 28;
+  width: min(440px, calc(100vw - 36px));
+  padding: 12px 14px 13px;
+  transform: translate(-50%, 18px);
+  border: 2px solid rgba(4, 48, 75, 0.8);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(159, 237, 255, 0.18), transparent 18px),
+    linear-gradient(180deg, rgba(7, 75, 112, 0.92), rgba(4, 35, 62, 0.94));
+  box-shadow:
+    0 4px 0 rgba(2, 28, 48, 0.72),
+    0 16px 36px rgba(0, 20, 36, 0.34);
+  color: #ecfbff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.swim-hud.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.swim-hud-top,
+.swim-hud-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.swim-hud-kicker,
+.swim-hud-metrics span {
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(219, 249, 255, 0.78);
+}
+
+.swim-hud-top strong {
+  font-size: 16px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.swim-count {
+  min-height: 54px;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-size: 50px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow:
+    0 0 18px rgba(116, 232, 255, 0.86),
+    0 3px 12px rgba(0, 0, 0, 0.55);
+}
+
+.swim-progress-track {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border: 2px solid rgba(204, 248, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(1, 22, 40, 0.58);
+}
+
+.swim-progress-track span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, #e8fdff, #62d8ff 48%, #ffe08a);
+  box-shadow: 0 0 14px rgba(98, 216, 255, 0.65);
+  transition: width 80ms linear;
+}
+
+.biriba-veil {
+  position: absolute;
+  inset: -12px;
+  z-index: 24;
+  opacity: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  background:
+    linear-gradient(90deg, rgba(255, 0, 68, 0.09), transparent 18%, rgba(43, 0, 255, 0.08) 32%, transparent 48%),
+    radial-gradient(circle at 50% 42%, transparent 0 24%, rgba(4, 0, 10, 0.34) 62%, rgba(0, 0, 0, 0.78) 100%);
+  filter: contrast(1.25) saturate(0.72);
+}
+
+.biriba-veil::before,
+.biriba-veil::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.04) 0 1px,
+      transparent 1px 5px
+    );
+  opacity: 0.48;
+}
+
+.biriba-veil::after {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 0, 68, 0.09) 0 2px,
+      transparent 2px 26px
+    );
+  opacity: 0.18;
+}
+
+@media (max-width: 640px) {
+  .swim-hud {
+    bottom: 12px;
+    padding: 10px 11px 11px;
+  }
+
+  .swim-count {
+    min-height: 42px;
+    font-size: 40px;
+  }
+
+  .swim-hud-top strong {
+    font-size: 14px;
+  }
+}

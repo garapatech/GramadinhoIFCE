@@ -32,6 +32,7 @@ export default function GameView() {
   const localIdRef = useRef(null);
   const npcAuthorityIdRef = useRef(null);
   const npcSnapshotRef = useRef([]);
+  const biribaSnapshotRef = useRef(null);
   const joystickRef = useRef(null);
   const joystickPointerRef = useRef(null);
   const mobileRunRef = useRef(false);
@@ -330,6 +331,7 @@ export default function GameView() {
             npcAuthorityIdRef.current =
               typeof event.npcAuthority === "string" ? event.npcAuthority : null;
             npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
+            biribaSnapshotRef.current = event.biriba || null;
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
               serverSyncedAtRef.current = Date.now();
@@ -348,6 +350,9 @@ export default function GameView() {
               for (const entity of event.entities) {
                 game.updateSharedEntity?.(entity);
               }
+            }
+            if (game && event.biriba) {
+              game.biribaSpawn?.(event.biriba);
             }
             if (game) {
               game.setNpcAuthority?.(npcAuthorityIdRef.current === event.you);
@@ -486,6 +491,12 @@ export default function GameView() {
               winnerNick: event.winnerNick,
               forfeit: event.forfeit === true,
             });
+          } else if (event.type === "biriba-spawn") {
+            biribaSnapshotRef.current = event.biriba || null;
+            if (game && event.biriba) game.biribaSpawn?.(event.biriba);
+          } else if (event.type === "biriba-despawn") {
+            biribaSnapshotRef.current = null;
+            if (game) game.biribaDespawn?.();
           } else if (event.type === "reaction") {
             if (!event.targetId) return;
             if (event.targetKey) {
@@ -541,11 +552,22 @@ export default function GameView() {
         onPvpHit: (matchId, victimId) => {
           multiplayer.sendPvpHit(matchId, victimId);
         },
+        onBiribaConsumed: (seed) => {
+          multiplayer.sendBiribaConsumed?.(seed);
+        },
+        onSecretDisconnect: () => {
+          multiplayerRef.current?.close?.();
+          setConnection("disconnected");
+          router.push("/");
+        },
       });
       game.setNpcAuthority?.(
         !!localIdRef.current && npcAuthorityIdRef.current === localIdRef.current
       );
       game.applyNpcSnapshots?.(npcSnapshotRef.current);
+      if (biribaSnapshotRef.current) {
+        game.biribaSpawn?.(biribaSnapshotRef.current);
+      }
       gameApiRef.current = game;
     }
 
