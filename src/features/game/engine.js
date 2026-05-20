@@ -7673,6 +7673,23 @@ function drawMinimap() {
     ctx.stroke();
   }
 
+  const biribaMarker = biribaEvent?.getMapMarker?.();
+  if (biribaMarker) {
+    const mx = worldToMapX(biribaMarker.x);
+    const my = worldToMapY(biribaMarker.z);
+    const blink = 0.45 + 0.55 * ((Math.sin(performance.now() * 0.012) + 1) / 2);
+    ctx.fillStyle = biribaMarker.color || "#000000";
+    ctx.globalAlpha = blink;
+    ctx.beginPath();
+    ctx.arc(mx, my, 3.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.35 + blink * 0.65;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   for (const duck of ducks) {
     const mx = worldToMapX(duck.group.position.x);
     const my = worldToMapY(duck.group.position.z);

@@ -247,23 +247,31 @@ export default class GameRoom implements Party.Server {
   pvpMatches = new Map<string, PvPMatch>();
   pvpCounter = 0;
   biriba: BiribaEvent | null = null;
-  biribaSpawnWindowKey: string | null = null;
+  biribaBlockedDayKey: string | null = null;
 
   constructor(readonly room: Party.Room) {}
 
   maybeUpdateBiriba(now = Date.now()) {
     const serverDate = new Date(now);
-    const windowKey = `${serverDate.getFullYear()}-${serverDate.getMonth() + 1}-${serverDate.getDate()}`;
+    const dayKey = `${serverDate.getFullYear()}-${serverDate.getMonth() + 1}-${serverDate.getDate()}`;
 
     if (this.biriba && this.biriba.expiresAt <= now) {
       this.biriba = null;
       this.room.broadcast(JSON.stringify({ type: "biriba-despawn" }));
     }
 
-    const isWindow =
-      serverDate.getHours() === BIRIBA_SPAWN_HOUR &&
-      serverDate.getMinutes() === BIRIBA_SPAWN_MINUTE;
-    if (!isWindow || this.biriba || this.biribaSpawnWindowKey === windowKey) return;
+    const minutes = serverDate.getHours() * 60 + serverDate.getMinutes();
+    const spawnStartMinutes = BIRIBA_SPAWN_HOUR * 60 + BIRIBA_SPAWN_MINUTE;
+    const despawnMinutes = BIRIBA_DESPAWN_HOUR * 60;
+    const isWindow = minutes >= spawnStartMinutes && minutes < despawnMinutes;
+
+    if (!isWindow) {
+      if (this.biribaBlockedDayKey === dayKey && minutes >= despawnMinutes) {
+        this.biribaBlockedDayKey = null;
+      }
+      return;
+    }
+    if (this.biriba || this.biribaBlockedDayKey === dayKey) return;
 
     const despawnAt = new Date(serverDate);
     despawnAt.setHours(BIRIBA_DESPAWN_HOUR, 0, 0, 0);
@@ -273,7 +281,6 @@ export default class GameRoom implements Party.Server {
       spawnIndex: Math.floor(Math.random() * BIRIBA_SPAWN_POINT_COUNT),
       expiresAt: despawnAt.getTime(),
     };
-    this.biribaSpawnWindowKey = windowKey;
     this.room.broadcast(JSON.stringify({ type: "biriba-spawn", biriba: this.biriba }));
   }
 
@@ -638,6 +645,8 @@ export default class GameRoom implements Party.Server {
       if (!this.players.has(sender.id) || !this.biriba) return;
       const seed = sanitize(msg.seed, 96);
       if (!seed || seed !== this.biriba.seed) return;
+      const now = new Date();
+      this.biribaBlockedDayKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
       this.biriba = null;
       this.room.broadcast(JSON.stringify({ type: "biriba-despawn" }));
       return;

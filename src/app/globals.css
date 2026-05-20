@@ -1931,6 +1931,25 @@ canvas {
   pointer-events: auto;
 }
 
+.biriba-notice {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  pointer-events: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  background: rgba(15, 18, 22, 0.88);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: lowercase;
+  letter-spacing: 0;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
 .players-panel-head,
 .players-row {
   display: grid;

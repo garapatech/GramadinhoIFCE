@@ -184,22 +184,25 @@ export function createBiribaEvent({
   veil.className = "biriba-veil";
   container?.appendChild(veil);
 
-  const normalAppearance = {
-    shirtColor: 0x1d3557,
-    pantsColor: 0x202734,
-    shoesColor: 0x101010,
-    skinColor: 0xd0b19b,
-    hairColor: 0x16100d,
-    backpackColor: 0x2f3a46,
-    backpack: true,
-    scale: 1,
-  };
-  const arenaAppearance = {
-    ...normalAppearance,
-    shirtColor: 0x111827,
-    pantsColor: 0x151515,
-    skinColor: 0xcab9a8,
-  };
+  function randomRgb(rng, min = 0, max = 255) {
+    const r = Math.floor(randomBetween(rng, min, max + 1));
+    const g = Math.floor(randomBetween(rng, min, max + 1));
+    const b = Math.floor(randomBetween(rng, min, max + 1));
+    return (r << 16) | (g << 8) | b;
+  }
+
+  function createRandomAppearance(rng) {
+    return {
+      shirtColor: randomRgb(rng, 20, 240),
+      pantsColor: randomRgb(rng, 15, 220),
+      shoesColor: randomRgb(rng, 0, 120),
+      skinColor: randomRgb(rng, 120, 240),
+      hairColor: randomRgb(rng, 0, 140),
+      backpackColor: randomRgb(rng, 25, 230),
+      backpack: true,
+      scale: 1,
+    };
+  }
 
   const state = {
     biriba: null,
@@ -212,9 +215,10 @@ export function createBiribaEvent({
     consumed: false,
     activePayload: null,
     secret: null,
+    appearance: null,
   };
 
-  function makeBiribaRig(appearance = normalAppearance) {
+  function makeBiribaRig(appearance = state.appearance || createRandomAppearance(Math.random)) {
     const rig = createCharacter(appearance);
     const label = createNameLabel("Biriba", "#fff8dc", "#9ca3af");
     rig.group.add(label);
@@ -255,7 +259,8 @@ export function createBiribaEvent({
     const seed = seedToNumber(payload.seed);
     const rng = mulberry32(seed);
     const spawn = BIRIBA_SPAWN_POINTS[Math.abs(payload.spawnIndex || 0) % BIRIBA_SPAWN_POINTS.length];
-    const { rig } = makeBiribaRig(normalAppearance);
+    state.appearance = createRandomAppearance(rng);
+    const { rig } = makeBiribaRig(state.appearance);
     const group = rig.group;
     group.position.set(spawn.x + randomBetween(rng, -0.8, 0.8), 0, spawn.z + randomBetween(rng, -0.8, 0.8));
     group.rotation.y = randomBetween(rng, -Math.PI, Math.PI);
@@ -348,7 +353,7 @@ export function createBiribaEvent({
 
   function makeSecretState() {
     ensureSecretCourt();
-    const { rig } = makeBiribaRig(arenaAppearance);
+    const { rig } = makeBiribaRig(state.appearance || createRandomAppearance(state.rng));
     rig.group.position.set(SECRET_ARENA.x + 5.0, 0, SECRET_ARENA.z);
     rig.group.rotation.y = Math.PI;
     world.add(rig.group);
@@ -659,6 +664,11 @@ export function createBiribaEvent({
     despawn: despawnEvent,
     update,
     queueThrow,
+    getMapMarker: () => {
+      const group = state.biriba?.group;
+      if (!group || state.secret?.active) return null;
+      return { x: group.position.x, z: group.position.z, color: "#000000" };
+    },
     isSecretActive: () => state.secret?.active === true,
     isPlayerInSecretArena: () => state.secret?.active === true,
     destroy() {

@@ -78,6 +78,8 @@ export default function GameView() {
     label: "parado",
     detail: "vagando pelo campus",
   });
+  const [biribaNotice, setBiribaNotice] = useState("");
+  const biribaNoticeTimerRef = useRef(null);
   const chatFocusedRef = useRef(false);
   const mediaFocusedRef = useRef(false);
   const serverNowRef = useRef(null);
@@ -228,6 +230,15 @@ export default function GameView() {
   useEffect(() => {
     mediaFocusedRef.current = mediaFocused;
   }, [mediaFocused]);
+
+  useEffect(() => {
+    return () => {
+      if (biribaNoticeTimerRef.current) {
+        clearTimeout(biribaNoticeTimerRef.current);
+        biribaNoticeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setAvatar(readStoredAvatar());
@@ -493,6 +504,22 @@ export default function GameView() {
             });
           } else if (event.type === "biriba-spawn") {
             biribaSnapshotRef.current = event.biriba || null;
+            const notice = {
+              id: "__system__",
+              nick: "sistema",
+              text: "biriba está no campus",
+              ts: Date.now(),
+            };
+            setChatMessages((prev) => {
+              const next = [...prev, decorateMessage(notice)];
+              return next.length > 80 ? next.slice(next.length - 80) : next;
+            });
+            setBiribaNotice("biriba está no campus");
+            if (biribaNoticeTimerRef.current) clearTimeout(biribaNoticeTimerRef.current);
+            biribaNoticeTimerRef.current = setTimeout(() => {
+              setBiribaNotice("");
+              biribaNoticeTimerRef.current = null;
+            }, 4500);
             if (game && event.biriba) game.biribaSpawn?.(event.biriba);
           } else if (event.type === "biriba-despawn") {
             biribaSnapshotRef.current = null;
@@ -763,6 +790,12 @@ export default function GameView() {
             </div>
           </div>
         )}
+
+        {biribaNotice ? (
+          <div className="biriba-notice" role="status" aria-live="polite">
+            {biribaNotice}
+          </div>
+        ) : null}
 
         <div className="game-header-area">
           <div className="game-left-stack">
