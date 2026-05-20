@@ -1801,7 +1801,7 @@ canvas {
   z-index: 20;
   top: 18px;
   left: 50%;
-  width: min(420px, calc(100vw - 32px));
+  width: min(480px, calc(100vw - 32px));
   transform: translateX(-50%);
   padding: 14px 12px 12px;
   color: #2b2115;
@@ -1813,7 +1813,7 @@ canvas {
   background:
     linear-gradient(180deg, var(--ui-grass-light) 0 10px, var(--ui-grass-dark) 10px 14px, transparent 14px),
     linear-gradient(180deg, rgba(255, 248, 231, 0.98), rgba(228, 208, 154, 0.98));
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .players-panel-head,
@@ -1853,7 +1853,7 @@ canvas {
 }
 
 .players-row {
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto auto;
   min-height: 34px;
   padding: 5px 7px;
   border: 2px solid rgba(58, 42, 25, 0.22);
@@ -2972,4 +2972,238 @@ canvas {
   .game-shell.is-mobile .minimap {
     width: 96px;
   }
+}
+
+/* ============ PvP Queimado ============ */
+
+.players-pvp-btn {
+  padding: 2px 6px;
+  border: 2px solid rgba(58, 42, 25, 0.3);
+  border-radius: 5px;
+  background: rgba(255, 106, 0, 0.14);
+  color: #7a3000;
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.12s;
+  pointer-events: auto;
+}
+
+.players-pvp-btn:hover {
+  background: rgba(255, 106, 0, 0.32);
+}
+
+.pvp-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.pvp-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 36px 26px;
+  max-width: min(400px, calc(100vw - 40px));
+  border-radius: 14px;
+  border: var(--ui-border) solid var(--ui-edge);
+  box-shadow:
+    0 var(--ui-lip) 0 var(--ui-shadow),
+    0 var(--ui-float) 28px rgba(0, 0, 0, 0.5);
+  background:
+    linear-gradient(180deg, var(--ui-grass-light) 0 10px, var(--ui-grass-dark) 10px 16px, transparent 16px),
+    linear-gradient(180deg, rgba(255, 248, 231, 0.99), rgba(228, 208, 154, 0.99));
+  text-align: center;
+}
+
+.pvp-card-icon {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.pvp-card-title {
+  font-size: 20px;
+  font-weight: 900;
+  color: var(--ui-ink);
+  letter-spacing: 0.02em;
+}
+
+.pvp-card-sub {
+  font-size: 14px;
+  font-weight: 700;
+  color: #4b3a22;
+}
+
+.pvp-card-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.pvp-btn {
+  padding: 10px 24px;
+  border-radius: 8px;
+  border: 2px solid var(--ui-edge);
+  font-weight: 900;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 3px 0 var(--ui-shadow);
+  transition: filter 0.1s;
+}
+
+.pvp-btn:active {
+  box-shadow: none;
+  transform: translateY(2px);
+}
+
+.pvp-btn-accept {
+  background: linear-gradient(180deg, #6fcf5a, #3f9c2a);
+  color: #fff;
+}
+
+.pvp-btn-accept:hover {
+  filter: brightness(1.1);
+}
+
+.pvp-btn-decline {
+  background: linear-gradient(180deg, #e07050, #b03020);
+  color: #fff;
+}
+
+.pvp-btn-decline:hover {
+  filter: brightness(1.1);
+}
+
+.pvp-countdown-overlay {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.pvp-countdown-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.pvp-countdown-vs {
+  font-size: 16px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.7);
+}
+
+.pvp-countdown-vs em {
+  font-style: normal;
+  color: #ffd060;
+  margin: 0 6px;
+}
+
+.pvp-countdown-num {
+  font-size: 88px;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+  text-shadow: 0 0 30px rgba(255, 200, 0, 0.8), 0 4px 12px rgba(0,0,0,0.8);
+  animation: pvp-pop 0.35s ease-out;
+}
+
+@keyframes pvp-pop {
+  from { transform: scale(1.5); opacity: 0.5; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+.pvp-countdown-hint {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.75);
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+}
+
+.pvp-hud {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 2px solid var(--ui-edge);
+  box-shadow: 0 3px 0 var(--ui-shadow), 0 6px 18px rgba(0,0,0,0.35);
+  background:
+    linear-gradient(180deg, var(--ui-grass-light) 0 6px, var(--ui-grass-dark) 6px 10px, transparent 10px),
+    linear-gradient(180deg, rgba(255,248,231,0.97), rgba(228,208,154,0.97));
+  pointer-events: none;
+}
+
+.pvp-hud-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 80px;
+}
+
+.pvp-hud-center {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.pvp-hud-name {
+  font-size: 11px;
+  font-weight: 900;
+  color: var(--ui-leaf);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pvp-hud-hits {
+  display: flex;
+  gap: 4px;
+}
+
+.pvp-hit-dot {
+  font-size: 16px;
+  color: rgba(58, 42, 25, 0.2);
+  line-height: 1;
+}
+
+.pvp-hit-dot.burned {
+  color: #e03010;
+  text-shadow: 0 0 6px rgba(255,60,0,0.7);
+}
+
+.pvp-quit-btn {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px solid var(--ui-edge);
+  background: #c04020;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 0 rgba(80,0,0,0.5);
+}
+
+.pvp-quit-btn:hover {
+  background: #e05030;
 }

@@ -15,6 +15,8 @@ export function bootGame(opts = {}) {
   const onPlayerStateChange = typeof opts.onPlayerStateChange === "function" ? opts.onPlayerStateChange : () => {};
   const onEmote = typeof opts.onEmote === "function" ? opts.onEmote : () => {};
   const onMediaBoothInteract = typeof opts.onMediaBoothInteract === "function" ? opts.onMediaBoothInteract : () => {};
+  const onPvpThrow = typeof opts.onPvpThrow === "function" ? opts.onPvpThrow : () => {};
+  const onPvpHit = typeof opts.onPvpHit === "function" ? opts.onPvpHit : () => {};
   const shouldIgnoreKeys = typeof opts.shouldIgnoreKeys === "function" ? opts.shouldIgnoreKeys : () => false;
   const getWorldTime = typeof opts.getWorldTime === "function" ? opts.getWorldTime : null;
   const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
@@ -1510,6 +1512,66 @@ addBuilding({ x: 18, z: 24, width: 16, depth: 9, height: 5, color: 0xc8d0da, roo
 addBuilding({ x: -21, z: 26, width: 13, depth: 8, height: 4.5, color: 0xddddcf, roof: 0x64725f, name: "secretaria" });
 addBuilding({ x: 0, z: 10, width: 10, depth: 8, height: 4.2, color: 0xe3dad0, roof: 0x715142, name: "atelier" });
 
+// Quadra de Queimado (PvP Arena)
+const ARENA_CX = 40;
+const ARENA_CZ = 42;
+const ARENA_W = 18;
+const ARENA_D = 12;
+/* arena build scope */ {
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x4e7c2e, roughness: 1 });
+  const arenaFloor = new THREE.Mesh(new THREE.BoxGeometry(ARENA_W, 0.07, ARENA_D), floorMat);
+  arenaFloor.position.set(ARENA_CX, 0.035, ARENA_CZ);
+  arenaFloor.receiveShadow = true;
+  world.add(arenaFloor);
+
+  const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+  function addCourtLine(x, z, w, d) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, d), lineMat);
+    m.position.set(x, 0.07, z);
+    world.add(m);
+  }
+  addCourtLine(ARENA_CX, ARENA_CZ, 0.18, ARENA_D);
+  addCourtLine(ARENA_CX, ARENA_CZ - ARENA_D / 2, ARENA_W + 0.18, 0.18);
+  addCourtLine(ARENA_CX, ARENA_CZ + ARENA_D / 2, ARENA_W + 0.18, 0.18);
+  addCourtLine(ARENA_CX - ARENA_W / 2, ARENA_CZ, 0.18, ARENA_D + 0.18);
+  addCourtLine(ARENA_CX + ARENA_W / 2, ARENA_CZ, 0.18, ARENA_D + 0.18);
+
+  const postMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0.3 });
+  const postGeo = new THREE.CylinderGeometry(0.09, 0.09, 2.4, 8);
+  for (const [px, pz] of [
+    [ARENA_CX - ARENA_W / 2, ARENA_CZ - ARENA_D / 2],
+    [ARENA_CX + ARENA_W / 2, ARENA_CZ - ARENA_D / 2],
+    [ARENA_CX - ARENA_W / 2, ARENA_CZ + ARENA_D / 2],
+    [ARENA_CX + ARENA_W / 2, ARENA_CZ + ARENA_D / 2],
+    [ARENA_CX, ARENA_CZ - ARENA_D / 2],
+    [ARENA_CX, ARENA_CZ + ARENA_D / 2],
+  ]) {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(px, 1.2, pz);
+    post.castShadow = true;
+    world.add(post);
+  }
+
+  // Placa "QUEIMADO"
+  const signPole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.06, 3.2, 8),
+    new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.7, metalness: 0.4 })
+  );
+  signPole.position.set(ARENA_CX, 1.6, ARENA_CZ - ARENA_D / 2 - 1.2);
+  signPole.castShadow = true;
+  world.add(signPole);
+
+  const signBoard = new THREE.Mesh(
+    new THREE.BoxGeometry(3.8, 1.0, 0.12),
+    new THREE.MeshStandardMaterial({ color: 0xd4421a, roughness: 0.8 })
+  );
+  signBoard.position.set(ARENA_CX, 3.5, ARENA_CZ - ARENA_D / 2 - 1.2);
+  signBoard.castShadow = true;
+  world.add(signBoard);
+
+  mapFeatures.buildings.push({ x: ARENA_CX, z: ARENA_CZ, width: ARENA_W, depth: ARENA_D, color: 0x4e7c2e, roof: 0xffffff, name: "quadra pvp" });
+}
+
 function createTree() {
   const tree = new THREE.Group();
   const trunk = new THREE.Mesh(
@@ -2800,6 +2862,16 @@ world.add(spawnBeacon);
 const spawnGlow = new THREE.PointLight(0x62ff9f, 1.2, 10, 2);
 spawnGlow.position.set(-40, 2.2, 38);
 world.add(spawnGlow);
+
+const pvpBalls = [];
+let pvpActiveMatch = null; // { matchId, opponentId, side } | null
+let pvpThrowCooldown = 0;
+let pvpSavedPosition = null; // { x, z } before teleport
+let queuedPvpThrow = false;
+const BALL_SPEED = 11;
+const BALL_LIFE = 2.2;
+const BALL_RADIUS = 0.28;
+const PLAYER_HIT_RADIUS = 0.65;
 
 const playerState = {
   sitting: false,
@@ -6026,6 +6098,10 @@ const keydownHandler = (event) => {
   if (event.code === "Digit3") queuedEmoteKind = "wave";
   if (event.code === "Digit4") queuedEmoteKind = "point";
   if (event.code === "Digit5") queuedEmoteKind = "cheer";
+  if (event.code === "KeyQ" && !event.repeat && pvpActiveMatch) {
+    event.preventDefault();
+    queuedPvpThrow = true;
+  }
 };
 const keyupHandler = (event) => keys.delete(event.code);
 const mousedownHandler = (event) => {
@@ -7509,6 +7585,7 @@ function tick() {
 
   updateRemotes(dt, time);
   updateBubbles(dt);
+  updatePvpBalls(dt);
 
   netAccumulator += dt;
   if (netAccumulator >= NET_INTERVAL) {
@@ -7546,6 +7623,140 @@ function tick() {
 }
 
 tick();
+
+// ── PvP Queimado ─────────────────────────────────────────────────────────────
+
+function createBallMesh() {
+  const geo = new THREE.SphereGeometry(BALL_RADIUS, 10, 10);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff6a00,
+    emissive: 0xff3300,
+    emissiveIntensity: 0.45,
+    roughness: 0.5,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = false;
+  return mesh;
+}
+
+function spawnBall(x, z, dx, dz, matchId, isLocal) {
+  const mesh = createBallMesh();
+  mesh.position.set(x, 0.9, z);
+  world.add(mesh);
+  pvpBalls.push({ mesh, x, z, dx, dz, life: BALL_LIFE, matchId, isLocal });
+}
+
+function doLocalPvpThrow() {
+  if (!pvpActiveMatch || pvpThrowCooldown > 0) return;
+  pvpThrowCooldown = 0.55;
+  const ry = player.rotation.y;
+  const dx = -Math.sin(ry);
+  const dz = -Math.cos(ry);
+  const ox = player.position.x + dx * 0.9;
+  const oz = player.position.z + dz * 0.9;
+  spawnBall(ox, oz, dx, dz, pvpActiveMatch.matchId, true);
+  onPvpThrow(pvpActiveMatch.matchId, dx, dz, ox, oz);
+}
+
+function updatePvpBalls(dt) {
+  if (pvpThrowCooldown > 0) pvpThrowCooldown -= dt;
+  if (queuedPvpThrow) {
+    queuedPvpThrow = false;
+    doLocalPvpThrow();
+  }
+
+  for (let i = pvpBalls.length - 1; i >= 0; i--) {
+    const b = pvpBalls[i];
+    b.life -= dt;
+    if (b.life <= 0) {
+      world.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      b.mesh.material.dispose();
+      pvpBalls.splice(i, 1);
+      continue;
+    }
+    b.x += b.dx * BALL_SPEED * dt;
+    b.z += b.dz * BALL_SPEED * dt;
+    b.mesh.position.set(b.x, 0.9 + Math.sin(b.life * 4) * 0.08, b.z);
+
+    if (b.isLocal && pvpActiveMatch) {
+      const opponentId = pvpActiveMatch.opponentId;
+      const r = remotePlayers.get(opponentId);
+      if (r) {
+        const dx = b.x - r.group.position.x;
+        const dz = b.z - r.group.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < BALL_RADIUS + PLAYER_HIT_RADIUS) {
+          onPvpHit(pvpActiveMatch.matchId, opponentId);
+          pvpShowHit(opponentId);
+          world.remove(b.mesh);
+          b.mesh.geometry.dispose();
+          b.mesh.material.dispose();
+          pvpBalls.splice(i, 1);
+        }
+      }
+    }
+  }
+}
+
+function pvpSetMatch(match) {
+  pvpActiveMatch = match;
+  if (!match) {
+    for (const b of pvpBalls) {
+      world.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      b.mesh.material.dispose();
+    }
+    pvpBalls.length = 0;
+    pvpThrowCooldown = 0;
+  }
+}
+
+function pvpShowThrow(matchId, fromId, x, z, dx, dz) {
+  if (!pvpActiveMatch || pvpActiveMatch.matchId !== matchId) return;
+  spawnBall(x, z, dx, dz, matchId, false);
+}
+
+function pvpShowHit(victimId) {
+  const isLocal = victimId === "__local__";
+  const target = isLocal ? player : remotePlayers.get(victimId)?.group;
+  if (!target) return;
+  const flashMat = new THREE.MeshStandardMaterial({ color: 0xff2200, emissive: 0xff2200, emissiveIntensity: 1.2, transparent: true, opacity: 0.55 });
+  const flashGeo = new THREE.SphereGeometry(0.72, 8, 8);
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.set(0, 0.95, 0);
+  target.add(flash);
+  let t = 0;
+  const anim = () => {
+    t += 0.035;
+    if (t >= 1) { target.remove(flash); flash.geometry.dispose(); flash.material.dispose(); return; }
+    flash.material.opacity = 0.55 * (1 - t);
+    requestAnimationFrame(anim);
+  };
+  requestAnimationFrame(anim);
+}
+
+function pvpTeleportToArena(side) {
+  pvpSavedPosition = { x: player.position.x, z: player.position.z };
+  const spawnX = side === "A" ? ARENA_CX - 5 : ARENA_CX + 5;
+  const facingY = side === "A" ? 0 : Math.PI;
+  player.position.set(spawnX, 0, ARENA_CZ);
+  player.rotation.y = facingY;
+  playerVelocity.set(0, 0);
+}
+
+function pvpReturnFromArena() {
+  if (pvpSavedPosition) {
+    player.position.set(pvpSavedPosition.x, 0, pvpSavedPosition.z);
+    pvpSavedPosition = null;
+  }
+}
+
+function queueMobilePvpThrow() {
+  if (pvpActiveMatch) queuedPvpThrow = true;
+}
+
+// ── end PvP ──────────────────────────────────────────────────────────────────
 
 function destroy() {
   running = false;
@@ -7603,7 +7814,13 @@ function destroy() {
     setMobileInput,
     queueMobileInteract,
     queueMobileJump,
-    toggleCameraMode
+    toggleCameraMode,
+    pvpSetMatch,
+    pvpShowThrow,
+    pvpShowHit,
+    pvpTeleportToArena,
+    pvpReturnFromArena,
+    queueMobilePvpThrow,
   };
 }
 

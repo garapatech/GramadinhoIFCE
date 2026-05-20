@@ -68,6 +68,20 @@ type ChatMsg = {
 const CHAT_HISTORY_LIMIT = 60;
 const MAX_NICK = 16;
 const MAX_TEXT = 240;
+const PVP_MAX_HITS = 3;
+
+type PvPStatus = "pending" | "active" | "ended";
+
+type PvPMatch = {
+  id: string;
+  playerA: string;
+  playerB: string;
+  nickA: string;
+  nickB: string;
+  hitsOnA: number;
+  hitsOnB: number;
+  status: PvPStatus;
+};
 const MAX_SIGNAL_SDP = 30_000;
 const MAX_SIGNAL_CANDIDATE = 8_000;
 const MAX_ENTITY_ID = 96;
@@ -220,6 +234,8 @@ export default class GameRoom implements Party.Server {
   npcAuthority: string | null = null;
   history: ChatMsg[] = [];
   clockTimer: ReturnType<typeof setInterval> | null = null;
+  pvpMatches = new Map<string, PvPMatch>();
+  pvpCounter = 0;
 
   constructor(readonly room: Party.Room) {}
 
@@ -436,6 +452,146 @@ export default class GameRoom implements Party.Server {
       return;
     }
 
+    if (msg.type === "pvp-challenge") {
+      const challenger = this.players.get(sender.id);
+      if (!challenger) return;
+      const to = sanitize(msg.to, 128);
+      if (!to || to === sender.id || !this.players.has(to)) return;
+      const busy = [...this.pvpMatches.values()].some(
+        (m) => m.status !== "ended" && (m.playerA === sender.id || m.playerB === sender.id || m.playerA === to || m.playerB === to)
+      );
+      if (busy) return;
+      const matchId = `pvp-${++this.pvpCounter}`;
+      const match: PvPMatch = {
+        id: matchId,
+        playerA: sender.id,
+        playerB: to,
+        nickA: challenger.nick,
+        nickB: this.players.get(to)!.nick,
+        hitsOnA: 0,
+        hitsOnB: 0,
+        status: "pending",
+      };
+      this.pvpMatches.set(matchId, match);
+      this.room.getConnection(to)?.send(JSON.stringify({
+        type: "pvp-challenge",
+        matchId,
+        from: sender.id,
+        fromNick: challenger.nick,
+      }));
+      return;
+    }
+
+    if (msg.type === "pvp-respond") {
+      const matchId = sanitize(msg.matchId, 64);
+      const match = this.pvpMatches.get(matchId);
+      if (!match || match.status !== "pending" || match.playerB !== sender.id) return;
+      if (msg.accepted !== true) {
+        match.status = "ended";
+        this.room.getConnection(match.playerA)?.send(JSON.stringify({
+          type: "pvp-declined",
+          matchId,
+          opponentNick: match.nickB,
+        }));
+        return;
+      }
+      match.status = "active";
+      const startMsg = JSON.stringify({
+        type: "pvp-start",
+        matchId,
+        playerA: match.playerA,
+        playerB: match.playerB,
+        nickA: match.nickA,
+        nickB: match.nickB,
+      });
+      this.room.getConnection(match.playerA)?.send(startMsg);
+      this.room.getConnection(match.playerB)?.send(startMsg);
+      return;
+    }
+
+    if (msg.type === "pvp-throw") {
+      const matchId = sanitize(msg.matchId, 64);
+      const match = this.pvpMatches.get(matchId);
+      if (!match || match.status !== "active") return;
+      if (match.playerA !== sender.id && match.playerB !== sender.id) return;
+      const opponent = match.playerA === sender.id ? match.playerB : match.playerA;
+      const dx = sanitizeFiniteNumber(msg.dx, 0, -1, 1);
+      const dz = sanitizeFiniteNumber(msg.dz, 0, -1, 1);
+      const x = sanitizeFiniteNumber(msg.x, 0, -128, 128);
+      const z = sanitizeFiniteNumber(msg.z, 0, -128, 128);
+      this.room.getConnection(opponent)?.send(JSON.stringify({
+        type: "pvp-throw",
+        matchId,
+        from: sender.id,
+        dx, dz, x, z,
+      }));
+      return;
+    }
+
+    if (msg.type === "pvp-hit") {
+      const matchId = sanitize(msg.matchId, 64);
+      const match = this.pvpMatches.get(matchId);
+      if (!match || match.status !== "active") return;
+      if (match.playerA !== sender.id && match.playerB !== sender.id) return;
+      const victim = sanitize(msg.victim, 128);
+      if (victim !== match.playerA && victim !== match.playerB) return;
+      if (victim === sender.id) return;
+      if (victim === match.playerA) {
+        match.hitsOnA = Math.min(match.hitsOnA + 1, PVP_MAX_HITS);
+      } else {
+        match.hitsOnB = Math.min(match.hitsOnB + 1, PVP_MAX_HITS);
+      }
+      if (match.hitsOnA >= PVP_MAX_HITS || match.hitsOnB >= PVP_MAX_HITS) {
+        match.status = "ended";
+        const aWon = match.hitsOnB >= PVP_MAX_HITS;
+        const winner = aWon ? match.playerA : match.playerB;
+        const loser = aWon ? match.playerB : match.playerA;
+        const winnerNick = aWon ? match.nickA : match.nickB;
+        const loserNick = aWon ? match.nickB : match.nickA;
+        const endMsg = JSON.stringify({
+          type: "pvp-end",
+          matchId,
+          winner,
+          loser,
+          winnerNick,
+          loserNick,
+          hitsOnA: match.hitsOnA,
+          hitsOnB: match.hitsOnB,
+        });
+        this.room.getConnection(match.playerA)?.send(endMsg);
+        this.room.getConnection(match.playerB)?.send(endMsg);
+        const sysMsg: ChatMsg = {
+          id: "__system__",
+          nick: "sistema",
+          text: `🏐 ${winnerNick} venceu ${loserNick} no queimado!`,
+          ts: Date.now(),
+        };
+        this.history.push(sysMsg);
+        this.trim();
+        this.room.broadcast(JSON.stringify({ type: "chat", ...sysMsg }));
+      } else {
+        const hitMsg = JSON.stringify({
+          type: "pvp-hit",
+          matchId,
+          victim,
+          hitsOnA: match.hitsOnA,
+          hitsOnB: match.hitsOnB,
+        });
+        this.room.getConnection(match.playerA)?.send(hitMsg);
+        this.room.getConnection(match.playerB)?.send(hitMsg);
+      }
+      return;
+    }
+
+    if (msg.type === "pvp-quit") {
+      const matchId = sanitize(msg.matchId, 64);
+      const match = this.pvpMatches.get(matchId);
+      if (!match || match.status !== "active") return;
+      if (match.playerA !== sender.id && match.playerB !== sender.id) return;
+      this._endPvpByForfeit(match, sender.id);
+      return;
+    }
+
     if (msg.type === "chat") {
       const player = this.players.get(sender.id);
       const text = sanitize(msg.text, MAX_TEXT);
@@ -454,7 +610,36 @@ export default class GameRoom implements Party.Server {
     }
   }
 
+  _endPvpByForfeit(match: PvPMatch, quitterId: string) {
+    match.status = "ended";
+    const aQuit = match.playerA === quitterId;
+    const winner = aQuit ? match.playerB : match.playerA;
+    const winnerNick = aQuit ? match.nickB : match.nickA;
+    const loserNick = aQuit ? match.nickA : match.nickB;
+    const endMsg = JSON.stringify({
+      type: "pvp-end",
+      matchId: match.id,
+      winner,
+      loser: quitterId,
+      winnerNick,
+      loserNick,
+      hitsOnA: match.hitsOnA,
+      hitsOnB: match.hitsOnB,
+      forfeit: true,
+    });
+    this.room.getConnection(match.playerA)?.send(endMsg);
+    this.room.getConnection(match.playerB)?.send(endMsg);
+  }
+
   onClose(conn: Party.Connection) {
+    for (const match of this.pvpMatches.values()) {
+      if (match.status === "pending" && match.playerA === conn.id) {
+        match.status = "ended";
+        this.room.getConnection(match.playerB)?.send(JSON.stringify({ type: "pvp-cancelled", matchId: match.id }));
+      } else if (match.status === "active" && (match.playerA === conn.id || match.playerB === conn.id)) {
+        this._endPvpByForfeit(match, conn.id);
+      }
+    }
     const player = this.players.get(conn.id);
     this.players.delete(conn.id);
     this.room.broadcast(JSON.stringify({ type: "leave", id: conn.id }));
