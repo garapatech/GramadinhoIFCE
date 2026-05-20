@@ -89,6 +89,31 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }) {
     );
   }
 
+  function sendPvpChallenge(to) {
+    if (socket.readyState !== 1 || !to) return;
+    socket.send(JSON.stringify({ type: "pvp-challenge", to }));
+  }
+
+  function sendPvpRespond(matchId, accepted) {
+    if (socket.readyState !== 1 || !matchId) return;
+    socket.send(JSON.stringify({ type: "pvp-respond", matchId, accepted }));
+  }
+
+  function sendPvpThrow(matchId, dx, dz, x, z) {
+    if (socket.readyState !== 1 || !matchId) return;
+    socket.send(JSON.stringify({ type: "pvp-throw", matchId, dx, dz, x, z }));
+  }
+
+  function sendPvpHit(matchId, victim) {
+    if (socket.readyState !== 1 || !matchId || !victim) return;
+    socket.send(JSON.stringify({ type: "pvp-hit", matchId, victim }));
+  }
+
+  function sendPvpQuit(matchId) {
+    if (socket.readyState !== 1 || !matchId) return;
+    socket.send(JSON.stringify({ type: "pvp-quit", matchId }));
+  }
+
   function sendVoiceSignal(target, signal) {
     if (socket.readyState !== 1 || !target || !signal) return;
     socket.send(
@@ -113,6 +138,11 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }) {
     sendChat,
     sendEmote,
     sendReaction,
+    sendPvpChallenge,
+    sendPvpRespond,
+    sendPvpThrow,
+    sendPvpHit,
+    sendPvpQuit,
     sendVoiceReady,
     sendVoiceSignal,
     close,

@@ -46,6 +46,13 @@ export default function GameView() {
   const [avatar, setAvatar] = useState(null);
   const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
   const [mediaFocused, setMediaFocused] = useState(false);
+  const [pvpState, setPvpState] = useState(null);
+  // pvpState shape:
+  // null | { phase: 'incoming'|'countdown'|'playing'|'ended',
+  //          matchId, opponentId, opponentNick,
+  //          myHits, opponentHits, side,
+  //          winner, loser, winnerNick, forfeit }
+  const pvpStateRef = useRef(null);
   const [mobileMode, setMobileMode] = useState(false);
   const [portraitLocked, setPortraitLocked] = useState(false);
   const [orientationMessage, setOrientationMessage] = useState("");
@@ -208,6 +215,10 @@ export default function GameView() {
       return found && changed ? next : prev;
     });
   }
+
+  useEffect(() => {
+    pvpStateRef.current = pvpState;
+  }, [pvpState]);
 
   useEffect(() => {
     chatFocusedRef.current = chatFocused;
@@ -389,6 +400,92 @@ export default function GameView() {
                 event.id === localIdRef.current ? "__local__" : event.id;
               game.pushChatBubble(target, event.text);
             }
+          } else if (event.type === "pvp-challenge") {
+            setPvpState({
+              phase: "incoming",
+              matchId: event.matchId,
+              opponentId: event.from,
+              opponentNick: event.fromNick,
+              myHits: 0,
+              opponentHits: 0,
+              side: null,
+              winner: null,
+              loser: null,
+              winnerNick: null,
+              forfeit: false,
+            });
+          } else if (event.type === "pvp-start") {
+            const myId = localIdRef.current;
+            const side = event.playerA === myId ? "A" : "B";
+            const opponentId = side === "A" ? event.playerB : event.playerA;
+            const opponentNick = side === "A" ? event.nickB : event.nickA;
+            const newMatch = {
+              phase: "countdown",
+              matchId: event.matchId,
+              opponentId,
+              opponentNick,
+              myHits: 0,
+              opponentHits: 0,
+              side,
+              winner: null,
+              loser: null,
+              winnerNick: null,
+              forfeit: false,
+            };
+            setPvpState(newMatch);
+            pvpStateRef.current = newMatch;
+            if (game) {
+              game.pvpSetMatch({ matchId: event.matchId, opponentId, side });
+              game.pvpTeleportToArena(side);
+            }
+            // countdown 3 → 2 → 1 → GO
+            let count = 3;
+            const tick = setInterval(() => {
+              count -= 1;
+              if (count <= 0) {
+                clearInterval(tick);
+                setPvpState((prev) => prev ? { ...prev, phase: "playing" } : prev);
+              } else {
+                setPvpState((prev) => prev ? { ...prev, countdownVal: count } : prev);
+              }
+            }, 1000);
+            setPvpState((prev) => prev ? { ...prev, countdownVal: 3 } : prev);
+          } else if (event.type === "pvp-declined") {
+            setPvpState(null);
+            if (game) game.pvpSetMatch(null);
+          } else if (event.type === "pvp-cancelled") {
+            setPvpState(null);
+            if (game) game.pvpSetMatch(null);
+          } else if (event.type === "pvp-throw") {
+            if (game) game.pvpShowThrow(event.matchId, event.from, event.x, event.z, event.dx, event.dz);
+          } else if (event.type === "pvp-hit") {
+            const myId = localIdRef.current;
+            const cur = pvpStateRef.current;
+            if (!cur || cur.matchId !== event.matchId) return;
+            const isAMe = cur.side === "A" ? myId : cur.opponentId;
+            const myHits = event.victim === myId ? (cur.myHits + 1) : cur.myHits;
+            const opponentHits = event.victim !== myId ? (cur.opponentHits + 1) : cur.opponentHits;
+            if (event.victim === myId && game) game.pvpShowHit("__local__");
+            setPvpState((prev) => prev ? { ...prev, myHits, opponentHits } : prev);
+          } else if (event.type === "pvp-end") {
+            const myId = localIdRef.current;
+            if (game) {
+              game.pvpSetMatch(null);
+              game.pvpReturnFromArena();
+            }
+            setPvpState({
+              phase: "ended",
+              matchId: event.matchId,
+              opponentId: null,
+              opponentNick: event.loser === myId ? event.winnerNick : event.loserNick,
+              myHits: 0,
+              opponentHits: 0,
+              side: null,
+              winner: event.winner,
+              loser: event.loser,
+              winnerNick: event.winnerNick,
+              forfeit: event.forfeit === true,
+            });
           } else if (event.type === "reaction") {
             if (!event.targetId) return;
             if (event.targetKey) {
@@ -437,6 +534,12 @@ export default function GameView() {
         },
         onMediaBoothInteract: () => {
           setMediaPanelOpen(true);
+        },
+        onPvpThrow: (matchId, dx, dz, x, z) => {
+          multiplayer.sendPvpThrow(matchId, dx, dz, x, z);
+        },
+        onPvpHit: (matchId, victimId) => {
+          multiplayer.sendPvpHit(matchId, victimId);
         },
       });
       game.setNpcAuthority?.(
@@ -551,6 +654,38 @@ export default function GameView() {
     }
   }
 
+  function handlePvpChallenge(targetId) {
+    multiplayerRef.current?.sendPvpChallenge?.(targetId);
+  }
+
+  function handlePvpAccept() {
+    const cur = pvpStateRef.current;
+    if (!cur || cur.phase !== "incoming") return;
+    multiplayerRef.current?.sendPvpRespond?.(cur.matchId, true);
+  }
+
+  function handlePvpDecline() {
+    const cur = pvpStateRef.current;
+    if (!cur || cur.phase !== "incoming") return;
+    multiplayerRef.current?.sendPvpRespond?.(cur.matchId, false);
+    setPvpState(null);
+  }
+
+  function handlePvpQuit() {
+    const cur = pvpStateRef.current;
+    if (!cur || cur.phase === "ended") return;
+    multiplayerRef.current?.sendPvpQuit?.(cur.matchId);
+    if (gameApiRef.current) {
+      gameApiRef.current.pvpSetMatch(null);
+      gameApiRef.current.pvpReturnFromArena();
+    }
+    setPvpState(null);
+  }
+
+  function handlePvpDismiss() {
+    setPvpState(null);
+  }
+
   function handleStartVoice() {
     voiceRef.current?.start?.();
   }
@@ -591,6 +726,16 @@ export default function GameView() {
                   <span className={`players-voice${player.voiceEnabled ? " on" : ""}`}>
                     {player.voiceEnabled ? (player.voiceMuted ? "mutado" : "voz") : "sem voz"}
                   </span>
+                  {!player.isYou && !pvpState && (
+                    <button
+                      type="button"
+                      className="players-pvp-btn"
+                      onClick={() => handlePvpChallenge(player.id)}
+                      title="Desafiar para queimado"
+                    >
+                      🏐
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -735,10 +880,87 @@ export default function GameView() {
               >
                 Câmera
               </button>
+              {pvpState?.phase === "playing" && (
+                <button
+                  type="button"
+                  className="mobile-action mobile-action-primary"
+                  onPointerDown={(event) => { event.preventDefault(); gameApiRef.current?.queueMobilePvpThrow?.(); }}
+                >
+                  🏐 Lançar
+                </button>
+              )}
             </div>
           </div>
         )}
       </div>
+
+      {/* PvP: desafio recebido */}
+      {pvpState?.phase === "incoming" && (
+        <div className="pvp-overlay pvp-challenge-overlay" role="dialog" aria-label="Desafio de queimado">
+          <div className="pvp-card">
+            <span className="pvp-card-icon">🏐</span>
+            <strong className="pvp-card-title">Desafio de Queimado!</strong>
+            <span className="pvp-card-sub">{pvpState.opponentNick} te desafiou para uma partida</span>
+            <div className="pvp-card-actions">
+              <button type="button" className="pvp-btn pvp-btn-accept" onClick={handlePvpAccept}>Aceitar</button>
+              <button type="button" className="pvp-btn pvp-btn-decline" onClick={handlePvpDecline}>Recusar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PvP: contagem regressiva */}
+      {pvpState?.phase === "countdown" && (
+        <div className="pvp-overlay pvp-countdown-overlay">
+          <div className="pvp-countdown-card">
+            <span className="pvp-countdown-vs">{nick} <em>vs</em> {pvpState.opponentNick}</span>
+            <span className="pvp-countdown-num">{pvpState.countdownVal ?? "3"}</span>
+            <span className="pvp-countdown-hint">Prepare-se! Pressione Q para lançar a bola</span>
+          </div>
+        </div>
+      )}
+
+      {/* PvP: HUD durante a partida */}
+      {pvpState?.phase === "playing" && (
+        <div className="pvp-hud">
+          <div className="pvp-hud-side pvp-hud-mine">
+            <span className="pvp-hud-name">{nick}</span>
+            <span className="pvp-hud-hits">
+              {Array.from({ length: 3 }, (_, i) => (
+                <span key={i} className={`pvp-hit-dot${i < pvpState.myHits ? " burned" : ""}`}>●</span>
+              ))}
+            </span>
+          </div>
+          <div className="pvp-hud-center">🏐</div>
+          <div className="pvp-hud-side pvp-hud-opponent">
+            <span className="pvp-hud-name">{pvpState.opponentNick}</span>
+            <span className="pvp-hud-hits">
+              {Array.from({ length: 3 }, (_, i) => (
+                <span key={i} className={`pvp-hit-dot${i < pvpState.opponentHits ? " burned" : ""}`}>●</span>
+              ))}
+            </span>
+          </div>
+          <button type="button" className="pvp-quit-btn" onClick={handlePvpQuit} title="Desistir">✕</button>
+        </div>
+      )}
+
+      {/* PvP: fim de partida */}
+      {pvpState?.phase === "ended" && (
+        <div className="pvp-overlay pvp-end-overlay" role="dialog" aria-label="Resultado da partida">
+          <div className="pvp-card">
+            <span className="pvp-card-icon">{pvpState.winner === localIdRef.current ? "🏆" : "💀"}</span>
+            <strong className="pvp-card-title">
+              {pvpState.winner === localIdRef.current ? "Você venceu!" : "Você perdeu!"}
+            </strong>
+            <span className="pvp-card-sub">
+              {pvpState.forfeit
+                ? (pvpState.winner === localIdRef.current ? `${pvpState.opponentNick} desistiu` : "Você desistiu")
+                : `${pvpState.winnerNick} ganhou a partida`}
+            </span>
+            <button type="button" className="pvp-btn pvp-btn-accept" onClick={handlePvpDismiss}>Fechar</button>
+          </div>
+        </div>
+      )}
 
       {mobileMode && portraitLocked && (
         <div className="mobile-orientation-gate" role="dialog" aria-label="Tela horizontal">
