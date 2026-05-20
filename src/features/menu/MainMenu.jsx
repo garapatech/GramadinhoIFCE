@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import AvatarCustomizer from "./AvatarCustomizer";
-import { getDefaultAvatar, readStoredAvatar, writeStoredAvatar } from "../lib/avatarConfig";
+import AvatarCustomizer from "@/features/avatar/AvatarCustomizer";
+import { getDefaultAvatar, readStoredAvatar, writeStoredAvatar } from "@/features/avatar/avatarConfig";
 
 const STORAGE_KEY = "gramadinho.nick";
 

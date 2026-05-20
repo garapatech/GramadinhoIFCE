@@ -1,5 +1,5 @@
 import PartySocket from "partysocket";
-import { normalizeAvatar } from "./avatarConfig";
+import { normalizeAvatar } from "@/features/avatar/avatarConfig";
 
 const ROOM = "gramadinho-main";
 

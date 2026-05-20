@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Chat from "./Chat";
-import MediaPlayerPanel from "./MediaPlayerPanel";
-import VoiceChat from "./VoiceChat";
-import { readStoredAvatar } from "../lib/avatarConfig";
-import { bootGame } from "../lib/game";
-import { connectMultiplayer } from "../lib/multiplayer";
-import { createVoiceChat, getInitialVoiceState } from "../lib/voice";
+import Chat from "@/features/chat/Chat";
+import MediaPlayerPanel from "@/features/media/MediaPlayerPanel";
+import VoiceChat from "@/features/multiplayer/VoiceChat";
+import { readStoredAvatar } from "@/features/avatar/avatarConfig";
+import { bootGame } from "@/features/game/engine";
+import { connectMultiplayer } from "@/features/multiplayer/client";
+import { createVoiceChat, getInitialVoiceState } from "@/features/multiplayer/voice";
 
 const ACTIVITY_LABEL = {
   idle: "parado",

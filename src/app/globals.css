@@ -515,6 +515,71 @@ button {
   height: 100% !important;
 }
 
+.dev-tools-panel {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 12;
+  width: min(390px, calc(100vw - 28px));
+  padding: 12px 14px;
+  pointer-events: none;
+  user-select: none;
+  color: #eaffd8;
+  background:
+    linear-gradient(180deg, rgba(13, 24, 18, 0.93), rgba(19, 42, 28, 0.9)),
+    radial-gradient(circle at top left, rgba(98, 255, 159, 0.22), transparent 48%);
+  border: 2px solid rgba(98, 255, 159, 0.78);
+  border-radius: 14px;
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.32),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  font: 700 12px/1.35 "Courier New", monospace;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.dev-tools-panel[hidden] {
+  display: none;
+}
+
+.dev-tools-title {
+  margin-bottom: 8px;
+  color: #62ff9f;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dev-tools-grid {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 4px 10px;
+}
+
+.dev-tools-grid span {
+  color: rgba(234, 255, 216, 0.62);
+  font-weight: 700;
+}
+
+.dev-tools-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dev-tools-help,
+.dev-tools-copy {
+  margin-top: 9px;
+  color: rgba(234, 255, 216, 0.78);
+  font-weight: 700;
+}
+
+.dev-tools-copy {
+  color: #f6c96d;
+}
+
 .hud {
   position: absolute;
   top: 14px;

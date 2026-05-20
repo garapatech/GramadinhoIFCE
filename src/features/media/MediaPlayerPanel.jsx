@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { resolveMediaEmbed } from "../lib/mediaEmbeds";
+import { resolveMediaEmbed } from "@/features/media/mediaEmbeds";
 
 const STORAGE_KEY = "gramadinho.media.url";
 

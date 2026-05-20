@@ -1,4 +1,4 @@
-import MainMenu from "../components/MainMenu";
+import MainMenu from "@/features/menu/MainMenu";
 
 export default function HomePage() {
   return <MainMenu />;

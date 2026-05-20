@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import GameView from "../../components/GameView";
+import GameView from "@/features/game/GameView";
 
 export const dynamic = "force-dynamic";
 

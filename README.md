@@ -74,15 +74,18 @@ Depois disso, qualquer push para `main` faz redeploy automático.
 ## Estrutura
 
 ```
-app/                 # Páginas Next (menu + jogo)
-components/          # MainMenu, GameView, Chat
-lib/
-  game.js            # bootGame(): toda a lógica Three.js
-  multiplayer.js     # wrapper do PartySocket
-  voice.js           # WebRTC do chat de voz
-party/
-  index.ts           # servidor PartyKit (estado + chat + sinalizacao WebRTC)
-partykit.json        # config do PartyKit
+src/
+  app/                 # Rotas Next.js App Router (menu + jogo)
+  features/
+    avatar/            # Configuração e personalização do personagem
+    chat/              # Interface do chat
+    game/              # GameView e engine Three.js
+    media/             # Player de mídia do campus
+    menu/              # Tela inicial
+    multiplayer/       # PartySocket e voz WebRTC
+  party/
+    index.ts           # Servidor PartyKit (estado + chat + sinalizacao WebRTC)
+partykit.json          # Config do PartyKit
 ```
 
 O audio usa WebRTC entre navegadores. Em producao, `localhost` e HTTPS funcionam para solicitar microfone; redes mais restritas podem exigir servidores TURN configurados em `NEXT_PUBLIC_RTC_ICE_SERVERS`.
