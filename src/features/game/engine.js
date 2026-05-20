@@ -3262,6 +3262,8 @@ function createBike(x, z, rotation = 0) {
     syncId: `bike:${sharedBikeCount++}`,
     wheelSpin: 0,
     pedalPhase: 0,
+    wheelieAmount: 0,
+    wheelieTimer: 0,
     facingYaw: rotation,
     targetX: x,
     targetZ: z,
@@ -3340,9 +3342,13 @@ function createBike(x, z, rotation = 0) {
     player.position.set(spot.x, 0, spot.z);
     bike.position.set(spot.x - 0.38, 0, spot.z - 0.12);
     bike.rotation.y = player.rotation.y - 0.42;
+    bike.rotation.x = 0;
     bikeState.facingYaw = bike.rotation.y;
+    bikeState.wheelieAmount = 0;
+    bikeState.wheelieTimer = 0;
     bikeState.mounted = false;
     playerState.ridingBike = null;
+    player.rotation.x = 0;
     playerVelocity.set(0, 0);
     emitBikeState(false);
     speak("Voce desceu da bicicleta.", "Bicicleta");
@@ -3376,14 +3382,16 @@ function createBike(x, z, rotation = 0) {
     },
     update(dt) {
       if (bikeState.mounted) {
-        bike.position.set(player.position.x, 0, player.position.z);
+        const wheelieAngle = bikeState.wheelieAmount * 0.52;
+        const wheelieLift = Math.sin(wheelieAngle) * 0.86;
+        bike.position.set(player.position.x, wheelieLift, player.position.z);
+        bike.rotation.x = -wheelieAngle;
         bike.rotation.y = player.rotation.y;
         bikeState.facingYaw = bike.rotation.y;
         wheelA.rotation.x = bikeState.wheelSpin;
         wheelB.rotation.x = bikeState.wheelSpin;
         crank.rotation.x = bikeState.pedalPhase;
         handle.rotation.y = THREE.MathUtils.clamp(playerVelocity.length() * 0.015, -0.08, 0.08);
-        bike.position.y = 0;
         spinImpulse = 0;
         return;
       }
@@ -3399,6 +3407,7 @@ function createBike(x, z, rotation = 0) {
         wheelB.rotation.x = bikeState.wheelSpin;
         crank.rotation.x = bikeState.pedalPhase;
         handle.rotation.y = THREE.MathUtils.clamp(bikeState.remoteSpeed * 0.01, -0.08, 0.08);
+        bike.rotation.x = THREE.MathUtils.lerp(bike.rotation.x, 0, Math.min(1, dt * 8));
         bike.position.y = 0;
         spinImpulse = 0;
         return;
@@ -3410,6 +3419,7 @@ function createBike(x, z, rotation = 0) {
         bike.rotation.y = lerpAngle(bike.rotation.y, bikeState.targetRy, lerp);
       }
       spinImpulse *= Math.max(0, 1 - dt * 3.4);
+      bike.rotation.x = THREE.MathUtils.lerp(bike.rotation.x, 0, Math.min(1, dt * 8));
       bike.rotation.y += spinImpulse * dt * 6;
       bike.position.y = Math.sin(clock.elapsedTime * 2) * 0.02;
       wheelA.rotation.x += spinImpulse * dt * 12;
@@ -6177,14 +6187,14 @@ function enterSitState(target, options = {}) {
   playerState.sitEndSpeaker = options.endSpeaker ?? "Banco";
 }
 
-function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0) {
+function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0, wheelie = 0) {
   const lean = steering * 0.16;
-  refs.leftShoulder.rotation.x = -0.72;
-  refs.rightShoulder.rotation.x = -0.72;
+  refs.leftShoulder.rotation.x = -0.72 + wheelie * 0.24;
+  refs.rightShoulder.rotation.x = -0.72 + wheelie * 0.24;
   refs.leftShoulder.rotation.z = 0.08 + lean;
   refs.rightShoulder.rotation.z = -0.08 + lean;
-  refs.leftElbow.rotation.x = 0.58 - steering * 0.08;
-  refs.rightElbow.rotation.x = 0.58 + steering * 0.08;
+  refs.leftElbow.rotation.x = 0.58 - steering * 0.08 + wheelie * 0.16;
+  refs.rightElbow.rotation.x = 0.58 + steering * 0.08 + wheelie * 0.16;
   refs.leftElbow.rotation.z = 0.05;
   refs.rightElbow.rotation.z = -0.05;
 
@@ -6194,9 +6204,9 @@ function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0) {
   refs.rightHip.rotation.x = -1.1 + oppositePedal * 0.52;
   refs.leftKnee.rotation.x = 1.42 + Math.max(0, -pedal) * 0.68;
   refs.rightKnee.rotation.x = 1.42 + Math.max(0, -oppositePedal) * 0.68;
-  refs.torso.rotation.x = 0.14;
+  refs.torso.rotation.x = 0.14 - wheelie * 0.22;
   refs.torso.rotation.y = lean;
-  refs.head.rotation.x = -0.06;
+  refs.head.rotation.x = -0.06 + wheelie * 0.12;
   refs.head.rotation.y = steering * 0.12;
 }
 
@@ -6229,6 +6239,7 @@ function updatePlayer(dt, time) {
   const mountedBike = playerState.ridingBike;
   if (mountedBike) {
     if (queuedEmoteKind) queuedEmoteKind = null;
+    const wheelieQueued = jumpQueued || keys.has("Space");
     jumpQueued = false;
     playerState.jumping = false;
     playerState.jumpVel = 0;
@@ -6238,10 +6249,17 @@ function updatePlayer(dt, time) {
     const input = getInputVector();
     const moving = input.lengthSq() > 0;
     const isBoosting = shiftHeld && moving;
+    const speedBeforeMove = playerVelocity.length();
+    const wheelieRequested = wheelieQueued && speedBeforeMove > 3.8;
+    if (wheelieRequested) {
+      mountedBike.wheelieTimer = Math.max(mountedBike.wheelieTimer, keys.has("Space") ? 0.18 : 0.9);
+    }
     updatePlayerActivity({
       kind: "riding",
-      label: "pedalando",
-      detail: isBoosting ? "acelerando na bicicleta" : moving ? "rodando pelo campus" : "equilibrando a bicicleta",
+      label: mountedBike.wheelieAmount > 0.22 || wheelieRequested ? "dando grau" : "pedalando",
+      detail: mountedBike.wheelieAmount > 0.22 || wheelieRequested
+        ? "levantando a roda da frente"
+        : isBoosting ? "acelerando na bicicleta" : moving ? "rodando pelo campus" : "equilibrando a bicicleta",
     });
 
     const targetMaxSpeed = moving ? (isBoosting ? 18.5 : 12.8) : 0;
@@ -6267,6 +6285,17 @@ function updatePlayer(dt, time) {
     if (targetMaxSpeed > 0 && speed > targetMaxSpeed) {
       playerVelocity.setLength(targetMaxSpeed);
     }
+    mountedBike.wheelieTimer = Math.max(0, mountedBike.wheelieTimer - dt);
+    const wheelieSpeedFactor = THREE.MathUtils.clamp((speed - 3.2) / 7.5, 0, 1);
+    const targetWheelie = mountedBike.wheelieTimer > 0 ? wheelieSpeedFactor : 0;
+    mountedBike.wheelieAmount = THREE.MathUtils.lerp(
+      mountedBike.wheelieAmount,
+      targetWheelie,
+      Math.min(1, dt * (targetWheelie > 0 ? 7.5 : 5.2))
+    );
+    if (mountedBike.wheelieAmount > 0.15) {
+      playerVelocity.multiplyScalar(1 - mountedBike.wheelieAmount * 0.24 * dt);
+    }
 
     const collisionRadius = 0.82;
     player.position.x += playerVelocity.x * dt;
@@ -6282,7 +6311,10 @@ function updatePlayer(dt, time) {
 
     mountedBike.wheelSpin += speed * dt / Math.max(0.2, mountedBike.wheelRadius);
     mountedBike.pedalPhase += speed * dt * 0.95;
-    mountedBike.group.position.set(player.position.x, 0, player.position.z);
+    const wheelieAngle = mountedBike.wheelieAmount * 0.52;
+    const wheelieLift = Math.sin(wheelieAngle) * 0.86;
+    mountedBike.group.position.set(player.position.x, wheelieLift, player.position.z);
+    mountedBike.group.rotation.x = -wheelieAngle;
     mountedBike.group.rotation.y = player.rotation.y;
     for (const wheel of mountedBike.wheels) {
       wheel.rotation.x = mountedBike.wheelSpin;
@@ -6290,11 +6322,13 @@ function updatePlayer(dt, time) {
     mountedBike.crank.rotation.x = mountedBike.pedalPhase;
 
     const steering = THREE.MathUtils.clamp(playerVelocity.length() > 0.1 ? playerVelocity.x * 0.05 : 0, -1, 1);
-    applyBikeRidePose(playerRig.refs, mountedBike.pedalPhase, Math.min(speed / 10, 1), steering);
-    player.position.y = 0.18 + Math.abs(Math.sin(mountedBike.pedalPhase)) * 0.02 * Math.min(speed / 9, 1);
+    applyBikeRidePose(playerRig.refs, mountedBike.pedalPhase, Math.min(speed / 10, 1), steering, mountedBike.wheelieAmount);
+    player.rotation.x = -mountedBike.wheelieAmount * 0.28;
+    player.position.y = 0.18 + wheelieLift + Math.abs(Math.sin(mountedBike.pedalPhase)) * 0.02 * Math.min(speed / 9, 1);
     playerFootstepDistance = 0;
     return;
   }
+  player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, 0, Math.min(1, dt * 9));
 
   if (queuedEmoteKind) {
     const queuedDuration =
@@ -7107,7 +7141,7 @@ function updateInteractionUI() {
   const target = getNearestTarget();
   if (!target) {
     if (playerState.ridingBike) {
-      setStatus("Na bicicleta • E longe de objetos para descer • Shift acelera.");
+      setStatus("Na bicicleta • Space/Pular da grau • Shift acelera • E desce.");
       clearSpeech();
       return;
     }
@@ -7525,8 +7559,11 @@ function tick() {
       onNpcState(serializeNpcStates());
     }
     if (playerState.ridingBike?.mounted) {
-      playerState.ridingBike.position.set(player.position.x, 0, player.position.z);
-      playerState.ridingBike.group.rotation.y = player.rotation.y;
+      const mountedBike = playerState.ridingBike;
+      const wheelieAngle = mountedBike.wheelieAmount * 0.52;
+      mountedBike.position.set(player.position.x, Math.sin(wheelieAngle) * 0.86, player.position.z);
+      mountedBike.group.rotation.x = -wheelieAngle;
+      mountedBike.group.rotation.y = player.rotation.y;
       playerState.ridingBike.emitState?.(true);
     }
   }
