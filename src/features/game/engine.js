@@ -881,7 +881,7 @@ function createNoticeTexture() {
     "Mutirao do gramado: sexta",
     "Sala de convivencia: bloco central",
     "Se chover, o corredor vira atalho de lenda",
-    "O onibus passa de novo em poucos minutos",
+    "A jardineira passa de novo em poucos minutos",
     "Quem chegar cedo encontra sombra e fofoca"
   ];
 
@@ -985,14 +985,14 @@ function createBusSignTexture() {
   const ctx = c.getContext("2d");
   ctx.fillStyle = "#f5efe2";
   ctx.fillRect(0, 0, c.width, c.height);
-  ctx.strokeStyle = "#214d7a";
+  ctx.strokeStyle = "#1f6f43";
   ctx.lineWidth = 6;
   ctx.strokeRect(3, 3, c.width - 6, c.height - 6);
-  ctx.fillStyle = "#214d7a";
-  ctx.font = "bold 38px Arial";
-  ctx.fillText("IFCE", 26, 61);
-  ctx.font = "18px Arial";
-  ctx.fillText("onibus campus", 118, 61);
+  ctx.fillStyle = "#1f6f43";
+  ctx.font = "bold 31px Arial";
+  ctx.fillText("JARDINEIRA", 18, 47);
+  ctx.font = "20px Arial";
+  ctx.fillText("IFCE", 101, 72);
   const texture = new THREE.CanvasTexture(c);
   texture.needsUpdate = true;
   return texture;
@@ -1032,7 +1032,7 @@ function createCampusBannerTexture() {
   ctx.font = "bold 28px Arial";
   ctx.fillText("campus gramadinho", 44, 154);
   ctx.font = "22px Arial";
-  ctx.fillText("vento, busao e conversa de corredor", 44, 190);
+  ctx.fillText("vento, jardineira e conversa de corredor", 44, 190);
 
   const texture = new THREE.CanvasTexture(c);
   texture.needsUpdate = true;
@@ -3159,97 +3159,91 @@ function createBike(x, z, rotation = 0) {
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x5a3f26, roughness: 0.85 });
   const chromeMat = new THREE.MeshStandardMaterial({ color: 0xcad4dc, roughness: 0.35, metalness: 0.6 });
   const wheelRadius = 0.42;
+  const rearZ = -0.86;
+  const frontZ = 0.86;
+  const tubeUp = new THREE.Vector3(0, 1, 0);
+
+  function addTubeBetween(from, to, radius, material) {
+    const direction = to.clone().sub(from);
+    const length = direction.length();
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 10), material);
+    tube.position.copy(from).addScaledVector(direction, 0.5);
+    tube.quaternion.setFromUnitVectors(tubeUp, direction.normalize());
+    tube.castShadow = true;
+    bike.add(tube);
+    return tube;
+  }
 
   const wheelA = new THREE.Mesh(new THREE.TorusGeometry(wheelRadius, 0.065, 12, 20), wheelColor);
   wheelA.rotation.y = Math.PI / 2;
-  wheelA.position.set(-0.86, wheelRadius, 0);
+  wheelA.position.set(0, wheelRadius, frontZ);
   wheelA.castShadow = true;
   bike.add(wheelA);
 
   const wheelB = wheelA.clone();
-  wheelB.position.x = 0.86;
+  wheelB.position.z = rearZ;
   bike.add(wheelB);
 
-  const frameBar = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.36, 10), frameColor);
-  frameBar.position.set(0, 0.86, 0);
-  frameBar.rotation.z = Math.PI / 2.45;
-  frameBar.castShadow = true;
-  bike.add(frameBar);
+  const rearHub = new THREE.Vector3(0, wheelRadius, rearZ);
+  const frontHub = new THREE.Vector3(0, wheelRadius, frontZ);
+  const crankPos = new THREE.Vector3(0, 0.52, -0.02);
+  const seatCluster = new THREE.Vector3(0, 1.06, -0.24);
+  const headCluster = new THREE.Vector3(0, 1.03, 0.58);
+  const handleAnchor = new THREE.Vector3(0, 1.16, 0.8);
 
-  const seatPost = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.55, 10), chromeMat);
-  seatPost.position.set(0.1, 0.96, 0);
-  seatPost.rotation.z = -Math.PI / 11;
-  seatPost.castShadow = true;
-  bike.add(seatPost);
-
-  const downTube = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.2, 10), frameColor);
-  downTube.position.set(-0.18, 0.62, 0);
-  downTube.rotation.z = -Math.PI / 2.95;
-  downTube.castShadow = true;
-  bike.add(downTube);
-
-  const chainStay = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.98, 10), frameColor);
-  chainStay.position.set(0.1, 0.38, 0);
-  chainStay.rotation.z = Math.PI / 2.75;
-  chainStay.castShadow = true;
-  bike.add(chainStay);
-
-  const fork = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.82, 10), chromeMat);
-  fork.position.set(-0.66, 0.74, 0);
-  fork.rotation.z = -Math.PI / 6.5;
-  fork.castShadow = true;
-  bike.add(fork);
-
-  const handleStem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.34, 8), chromeMat);
-  handleStem.position.set(-0.56, 1.03, 0);
-  handleStem.rotation.z = -Math.PI / 7;
-  handleStem.castShadow = true;
-  bike.add(handleStem);
+  addTubeBetween(seatCluster, headCluster, 0.045, frameColor);
+  addTubeBetween(headCluster, crankPos, 0.045, frameColor);
+  addTubeBetween(crankPos, seatCluster, 0.04, frameColor);
+  addTubeBetween(rearHub, crankPos, 0.035, frameColor);
+  addTubeBetween(rearHub, seatCluster, 0.032, frameColor);
+  addTubeBetween(frontHub, headCluster, 0.035, chromeMat);
+  addTubeBetween(headCluster, handleAnchor, 0.03, chromeMat);
 
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.75, 8), chromeMat);
   handle.rotation.z = Math.PI / 2;
-  handle.position.set(-0.8, 1.16, 0);
+  handle.position.copy(handleAnchor);
   handle.castShadow = true;
   bike.add(handle);
 
-  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.08, 0.18), seatMat);
-  seat.position.set(0.22, 1.18, 0);
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.08, 0.38), seatMat);
+  seat.position.set(0, 1.18, -0.32);
   seat.castShadow = true;
   bike.add(seat);
 
-  const crank = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 12), chromeMat);
-  crank.rotation.x = Math.PI / 2;
-  crank.position.set(0.1, 0.52, 0);
-  crank.castShadow = true;
+  const crank = new THREE.Group();
+  crank.position.copy(crankPos);
   bike.add(crank);
 
+  const crankHub = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.08, 12), chromeMat);
+  crankHub.rotation.z = Math.PI / 2;
+  crankHub.castShadow = true;
+  crank.add(crankHub);
+
   const pedalArmLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.34, 8), chromeMat);
-  pedalArmLeft.position.set(0.1, 0.52, 0);
-  pedalArmLeft.rotation.z = Math.PI / 2;
-  bike.add(pedalArmLeft);
+  pedalArmLeft.position.set(-0.11, 0.17, 0);
+  crank.add(pedalArmLeft);
 
   const pedalArmRight = pedalArmLeft.clone();
-  pedalArmRight.rotation.z = 0;
-  bike.add(pedalArmRight);
+  pedalArmRight.position.set(0.11, -0.17, 0);
+  crank.add(pedalArmRight);
 
-  const pedalLeft = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.03, 0.07), frameColor);
-  pedalLeft.position.set(0.27, 0.52, 0);
-  bike.add(pedalLeft);
+  const pedalLeft = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.035, 0.08), frameColor);
+  pedalLeft.position.set(-0.16, 0.35, 0);
+  pedalLeft.castShadow = true;
+  crank.add(pedalLeft);
 
   const pedalRight = pedalLeft.clone();
-  pedalRight.position.set(0.1, 0.35, 0);
-  pedalRight.rotation.z = Math.PI / 2;
-  bike.add(pedalRight);
+  pedalRight.position.set(0.16, -0.35, 0);
+  crank.add(pedalRight);
 
   const mudguardA = new THREE.Mesh(new THREE.TorusGeometry(wheelRadius + 0.05, 0.02, 8, 18, Math.PI), frameColor);
   mudguardA.rotation.y = Math.PI / 2;
-  mudguardA.rotation.z = Math.PI / 2;
-  mudguardA.position.set(-0.86, wheelRadius + 0.08, 0);
+  mudguardA.position.set(0, wheelRadius + 0.08, frontZ);
   mudguardA.castShadow = true;
   bike.add(mudguardA);
 
   const mudguardB = mudguardA.clone();
-  mudguardB.position.x = 0.86;
+  mudguardB.position.z = rearZ;
   bike.add(mudguardB);
 
   bike.position.set(x, 0, z);
@@ -3387,7 +3381,7 @@ function createBike(x, z, rotation = 0) {
         bikeState.facingYaw = bike.rotation.y;
         wheelA.rotation.x = bikeState.wheelSpin;
         wheelB.rotation.x = bikeState.wheelSpin;
-        crank.rotation.z = bikeState.pedalPhase;
+        crank.rotation.x = bikeState.pedalPhase;
         handle.rotation.y = THREE.MathUtils.clamp(playerVelocity.length() * 0.015, -0.08, 0.08);
         bike.position.y = 0;
         spinImpulse = 0;
@@ -3403,7 +3397,7 @@ function createBike(x, z, rotation = 0) {
         bikeState.pedalPhase += bikeState.remoteSpeed * dt * 0.95;
         wheelA.rotation.x = bikeState.wheelSpin;
         wheelB.rotation.x = bikeState.wheelSpin;
-        crank.rotation.z = bikeState.pedalPhase;
+        crank.rotation.x = bikeState.pedalPhase;
         handle.rotation.y = THREE.MathUtils.clamp(bikeState.remoteSpeed * 0.01, -0.08, 0.08);
         bike.position.y = 0;
         spinImpulse = 0;
@@ -3420,7 +3414,7 @@ function createBike(x, z, rotation = 0) {
       bike.position.y = Math.sin(clock.elapsedTime * 2) * 0.02;
       wheelA.rotation.x += spinImpulse * dt * 12;
       wheelB.rotation.x += spinImpulse * dt * 12;
-      crank.rotation.z += spinImpulse * dt * 7;
+      crank.rotation.x += spinImpulse * dt * 7;
     }
   });
 }
@@ -3430,8 +3424,12 @@ function createCampusBus(routePoints) {
   const wheelRadius = 0.34;
   const busSpeed = 6.2;
   const TAU = Math.PI * 2;
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf2c94c, roughness: 0.82 });
-  const trimMat = new THREE.MeshStandardMaterial({ color: 0x214d7a, roughness: 0.7 });
+  const upperBodyMat = new THREE.MeshStandardMaterial({ color: 0xf7f4ea, roughness: 0.78 });
+  const lowerBodyMat = new THREE.MeshStandardMaterial({ color: 0x23824c, roughness: 0.84 });
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0x155b36, roughness: 0.74 });
+  const bumperMat = new THREE.MeshStandardMaterial({ color: 0x333b37, roughness: 0.9 });
+  const lightMat = new THREE.MeshStandardMaterial({ color: 0xfff2a6, emissive: 0xffdf78, emissiveIntensity: 0.22, roughness: 0.42 });
+  const tailLightMat = new THREE.MeshStandardMaterial({ color: 0xc73535, emissive: 0x8b1515, emissiveIntensity: 0.18, roughness: 0.5 });
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0x8dc4e6,
     transparent: true,
@@ -3440,46 +3438,101 @@ function createCampusBus(routePoints) {
     metalness: 0.08
   });
   const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1f1f1f, roughness: 1 });
+  const hubMat = new THREE.MeshStandardMaterial({ color: 0xe3e0d2, roughness: 0.68 });
 
-  const base = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.9, 1.95), bodyMat);
-  base.position.y = 1.45;
-  base.castShadow = true;
-  base.receiveShadow = true;
-  bus.add(base);
+  const bodyShell = new THREE.Group();
+  bus.add(bodyShell);
 
-  const lowerTrim = new THREE.Mesh(new THREE.BoxGeometry(5.0, 0.16, 1.87), trimMat);
-  lowerTrim.position.y = 0.7;
+  const lowerBody = new THREE.Mesh(new THREE.BoxGeometry(5.35, 0.95, 1.98), lowerBodyMat);
+  lowerBody.position.y = 0.98;
+  lowerBody.castShadow = true;
+  lowerBody.receiveShadow = true;
+  bodyShell.add(lowerBody);
+
+  const upperBody = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.95, 1.9), upperBodyMat);
+  upperBody.position.y = 1.93;
+  upperBody.castShadow = true;
+  upperBody.receiveShadow = true;
+  bodyShell.add(upperBody);
+
+  const beltLine = new THREE.Mesh(new THREE.BoxGeometry(5.44, 0.08, 2.04), trimMat);
+  beltLine.position.y = 1.45;
+  beltLine.castShadow = true;
+  bodyShell.add(beltLine);
+
+  const lowerTrim = new THREE.Mesh(new THREE.BoxGeometry(5.12, 0.14, 1.92), trimMat);
+  lowerTrim.position.y = 0.66;
   lowerTrim.castShadow = true;
-  bus.add(lowerTrim);
+  bodyShell.add(lowerTrim);
 
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(4.9, 0.22, 1.82), bodyMat);
-  roof.position.y = 2.48;
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(4.98, 0.22, 1.86), upperBodyMat);
+  roof.position.y = 2.5;
   roof.castShadow = true;
-  bus.add(roof);
+  bodyShell.add(roof);
 
   const windowBand = new THREE.Mesh(new THREE.BoxGeometry(4.45, 0.78, 1.56), glassMat);
-  windowBand.position.set(0.14, 1.58, 0);
-  bus.add(windowBand);
+  windowBand.position.set(0.14, 1.72, 0);
+  bodyShell.add(windowBand);
 
   const windshield = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.92, 1.5), glassMat);
-  windshield.position.set(2.42, 1.47, 0);
-  bus.add(windshield);
+  windshield.position.set(2.58, 1.68, 0);
+  bodyShell.add(windshield);
 
   const rearWindow = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.92, 1.5), glassMat);
-  rearWindow.position.set(-2.42, 1.47, 0);
-  bus.add(rearWindow);
+  rearWindow.position.set(-2.56, 1.68, 0);
+  bodyShell.add(rearWindow);
 
   const sign = new THREE.Mesh(
-    new THREE.BoxGeometry(1.95, 0.58, 0.06),
+    new THREE.BoxGeometry(2.1, 0.5, 0.06),
     new THREE.MeshStandardMaterial({ map: busSignTexture, roughness: 0.8 })
   );
-  sign.position.set(1.55, 2.05, 0.99);
+  sign.position.set(1.12, 2.13, 1.03);
   sign.castShadow = true;
-  bus.add(sign);
+  bodyShell.add(sign);
 
-  const accent = new THREE.Mesh(new THREE.BoxGeometry(5.05, 0.12, 0.14), trimMat);
-  accent.position.set(0, 2.0, 1.02);
-  bus.add(accent);
+  const frontSign = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.42, 1.12),
+    new THREE.MeshStandardMaterial({ map: busSignTexture, roughness: 0.8 })
+  );
+  frontSign.position.set(2.72, 2.05, 0);
+  frontSign.castShadow = true;
+  bodyShell.add(frontSign);
+
+  const sideAccent = new THREE.Mesh(new THREE.BoxGeometry(5.18, 0.1, 0.12), trimMat);
+  sideAccent.position.set(0, 2.02, 1.03);
+  bodyShell.add(sideAccent);
+
+  const doorSeamA = new THREE.Mesh(new THREE.BoxGeometry(0.045, 1.55, 0.05), trimMat);
+  doorSeamA.position.set(1.52, 1.2, 1.06);
+  bodyShell.add(doorSeamA);
+
+  const doorSeamB = new THREE.Mesh(new THREE.BoxGeometry(0.045, 1.55, 0.05), trimMat);
+  doorSeamB.position.set(0.9, 1.2, 1.06);
+  bodyShell.add(doorSeamB);
+
+  const frontBumper = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 1.72), bumperMat);
+  frontBumper.position.set(2.76, 0.55, 0);
+  frontBumper.castShadow = true;
+  bodyShell.add(frontBumper);
+
+  const rearBumper = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.2, 1.72), bumperMat);
+  rearBumper.position.set(-2.76, 0.55, 0);
+  rearBumper.castShadow = true;
+  bodyShell.add(rearBumper);
+
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.28, 0.62), bumperMat);
+  grille.position.set(2.79, 0.88, 0);
+  bodyShell.add(grille);
+
+  for (const z of [-0.58, 0.58]) {
+    const headlight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.26), lightMat);
+    headlight.position.set(2.81, 0.95, z);
+    bodyShell.add(headlight);
+
+    const tailLight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.2, 0.22), tailLightMat);
+    tailLight.position.set(-2.81, 0.92, z);
+    bodyShell.add(tailLight);
+  }
 
   const wheelPositions = [
     [-1.65, 0.42, 0.92],
@@ -3489,9 +3542,18 @@ function createCampusBus(routePoints) {
   ];
   const wheels = [];
   for (const [x, y, z] of wheelPositions) {
-    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.1, 10, 16), wheelMat);
-    wheel.rotation.y = Math.PI / 2;
+    const wheel = new THREE.Group();
     wheel.position.set(x, y, z);
+
+    const tire = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.1, 10, 18), wheelMat);
+    tire.castShadow = true;
+    wheel.add(tire);
+
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.12, 14), hubMat);
+    hub.rotation.x = Math.PI / 2;
+    hub.castShadow = true;
+    wheel.add(hub);
+
     wheel.castShadow = true;
     bus.add(wheel);
     wheels.push(wheel);
@@ -3522,7 +3584,8 @@ function createCampusBus(routePoints) {
     0
   );
   const seatAnchor = new THREE.Vector3();
-  bus.rotation.y = Math.PI / 2;
+  const initialPathYaw = routeSegments[0]?.yaw ?? Math.PI / 2;
+  bus.rotation.y = routeYawToBusYaw(initialPathYaw);
   const state = {
     group: bus,
     route,
@@ -3531,9 +3594,10 @@ function createCampusBus(routePoints) {
     segmentProgress: 0,
     dwellTimer: route[0]?.dwell ?? 1.2,
     speed: busSpeed,
+    currentSpeed: 0,
     wheelSpin: 0,
     seatAnchor,
-    facingYaw: Math.PI / 2,
+    facingYaw: bus.rotation.y,
     position: bus.position,
     rideBeacon: 0,
     crowdCount: 0,
@@ -3543,6 +3607,19 @@ function createCampusBus(routePoints) {
     routeReady: false,
   };
 
+  function clamp01(value) {
+    return THREE.MathUtils.clamp(value, 0, 1);
+  }
+
+  function easeVehicleProgress(value) {
+    const t = clamp01(value);
+    return t * t * (3 - 2 * t);
+  }
+
+  function routeYawToBusYaw(routeYaw) {
+    return routeYaw - Math.PI / 2;
+  }
+
   function updateSeatAnchor() {
     seatAnchor.set(0.18, 1.18, 0.04).applyEuler(new THREE.Euler(0, bus.rotation.y, 0)).add(bus.position);
   }
@@ -3551,10 +3628,12 @@ function createCampusBus(routePoints) {
     if (!cycleDuration) {
       return {
         position: route[0]?.position || new THREE.Vector3(),
-        yaw: Math.PI / 2,
+        pathYaw: Math.PI / 2,
+        visualYaw: routeYawToBusYaw(Math.PI / 2),
         routeIndex: 0,
         dwellTimer: 0,
         segmentProgress: 0,
+        currentSpeed: 0,
         wheelSpin: 0,
       };
     }
@@ -3566,12 +3645,19 @@ function createCampusBus(routePoints) {
     for (const segment of routeSegments) {
       const dwellDuration = route[segment.index].dwell;
       if (normalized < cursor + dwellDuration) {
+        const previousSegment = routeSegments[(segment.index - 1 + routeSegments.length) % routeSegments.length];
+        const dwellProgress = dwellDuration <= 0.0001
+          ? 1
+          : (dwellDuration - (cursor + dwellDuration - normalized)) / dwellDuration;
+        const pathYaw = lerpAngle(previousSegment?.yaw ?? segment.yaw, segment.yaw, easeVehicleProgress(dwellProgress));
         return {
           position: segment.start,
-          yaw: segment.yaw,
+          pathYaw,
+          visualYaw: routeYawToBusYaw(pathYaw),
           routeIndex: segment.index,
           dwellTimer: cursor + dwellDuration - normalized,
           segmentProgress: 0,
+          currentSpeed: 0,
           wheelSpin: (traveledDistance / wheelRadius) % TAU,
         };
       }
@@ -3579,18 +3665,22 @@ function createCampusBus(routePoints) {
 
       const travelEnd = cursor + segment.travelDuration;
       if (normalized < travelEnd) {
-        const progress = segment.travelDuration <= 0.0001 ? 1 : (normalized - cursor) / segment.travelDuration;
+        const rawProgress = segment.travelDuration <= 0.0001 ? 1 : (normalized - cursor) / segment.travelDuration;
+        const progress = easeVehicleProgress(rawProgress);
         const segmentProgress = segment.length * progress;
+        const speedFactor = 6 * rawProgress * (1 - rawProgress);
         return {
           position: new THREE.Vector3(
             segment.start.x + segment.dx * progress,
             0,
             segment.start.z + segment.dz * progress
           ),
-          yaw: segment.yaw,
+          pathYaw: segment.yaw,
+          visualYaw: routeYawToBusYaw(segment.yaw),
           routeIndex: segment.index,
           dwellTimer: 0,
           segmentProgress,
+          currentSpeed: busSpeed * speedFactor,
           wheelSpin: ((traveledDistance + segmentProgress) / wheelRadius) % TAU,
         };
       }
@@ -3601,26 +3691,48 @@ function createCampusBus(routePoints) {
     const fallback = routeSegments[0];
     return {
       position: fallback?.start || new THREE.Vector3(),
-      yaw: fallback?.yaw ?? Math.PI / 2,
+      pathYaw: fallback?.yaw ?? Math.PI / 2,
+      visualYaw: routeYawToBusYaw(fallback?.yaw ?? Math.PI / 2),
       routeIndex: 0,
       dwellTimer: route[0]?.dwell ?? 0,
       segmentProgress: 0,
+      currentSpeed: 0,
       wheelSpin: 0,
     };
   }
 
-  function moveAlongRoute(time) {
+  function moveAlongRoute(dt, time) {
     const sample = sampleRouteAtTime(time);
+    const yawDelta = ((((sample.visualYaw - bus.rotation.y) % TAU) + Math.PI * 3) % TAU) - Math.PI;
+    const turnLerp = Math.min(1, dt * (sample.currentSpeed > 0.2 ? 5.4 : 3.2));
+    const acceleration = dt > 0 ? (sample.currentSpeed - state.currentSpeed) / dt : 0;
+    const movingFactor = THREE.MathUtils.clamp(sample.currentSpeed / busSpeed, 0, 1.4);
+
     state.routeIndex = sample.routeIndex;
     state.segmentProgress = sample.segmentProgress;
     state.dwellTimer = sample.dwellTimer;
-    state.facingYaw = sample.yaw;
     state.wheelSpin = sample.wheelSpin;
+    state.currentSpeed = sample.currentSpeed;
+
     bus.position.copy(sample.position);
-    bus.rotation.y = state.facingYaw;
-    bus.position.y = Math.sin(time * 2.1) * 0.02;
+    bus.rotation.y = lerpAngle(bus.rotation.y, sample.visualYaw, turnLerp);
+    bus.rotation.z = THREE.MathUtils.lerp(
+      bus.rotation.z,
+      THREE.MathUtils.clamp(-yawDelta * movingFactor * 0.18, -0.075, 0.075),
+      Math.min(1, dt * 5.5)
+    );
+    bus.rotation.x = THREE.MathUtils.lerp(
+      bus.rotation.x,
+      THREE.MathUtils.clamp(-acceleration * 0.012, -0.05, 0.05),
+      Math.min(1, dt * 4.6)
+    );
+    state.facingYaw = bus.rotation.y;
+    bus.position.y =
+      movingFactor * (Math.sin(time * 7.4) * 0.018 + Math.sin(time * 13.1) * 0.006) +
+      (state.dwellTimer > 0 ? Math.sin(time * 2.1) * 0.006 : 0);
+
     for (const wheel of wheels) {
-      wheel.rotation.x = state.wheelSpin;
+      wheel.rotation.z = -state.wheelSpin;
     }
     if (state.dwellTimer > 0) {
       state.rideBeacon = Math.max(state.rideBeacon, 0.2);
@@ -3653,7 +3765,7 @@ function createCampusBus(routePoints) {
 
   const busInteractable = {
     kind: "bus",
-    label: "Onibus",
+    label: "Jardineira",
     radius: 4.6,
     position: bus.position,
     root: bus,
@@ -3664,7 +3776,7 @@ function createCampusBus(routePoints) {
       state.rideBeacon = 1.2;
       if (state.crowdCount >= 3) {
         if (state.crowdComplaintCooldown <= 0) {
-          speak("Chegou tarde. Esse onibus ja lotou. Espera o proximo.", "Motorista");
+          speak("Chegou tarde. Essa jardineira ja lotou. Espera a proxima.", "Motorista");
           state.crowdComplaintCooldown = 5.5;
         }
         return;
@@ -3679,23 +3791,22 @@ function createCampusBus(routePoints) {
         },
         {
           duration: 5.8,
-          label: "onibus",
-          endMessage: "Voce desceu do onibus na parada seguinte.",
-          endSpeaker: "Onibus"
+          label: "jardineira",
+          endMessage: "Voce desceu da jardineira na parada seguinte.",
+          endSpeaker: "Jardineira"
         }
       );
-      speak("Voce embarcou no onibus do campus.", "Onibus");
+      speak("Voce embarcou na jardineira do campus.", "Jardineira");
     },
     update(dt, time) {
-      moveAlongRoute(time);
+      moveAlongRoute(dt, time);
       updateCrowdState(dt);
       busInteractable.crowdLabel = state.crowdLabel;
       busInteractable.crowdCount = state.crowdCount;
       state.rideBeacon = Math.max(0, state.rideBeacon - dt * 0.75);
-      const crowdPulse = state.crowdCount * 0.022;
-      const pulse = 1 + Math.sin(time * 2.3) * 0.02 + state.rideBeacon * 0.03 + crowdPulse;
-      base.scale.y = pulse;
-      roof.position.y = 2.46 + Math.sin(time * 3.5) * 0.015;
+      const suspensionPulse = (state.currentSpeed / busSpeed) * Math.sin(time * 8.2) * 0.006;
+      bodyShell.scale.y = 1 + suspensionPulse + state.rideBeacon * 0.01 + state.crowdCount * 0.004;
+      roof.position.y = 2.5 + Math.sin(time * 3.5) * 0.01 * (state.currentSpeed / busSpeed);
       sign.scale.setScalar(1 + state.rideBeacon * 0.05 + state.crowdCount * 0.02);
     }
   };
@@ -5836,11 +5947,41 @@ const cameraGroundBasis = {
   right: new THREE.Vector2(),
 };
 const playerWorldInput = new THREE.Vector2();
+const mobileInput = {
+  x: 0,
+  y: 0,
+  running: false,
+};
 
 function getInputVector() {
-  const x = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
-  const z = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
+  const keyX = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
+  const keyZ = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
+  const x = THREE.MathUtils.clamp(keyX + mobileInput.x, -1, 1);
+  const z = THREE.MathUtils.clamp(keyZ + mobileInput.y, -1, 1);
   return inputVector.set(x, z);
+}
+
+function setMobileInput(nextInput = {}) {
+  if (typeof nextInput.x === "number") {
+    mobileInput.x = THREE.MathUtils.clamp(nextInput.x, -1, 1);
+  }
+  if (typeof nextInput.y === "number") {
+    mobileInput.y = THREE.MathUtils.clamp(nextInput.y, -1, 1);
+  }
+  if (typeof nextInput.running === "boolean") {
+    mobileInput.running = nextInput.running;
+  }
+  if (ambientAudioEnabled) ensureAmbientAudio();
+}
+
+function queueMobileInteract() {
+  interactQueued = true;
+  if (ambientAudioEnabled) ensureAmbientAudio();
+}
+
+function queueMobileJump() {
+  jumpQueued = true;
+  if (ambientAudioEnabled) ensureAmbientAudio();
 }
 
 function getCameraGroundBasis() {
@@ -6093,7 +6234,7 @@ function updatePlayer(dt, time) {
     playerState.jumpVel = 0;
     playerState.jumpY = 0;
 
-    const shiftHeld = keys.has("ShiftLeft") || keys.has("ShiftRight");
+    const shiftHeld = keys.has("ShiftLeft") || keys.has("ShiftRight") || mobileInput.running;
     const input = getInputVector();
     const moving = input.lengthSq() > 0;
     const isBoosting = shiftHeld && moving;
@@ -6146,7 +6287,7 @@ function updatePlayer(dt, time) {
     for (const wheel of mountedBike.wheels) {
       wheel.rotation.x = mountedBike.wheelSpin;
     }
-    mountedBike.crank.rotation.z = mountedBike.pedalPhase;
+    mountedBike.crank.rotation.x = mountedBike.pedalPhase;
 
     const steering = THREE.MathUtils.clamp(playerVelocity.length() > 0.1 ? playerVelocity.x * 0.05 : 0, -1, 1);
     applyBikeRidePose(playerRig.refs, mountedBike.pedalPhase, Math.min(speed / 10, 1), steering);
@@ -6252,7 +6393,7 @@ function updatePlayer(dt, time) {
     }
   }
 
-  const shiftHeld = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  const shiftHeld = keys.has("ShiftLeft") || keys.has("ShiftRight") || mobileInput.running;
   const input = getInputVector();
   const moving = input.lengthSq() > 0;
   const isCrouching = shiftHeld && !moving;
@@ -7236,8 +7377,8 @@ function drawMinimap() {
     ctx.save();
     ctx.translate(mx, my);
     ctx.rotate(-bus.facingYaw);
-    ctx.fillStyle = "#f2c94c";
-    ctx.strokeStyle = "#214d7a";
+    ctx.fillStyle = "#23824c";
+    ctx.strokeStyle = "#f7f4ea";
     ctx.lineWidth = 1;
     ctx.fillRect(-4, -2.3, 8, 4.6);
     ctx.strokeRect(-4, -2.3, 8, 4.6);
@@ -7458,7 +7599,11 @@ function destroy() {
     triggerReaction,
     triggerRemoteEmote,
     triggerRemoteReaction,
-    toggleAmbientAudio
+    toggleAmbientAudio,
+    setMobileInput,
+    queueMobileInteract,
+    queueMobileJump,
+    toggleCameraMode
   };
 }
 

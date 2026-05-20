@@ -32,6 +32,10 @@ export default function GameView() {
   const localIdRef = useRef(null);
   const npcAuthorityIdRef = useRef(null);
   const npcSnapshotRef = useRef([]);
+  const joystickRef = useRef(null);
+  const joystickPointerRef = useRef(null);
+  const mobileRunRef = useRef(false);
+  const mobileLayoutAppliedRef = useRef(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [voiceState, setVoiceState] = useState(getInitialVoiceState);
   const [connection, setConnection] = useState("connecting");
@@ -42,6 +46,10 @@ export default function GameView() {
   const [avatar, setAvatar] = useState(null);
   const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
   const [mediaFocused, setMediaFocused] = useState(false);
+  const [mobileMode, setMobileMode] = useState(false);
+  const [portraitLocked, setPortraitLocked] = useState(false);
+  const [orientationMessage, setOrientationMessage] = useState("");
+  const [stick, setStick] = useState({ active: false, x: 0, y: 0 });
   const [atmosphere, setAtmosphere] = useState({
     label: "manhã",
     clock: "06:00",
@@ -81,6 +89,58 @@ export default function GameView() {
     if (kind === "glitch") return 2.2;
     if (kind === "cheer") return 3.2;
     return 2.4;
+  }
+
+  function isTouchViewport() {
+    if (typeof window === "undefined") return false;
+    return (
+      window.matchMedia?.("(hover: none), (pointer: coarse)")?.matches ||
+      navigator.maxTouchPoints > 0 ||
+      window.innerWidth <= 900
+    );
+  }
+
+  function refreshMobileViewport() {
+    if (typeof window === "undefined") return;
+    const nextMobileMode = isTouchViewport();
+    const nextPortraitLocked = nextMobileMode && window.innerHeight > window.innerWidth;
+    setMobileMode(nextMobileMode);
+    setPortraitLocked(nextPortraitLocked);
+    if (nextMobileMode && !mobileLayoutAppliedRef.current) {
+      mobileLayoutAppliedRef.current = true;
+      setChatVisible(false);
+      setPlayersVisible(false);
+    }
+  }
+
+  async function requestLandscape({ preferFullscreen = true } = {}) {
+    if (typeof window === "undefined") return;
+    if (!isTouchViewport()) return;
+
+    setOrientationMessage("Abrindo em tela horizontal...");
+    try {
+      if (
+        preferFullscreen &&
+        document.fullscreenEnabled &&
+        !document.fullscreenElement &&
+        document.documentElement.requestFullscreen
+      ) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {}
+
+    try {
+      if (window.screen?.orientation?.lock) {
+        await window.screen.orientation.lock("landscape");
+        setOrientationMessage("Tela horizontal ativa.");
+      } else {
+        setOrientationMessage("Gire o aparelho para jogar.");
+      }
+    } catch {
+      setOrientationMessage("Gire o aparelho para jogar.");
+    }
+
+    window.setTimeout(refreshMobileViewport, 120);
   }
 
   function decorateMessage(message) {
@@ -159,6 +219,27 @@ export default function GameView() {
 
   useEffect(() => {
     setAvatar(readStoredAvatar());
+  }, []);
+
+  useEffect(() => {
+    refreshMobileViewport();
+    window.setTimeout(() => requestLandscape({ preferFullscreen: false }), 160);
+
+    const onFirstPointer = () => {
+      requestLandscape({ preferFullscreen: true });
+    };
+    const onViewportChange = () => {
+      refreshMobileViewport();
+    };
+
+    window.addEventListener("pointerdown", onFirstPointer, { once: true, passive: true });
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("orientationchange", onViewportChange);
+    return () => {
+      window.removeEventListener("pointerdown", onFirstPointer);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("orientationchange", onViewportChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -410,6 +491,66 @@ export default function GameView() {
     gameApiRef.current?.triggerReaction?.(target, "like");
   }
 
+  function updateMobileStick(event) {
+    const joystick = joystickRef.current;
+    if (!joystick) return;
+    const rect = joystick.getBoundingClientRect();
+    const radius = Math.max(1, Math.min(rect.width, rect.height) / 2 - 18);
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    let x = (event.clientX - centerX) / radius;
+    let y = (event.clientY - centerY) / radius;
+    const length = Math.hypot(x, y);
+    if (length > 1) {
+      x /= length;
+      y /= length;
+    }
+    setStick({ active: true, x, y });
+    gameApiRef.current?.setMobileInput?.({ x, y, running: mobileRunRef.current });
+  }
+
+  function clearMobileStick() {
+    joystickPointerRef.current = null;
+    setStick({ active: false, x: 0, y: 0 });
+    gameApiRef.current?.setMobileInput?.({ x: 0, y: 0, running: mobileRunRef.current });
+  }
+
+  function handleJoystickPointerDown(event) {
+    event.preventDefault();
+    joystickPointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    updateMobileStick(event);
+  }
+
+  function handleJoystickPointerMove(event) {
+    if (joystickPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    updateMobileStick(event);
+  }
+
+  function handleJoystickPointerUp(event) {
+    if (joystickPointerRef.current !== event.pointerId) return;
+    event.preventDefault();
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    clearMobileStick();
+  }
+
+  function setMobileRun(active) {
+    mobileRunRef.current = active;
+    gameApiRef.current?.setMobileInput?.({ running: active });
+  }
+
+  function handleMobileAction(event, action) {
+    event.preventDefault();
+    if (action === "jump") {
+      gameApiRef.current?.queueMobileJump?.();
+    } else if (action === "interact") {
+      gameApiRef.current?.queueMobileInteract?.();
+    } else if (action === "camera") {
+      gameApiRef.current?.toggleCameraMode?.();
+    }
+  }
+
   function handleStartVoice() {
     voiceRef.current?.start?.();
   }
@@ -427,7 +568,11 @@ export default function GameView() {
   }
 
   return (
-    <div id="app" ref={containerRef} className="game-shell">
+    <div
+      id="app"
+      ref={containerRef}
+      className={`game-shell${mobileMode ? " is-mobile" : ""}${portraitLocked ? " is-portrait" : ""}`}
+    >
       <canvas data-game="scene"></canvas>
 
       <div className="game-overlay">
@@ -527,7 +672,88 @@ export default function GameView() {
             onToggleVisible={() => setChatVisible((v) => !v)}
           />
         </div>
+
+        {mobileMode && (
+          <div className="mobile-controls" aria-label="Controles mobile">
+            <div
+              ref={joystickRef}
+              className={`mobile-joystick${stick.active ? " active" : ""}`}
+              onPointerDown={handleJoystickPointerDown}
+              onPointerMove={handleJoystickPointerMove}
+              onPointerUp={handleJoystickPointerUp}
+              onPointerCancel={handleJoystickPointerUp}
+            >
+              <span
+                className="mobile-joystick-knob"
+                style={{
+                  transform: `translate(${stick.x * 44}px, ${stick.y * 44}px)`,
+                }}
+              />
+            </div>
+
+            <div className="mobile-action-pad">
+              <button
+                type="button"
+                className="mobile-action mobile-action-run"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  setMobileRun(true);
+                }}
+                onPointerUp={(event) => {
+                  event.preventDefault();
+                  setMobileRun(false);
+                }}
+                onPointerCancel={(event) => {
+                  event.preventDefault();
+                  setMobileRun(false);
+                }}
+                onPointerLeave={(event) => {
+                  event.preventDefault();
+                  setMobileRun(false);
+                }}
+              >
+                Correr
+              </button>
+              <button
+                type="button"
+                className="mobile-action"
+                onPointerDown={(event) => handleMobileAction(event, "jump")}
+              >
+                Pular
+              </button>
+              <button
+                type="button"
+                className="mobile-action mobile-action-primary"
+                onPointerDown={(event) => handleMobileAction(event, "interact")}
+              >
+                Ação
+              </button>
+              <button
+                type="button"
+                className="mobile-action"
+                onPointerDown={(event) => handleMobileAction(event, "camera")}
+              >
+                Câmera
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {mobileMode && portraitLocked && (
+        <div className="mobile-orientation-gate" role="dialog" aria-label="Tela horizontal">
+          <div className="mobile-orientation-card">
+            <strong>Tela horizontal</strong>
+            <span>{orientationMessage || "Gire o aparelho para jogar."}</span>
+            <button
+              type="button"
+              onClick={() => requestLandscape({ preferFullscreen: true })}
+            >
+              Virar tela
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
