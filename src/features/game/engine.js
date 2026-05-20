@@ -604,6 +604,12 @@ const rainSkyColor = new THREE.Color(0x74879f);
 const clearFogColor = new THREE.Color(0xb8dff5);
 const cloudyFogColor = new THREE.Color(0x98afc4);
 const rainFogColor = new THREE.Color(0x6f8199);
+const wetGroundColor = new THREE.Color(0x496a53);
+const tempWeatherSkyColor = new THREE.Color();
+const tempWeatherFogColor = new THREE.Color();
+const tempSkyColor = new THREE.Color();
+const tempFogColor = new THREE.Color();
+const tempGroundColor = new THREE.Color();
 
 function formatClock(minutes) {
   const safe = ((minutes % 1440) + 1440) % 1440;
@@ -679,11 +685,11 @@ function applyAtmosphere(state) {
   const duskMix = Math.min(Math.max(1 - state.daylight * 1.2, 0), 1);
   const nightMix = state.daylight <= 0 ? 1 : Math.max(0, 1 - state.daylight * 1.8);
 
-  const weatherSkyColor = clearSkyColor.clone().lerp(cloudySkyColor, state.weather.cloudMix).lerp(rainSkyColor, state.weather.rain * 0.85);
-  const weatherFogColor = clearFogColor.clone().lerp(cloudyFogColor, state.weather.cloudMix).lerp(rainFogColor, state.weather.rain * 0.9);
-  const skyColor = daySkyColor.clone().lerp(weatherSkyColor, 0.42).lerp(duskSkyColor, duskMix * 0.45).lerp(nightSkyColor, nightMix * 0.72);
-  const fogColor = dayFogColor.clone().lerp(weatherFogColor, 0.38).lerp(duskFogColor, duskMix * 0.45).lerp(nightFogColor, nightMix * 0.72);
-  const groundColor = dayGroundColor.clone().lerp(duskGroundColor, duskMix * 0.45).lerp(nightGroundColor, nightMix * 0.68);
+  tempWeatherSkyColor.copy(clearSkyColor).lerp(cloudySkyColor, state.weather.cloudMix).lerp(rainSkyColor, state.weather.rain * 0.85);
+  tempWeatherFogColor.copy(clearFogColor).lerp(cloudyFogColor, state.weather.cloudMix).lerp(rainFogColor, state.weather.rain * 0.9);
+  const skyColor = tempSkyColor.copy(daySkyColor).lerp(tempWeatherSkyColor, 0.42).lerp(duskSkyColor, duskMix * 0.45).lerp(nightSkyColor, nightMix * 0.72);
+  const fogColor = tempFogColor.copy(dayFogColor).lerp(tempWeatherFogColor, 0.38).lerp(duskFogColor, duskMix * 0.45).lerp(nightFogColor, nightMix * 0.72);
+  const groundColor = tempGroundColor.copy(dayGroundColor).lerp(duskGroundColor, duskMix * 0.45).lerp(nightGroundColor, nightMix * 0.68);
 
   scene.background.copy(skyColor);
   scene.fog.color.copy(fogColor);
@@ -697,7 +703,7 @@ function applyAtmosphere(state) {
   sun.color.setHex(state.daylight > 0.5 ? (state.weather.rain ? 0xe4e8f4 : 0xfff4d6) : state.daylight > 0.1 ? 0xffcab4 : 0xc9d7ff);
   sun.position.set(28 - state.daylight * 10, 18 + state.daylight * 28, 18 + state.daylight * 8);
 
-  ground.material.color.copy(groundColor).lerp(new THREE.Color(0x496a53), state.weather.rain * 0.12 + groundWetness * 0.08);
+  ground.material.color.copy(groundColor).lerp(wetGroundColor, state.weather.rain * 0.12 + groundWetness * 0.08);
   ground.material.roughness = THREE.MathUtils.clamp(1 - state.weather.rain * 0.16 - groundWetness * 0.08, 0.72, 1);
 
   for (const lamp of streetLamps) {
@@ -753,32 +759,34 @@ function updateWeatherFX(dt, time, state) {
     cloud.material.color.setHex(state.weather.rain ? 0xe3ebf5 : state.weather.cloudMix > 0.4 ? 0xf4f7fb : 0xffffff);
   }
 
-  const centerX = player.position.x;
-  const centerZ = player.position.z;
-  const rainSpan = 28;
-  const rainTop = player.position.y + 21;
-  const rainSpeed = 12 + state.weather.rain * 11 + state.weather.cloudMix * 3;
-  for (let i = 0; i < rainCount; i += 1) {
-    const idx = i * 3;
-    if (rainPositions[idx + 1] > rainTop || rainPositions[idx + 1] === 0) {
-      rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
-      rainPositions[idx + 1] = rainTop - randomIn(0, 18);
-      rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
-      rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
-    }
+  if (state.weather.rain > 0.08) {
+    const centerX = player.position.x;
+    const centerZ = player.position.z;
+    const rainSpan = 28;
+    const rainTop = player.position.y + 21;
+    const rainSpeed = 12 + state.weather.rain * 11 + state.weather.cloudMix * 3;
+    for (let i = 0; i < rainCount; i += 1) {
+      const idx = i * 3;
+      if (rainPositions[idx + 1] > rainTop || rainPositions[idx + 1] === 0) {
+        rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
+        rainPositions[idx + 1] = rainTop - randomIn(0, 18);
+        rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
+        rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
+      }
 
-    rainPositions[idx] += wind * 0.12;
-    rainPositions[idx + 1] -= rainVelocities[i] * 0.016;
-    rainPositions[idx + 2] += wind * 0.04;
+      rainPositions[idx] += wind * 0.12;
+      rainPositions[idx + 1] -= rainVelocities[i] * 0.016;
+      rainPositions[idx + 2] += wind * 0.04;
 
-    if (rainPositions[idx + 1] < player.position.y - 2) {
-      rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
-      rainPositions[idx + 1] = rainTop + randomIn(0, 8);
-      rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
-      rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
+      if (rainPositions[idx + 1] < player.position.y - 2) {
+        rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
+        rainPositions[idx + 1] = rainTop + randomIn(0, 8);
+        rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
+        rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
+      }
     }
+    rainGeometry.attributes.position.needsUpdate = true;
   }
-  rainGeometry.attributes.position.needsUpdate = true;
   rainField.visible = state.weather.rain > 0.08;
   rainField.position.set(0, 0, 0);
 
@@ -2137,6 +2145,49 @@ function createNameLabel(text, color = "#fff8dc", accent = "#62ff9f") {
 let localLabel = createNameLabel(localNickname, "#fff8dc", "#62ff9f");
 player.add(localLabel);
 
+function disposeMaterial(material, seenMaterials, seenTextures) {
+  if (!material || seenMaterials.has(material)) return;
+  seenMaterials.add(material);
+  for (const key of [
+    "map",
+    "alphaMap",
+    "aoMap",
+    "bumpMap",
+    "normalMap",
+    "roughnessMap",
+    "metalnessMap",
+    "emissiveMap",
+  ]) {
+    const texture = material[key];
+    if (texture && !seenTextures.has(texture)) {
+      seenTextures.add(texture);
+      texture.dispose?.();
+    }
+  }
+  material.dispose?.();
+}
+
+function disposeObject3D(object) {
+  if (!object) return;
+  const seenGeometries = new Set();
+  const seenMaterials = new Set();
+  const seenTextures = new Set();
+  object.traverse?.((node) => {
+    if (node.geometry && !seenGeometries.has(node.geometry)) {
+      seenGeometries.add(node.geometry);
+      node.geometry.dispose?.();
+    }
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    for (const material of materials) {
+      disposeMaterial(material, seenMaterials, seenTextures);
+    }
+  });
+}
+
+function disposeSprite(sprite) {
+  disposeObject3D(sprite);
+}
+
 const remotePlayers = new Map();
 const sharedBikes = new Map();
 let sharedBikeCount = 0;
@@ -2233,6 +2284,7 @@ function removeRemotePlayer(id) {
   }
   clearChatBubblesFor(id);
   world.remove(r.group);
+  disposeObject3D(r.group);
   remotePlayers.delete(id);
 }
 
@@ -2252,6 +2304,7 @@ function setRemoteNick(id, nick) {
   const r = remotePlayers.get(id);
   if (!r) return;
   r.group.remove(r.label);
+  disposeSprite(r.label);
   const newLabel = createNameLabel(nick || "Player", "#fff8dc", "#f6b94b");
   r.group.add(newLabel);
   r.label = newLabel;
@@ -2260,6 +2313,7 @@ function setRemoteNick(id, nick) {
 
 function setLocalNick(nick) {
   player.remove(localLabel);
+  disposeSprite(localLabel);
   localLabel = createNameLabel(nick || "Você", "#fff8dc", "#62ff9f");
   player.add(localLabel);
 }
@@ -2411,6 +2465,7 @@ function pushBubble(target, text, ttl = BUBBLE_TTL) {
   if (list.length > 4) {
     const old = list.shift();
     group.remove(old.sprite);
+    disposeSprite(old.sprite);
   }
   layoutBubblesFor(key);
 }
@@ -2432,7 +2487,10 @@ function pushReactionBubble(playerId, kind = "like") {
 function clearChatBubblesFor(playerId) {
   const list = chatBubbles.get(playerId);
   if (!list) return;
-  for (const b of list) b.group.remove(b.sprite);
+  for (const b of list) {
+    b.group.remove(b.sprite);
+    disposeSprite(b.sprite);
+  }
   chatBubbles.delete(playerId);
 }
 
@@ -2443,6 +2501,7 @@ function updateBubbles(dt) {
       list[i].ttl -= dt;
       if (list[i].ttl <= 0) {
         list[i].group.remove(list[i].sprite);
+        disposeSprite(list[i].sprite);
         list.splice(i, 1);
         changed = true;
       } else if (list[i].ttl < 0.8) {
@@ -5771,14 +5830,21 @@ function handleDevPointerUp(event) {
   return true;
 }
 
+const inputVector = new THREE.Vector2();
+const cameraGroundBasis = {
+  forward: new THREE.Vector2(),
+  right: new THREE.Vector2(),
+};
+const playerWorldInput = new THREE.Vector2();
+
 function getInputVector() {
   const x = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
   const z = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
-  return new THREE.Vector2(x, z);
+  return inputVector.set(x, z);
 }
 
 function getCameraGroundBasis() {
-  const forward = new THREE.Vector2(
+  const forward = cameraGroundBasis.forward.set(
     player.position.x - camera.position.x,
     player.position.z - camera.position.z
   );
@@ -5787,8 +5853,8 @@ function getCameraGroundBasis() {
   } else {
     forward.normalize();
   }
-  const right = new THREE.Vector2(-forward.y, forward.x);
-  return { forward, right };
+  cameraGroundBasis.right.set(-forward.y, forward.x);
+  return cameraGroundBasis;
 }
 
 const keys = new Set();
@@ -6044,7 +6110,7 @@ function updatePlayer(dt, time) {
 
     if (moving) {
       input.normalize();
-      const worldInput = new THREE.Vector2()
+      const worldInput = playerWorldInput.set(0, 0)
         .addScaledVector(cameraBasis.right, input.x)
         .addScaledVector(cameraBasis.forward, -input.y);
       if (worldInput.lengthSq() > 0.0001) {
@@ -6208,7 +6274,7 @@ function updatePlayer(dt, time) {
 
   if (moving) {
     input.normalize();
-    const worldInput = new THREE.Vector2()
+    const worldInput = playerWorldInput.set(0, 0)
       .addScaledVector(cameraBasis.right, input.x)
       .addScaledVector(cameraBasis.forward, -input.y);
     if (worldInput.lengthSq() > 0.0001) {
@@ -7357,8 +7423,7 @@ function destroy() {
   window.removeEventListener("error", errorHandler);
   devOverlay.remove();
   scene.remove(devSelectionBox);
-  devSelectionBox.geometry?.dispose?.();
-  devSelectionBox.material?.dispose?.();
+  disposeObject3D(devSelectionBox);
   stopAudioNode(audioWindSource);
   stopAudioNode(audioMurmurSource);
   audioWindSource = null;
@@ -7373,26 +7438,7 @@ function destroy() {
   }
   audioContext = null;
   audioMasterGain = null;
-  for (const cloud of cloudSprites) {
-    cloud.material?.dispose?.();
-  }
-  for (const puddle of puddles) {
-    puddle.geometry?.dispose?.();
-    puddle.material?.dispose?.();
-  }
-  for (const pigeon of pigeons) {
-    pigeon.group.traverse?.((node) => {
-      node.geometry?.dispose?.();
-      if (Array.isArray(node.material)) {
-        for (const material of node.material) material?.dispose?.();
-      } else {
-        node.material?.dispose?.();
-      }
-    });
-  }
-  cloudTexture.dispose?.();
-  rainGeometry.dispose?.();
-  rainMaterial.dispose?.();
+  disposeObject3D(scene);
   renderer.dispose?.();
 }
 

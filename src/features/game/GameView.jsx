@@ -112,19 +112,41 @@ export default function GameView() {
         voiceMuted: player.voiceMuted === true,
         isYou: player.id === localIdRef.current,
       };
+      let changed = false;
       const exists = prev.some((entry) => entry.id === player.id);
       const next = exists
-        ? prev.map((entry) => entry.id === player.id ? { ...entry, ...nextPlayer } : entry)
+        ? prev.map((entry) => {
+            if (entry.id !== player.id) return entry;
+            const needsUpdate = Object.keys(nextPlayer).some(
+              (key) => entry[key] !== nextPlayer[key]
+            );
+            if (!needsUpdate) return entry;
+            changed = true;
+            return { ...entry, ...nextPlayer };
+          })
         : [...prev, nextPlayer];
+      if (exists && !changed) return prev;
       return next.sort((a, b) => Number(b.isYou) - Number(a.isYou) || a.nick.localeCompare(b.nick));
     });
   }
 
   function patchOnlinePlayer(id, patch) {
     if (!id) return;
-    setOnlinePlayers((prev) =>
-      prev.map((entry) => entry.id === id ? { ...entry, ...patch } : entry)
-    );
+    setOnlinePlayers((prev) => {
+      let changed = false;
+      let found = false;
+      const next = prev.map((entry) => {
+        if (entry.id !== id) return entry;
+        found = true;
+        const needsUpdate = Object.keys(patch).some(
+          (key) => entry[key] !== patch[key]
+        );
+        if (!needsUpdate) return entry;
+        changed = true;
+        return { ...entry, ...patch };
+      });
+      return found && changed ? next : prev;
+    });
   }
 
   useEffect(() => {

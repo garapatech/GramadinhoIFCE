@@ -425,14 +425,13 @@ export default class GameRoom implements Party.Server {
       if (!target || target === sender.id) return;
       const signal = sanitizeVoiceSignal(msg.signal);
       if (!signal) return;
-      this.room.broadcast(
+      this.room.getConnection(target)?.send(
         JSON.stringify({
           type: "voice-signal",
           from: sender.id,
           target,
           signal,
-        }),
-        [sender.id]
+        })
       );
       return;
     }
@@ -492,6 +491,10 @@ export default class GameRoom implements Party.Server {
       this.history.push(sysMsg);
       this.trim();
       this.room.broadcast(JSON.stringify({ type: "chat", ...sysMsg }));
+    }
+    if (this.players.size === 0 && this.clockTimer) {
+      clearInterval(this.clockTimer);
+      this.clockTimer = null;
     }
   }
 
