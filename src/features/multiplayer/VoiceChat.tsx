@@ -1,6 +1,17 @@
 "use client";
 
-const STATUS_LABEL = {
+import type { VoiceState, VoiceStatus } from "@/shared/schemas/voice";
+
+type VoiceChatProps = {
+  voice?: Partial<VoiceState> | null;
+  connection?: string;
+  onStart?: () => void;
+  onStop?: () => void;
+  onToggleMute?: () => void;
+  onUnlockAudio?: () => void;
+};
+
+const STATUS_LABEL: Record<VoiceStatus, string> = {
   idle: "voz desligada",
   listening: "ouvindo voz",
   requesting: "solicitando microfone",
@@ -21,35 +32,35 @@ export default function VoiceChat({
   onStop,
   onToggleMute,
   onUnlockAudio,
-}) {
-  const state = voice || {};
+}: VoiceChatProps) {
+  const state: Partial<VoiceState> = voice || {};
   const isBlocked = state.status === "blocked";
   const disabled =
     (!isBlocked && state.status === "requesting") ||
     connection !== "connected" ||
     !state.ready ||
     state.supported === false;
-  const canSpeak = state.enabled && state.status !== "requesting";
+  const canSpeak = !!state.enabled && state.status !== "requesting";
   const hasPeers = (state.peerCount || 0) > 0;
   const label =
     state.error ||
-    STATUS_LABEL[state.status] ||
+    (state.status ? STATUS_LABEL[state.status] : undefined) ||
     (state.enabled ? "voz ativa" : "voz desligada");
 
   return (
-    <div className={`voice${state.enabled ? " on" : ""}${state.receivingCount > 0 ? " listening" : ""}${state.error ? " error" : ""}`}>
+    <div
+      className={`voice${state.enabled ? " on" : ""}${state.receivingCount ? " listening" : ""}${state.error ? " error" : ""}`}
+    >
       <div className="voice-info">
-        <span className="voice-dot" aria-hidden="true"></span>
+        <span className="voice-dot" aria-hidden="true" />
         <span className="voice-label">{label}</span>
         {state.enabled && (
           <span className="voice-count">
             {hasPeers ? `${state.peerCount} conectado(s)` : "sem conexoes"}
           </span>
         )}
-        {!state.enabled && state.receivingCount > 0 && (
-          <span className="voice-count">
-            {`${state.receivingCount} falando`}
-          </span>
+        {!state.enabled && (state.receivingCount || 0) > 0 && (
+          <span className="voice-count">{`${state.receivingCount} falando`}</span>
         )}
       </div>
 

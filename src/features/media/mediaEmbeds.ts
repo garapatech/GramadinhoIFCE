@@ -1,3 +1,20 @@
+export type MediaProvider = "youtube" | "spotify";
+
+export type MediaEmbedSuccess = {
+  ok: true;
+  provider: MediaProvider;
+  providerLabel: string;
+  embedUrl: string;
+  canonicalUrl: string;
+};
+
+export type MediaEmbedFailure = {
+  ok: false;
+  reason: string;
+};
+
+export type MediaEmbedResult = MediaEmbedSuccess | MediaEmbedFailure;
+
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
   "www.youtube.com",
@@ -6,20 +23,11 @@ const YOUTUBE_HOSTS = new Set([
   "youtu.be",
 ]);
 
-const SPOTIFY_HOSTS = new Set([
-  "open.spotify.com",
-  "play.spotify.com",
-]);
+const SPOTIFY_HOSTS = new Set(["open.spotify.com", "play.spotify.com"]);
 
-const SPOTIFY_TYPES = new Set([
-  "track",
-  "album",
-  "playlist",
-  "episode",
-  "show",
-]);
+const SPOTIFY_TYPES = new Set(["track", "album", "playlist", "episode", "show"]);
 
-function getUrlFromInput(input) {
+function getUrlFromInput(input: unknown): URL | string | null {
   const raw = String(input || "").trim();
   if (!raw) return null;
 
@@ -38,7 +46,7 @@ function getUrlFromInput(input) {
   }
 }
 
-function normalizeId(value) {
+function normalizeId(value: unknown): string {
   return String(value || "")
     .trim()
     .split("?")[0]
@@ -47,7 +55,7 @@ function normalizeId(value) {
     .replace(/\/+$/, "");
 }
 
-function resolveYouTubeEmbed(url) {
+function resolveYouTubeEmbed(url: URL): MediaEmbedSuccess | null {
   const host = url.hostname.toLowerCase();
   if (!YOUTUBE_HOSTS.has(host)) return null;
 
@@ -55,6 +63,7 @@ function resolveYouTubeEmbed(url) {
     const videoId = normalizeId(url.pathname.slice(1));
     if (!videoId) return null;
     return {
+      ok: true,
       provider: "youtube",
       providerLabel: "YouTube",
       embedUrl: `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&rel=0`,
@@ -71,6 +80,7 @@ function resolveYouTubeEmbed(url) {
 
   if (videoId) {
     return {
+      ok: true,
       provider: "youtube",
       providerLabel: "YouTube",
       embedUrl: `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&rel=0`,
@@ -82,14 +92,17 @@ function resolveYouTubeEmbed(url) {
   if (!playlistId) return null;
 
   return {
+    ok: true,
     provider: "youtube",
     providerLabel: "YouTube",
-    embedUrl: `https://www.youtube.com/embed/videoseries?list=${encodeURIComponent(playlistId)}&autoplay=1&rel=0`,
+    embedUrl: `https://www.youtube.com/embed/videoseries?list=${encodeURIComponent(
+      playlistId
+    )}&autoplay=1&rel=0`,
     canonicalUrl: `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`,
   };
 }
 
-function resolveSpotifyTypeAndId(rawValue) {
+function resolveSpotifyTypeAndId(rawValue: unknown): { type: string; id: string } | null {
   if (typeof rawValue === "string" && rawValue.startsWith("spotify:")) {
     const parts = rawValue.split(":").filter(Boolean);
     const type = parts[1];
@@ -98,7 +111,7 @@ function resolveSpotifyTypeAndId(rawValue) {
     return null;
   }
 
-  const url = rawValue;
+  const url = rawValue as URL;
   const parts = url.pathname.split("/").filter(Boolean);
   const cleanParts = parts[0]?.startsWith("intl-") ? parts.slice(1) : parts;
   const typeIndex = cleanParts.findIndex((part) => SPOTIFY_TYPES.has(part));
@@ -110,14 +123,17 @@ function resolveSpotifyTypeAndId(rawValue) {
   return { type, id };
 }
 
-function resolveSpotifyEmbed(value) {
-  if (typeof value === "string" && value.startsWith("spotify:")) {
+function resolveSpotifyEmbed(value: URL | string): MediaEmbedSuccess | null {
+  if (typeof value === "string") {
     const parsed = resolveSpotifyTypeAndId(value);
     if (!parsed) return null;
     return {
+      ok: true,
       provider: "spotify",
       providerLabel: "Spotify",
-      embedUrl: `https://open.spotify.com/embed/${parsed.type}/${encodeURIComponent(parsed.id)}?utm_source=generator`,
+      embedUrl: `https://open.spotify.com/embed/${parsed.type}/${encodeURIComponent(
+        parsed.id
+      )}?utm_source=generator`,
       canonicalUrl: `https://open.spotify.com/${parsed.type}/${encodeURIComponent(parsed.id)}`,
     };
   }
@@ -129,14 +145,17 @@ function resolveSpotifyEmbed(value) {
   if (!parsed) return null;
 
   return {
+    ok: true,
     provider: "spotify",
     providerLabel: "Spotify",
-    embedUrl: `https://open.spotify.com/embed/${parsed.type}/${encodeURIComponent(parsed.id)}?utm_source=generator`,
+    embedUrl: `https://open.spotify.com/embed/${parsed.type}/${encodeURIComponent(
+      parsed.id
+    )}?utm_source=generator`,
     canonicalUrl: `https://open.spotify.com/${parsed.type}/${encodeURIComponent(parsed.id)}`,
   };
 }
 
-export function resolveMediaEmbed(input) {
+export function resolveMediaEmbed(input: unknown): MediaEmbedResult {
   const parsed = getUrlFromInput(input);
   if (!parsed) {
     return {

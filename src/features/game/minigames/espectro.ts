@@ -158,6 +158,12 @@ function flashTarget(target, color = 0xff183c) {
   requestAnimationFrame(fade);
 }
 
+type EspectroSpawnPayload = {
+  seed?: string | number;
+  spawnIndex?: number;
+  expiresAt?: number;
+};
+
 export function createEspectroEvent({
   world,
   scene,
@@ -253,7 +259,7 @@ export function createEspectroEvent({
     return origin.clone();
   }
 
-  function spawnEspectro(payload = {}) {
+  function spawnEspectro(payload: EspectroSpawnPayload = {}) {
     removeEspectro({ clearPayload: true });
     if (!payload || payload.expiresAt < Date.now()) return;
     const seed = seedToNumber(payload.seed);

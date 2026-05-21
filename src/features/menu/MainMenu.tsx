@@ -1,16 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import AvatarCustomizer from "@/features/avatar/AvatarCustomizer";
-import { getDefaultAvatar, readStoredAvatar, writeStoredAvatar } from "@/features/avatar/avatarConfig";
+import {
+  getDefaultAvatar,
+  readStoredAvatar,
+  writeStoredAvatar,
+  type Avatar,
+} from "@/features/avatar/avatarConfig";
 
 const STORAGE_KEY = "gramadinho.nick";
+const NICK_MIN_LENGTH = 2;
+const NICK_MAX_LENGTH = 16;
 
 export default function MainMenu() {
   const router = useRouter();
   const [nick, setNick] = useState("");
-  const [avatar, setAvatar] = useState(getDefaultAvatar);
+  const [avatar, setAvatar] = useState<Avatar>(getDefaultAvatar);
   const [avatarReady, setAvatarReady] = useState(false);
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [error, setError] = useState("");
@@ -30,14 +37,14 @@ export default function MainMenu() {
     writeStoredAvatar(avatar);
   }, [avatar, avatarReady]);
 
-  function handleSubmit(e) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = nick.trim();
-    if (trimmed.length < 2) {
+    if (trimmed.length < NICK_MIN_LENGTH) {
       setError("Seu nick precisa de pelo menos 2 letras.");
       return;
     }
-    if (trimmed.length > 16) {
+    if (trimmed.length > NICK_MAX_LENGTH) {
       setError("Nick muito grande (máx. 16 caracteres).");
       return;
     }
@@ -46,6 +53,11 @@ export default function MainMenu() {
     } catch {}
     writeStoredAvatar(avatar);
     router.push(`/play?nick=${encodeURIComponent(trimmed)}`);
+  }
+
+  function handleNickChange(e: ChangeEvent<HTMLInputElement>) {
+    setNick(e.target.value);
+    if (error) setError("");
   }
 
   return (
@@ -62,11 +74,8 @@ export default function MainMenu() {
             type="text"
             placeholder="Digite seu nick"
             value={nick}
-            onChange={(e) => {
-              setNick(e.target.value);
-              if (error) setError("");
-            }}
-            maxLength={16}
+            onChange={handleNickChange}
+            maxLength={NICK_MAX_LENGTH}
             autoFocus
           />
           <p className="error-msg">{error || " "}</p>

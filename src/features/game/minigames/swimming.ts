@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { CharacterRigRefs } from "@/game/characterRig";
 
 export const SWIMMING_POOL_CONFIG = {
   centerX: 0,
@@ -9,9 +10,86 @@ export const SWIMMING_POOL_CONFIG = {
   waterDepth: 18.5,
   laneCount: 4,
   laneIndex: 1,
+} as const;
+
+type SwimPhase = "idle" | "countdown" | "race" | "finish";
+
+type SwimHudState = {
+  phase: SwimPhase;
+  countdown: number;
+  progress: number;
+  energy: number;
+  speed: number;
+  speedPulse: number;
+  finishTimer: number;
+  savedPosition: { x: number; z: number } | null;
+  taps: number[];
+  strokeCount: number;
+  waterSoundTimer: number;
+  bikeWarnCooldown: number;
 };
 
-function clamp01(value) {
+type Blocker = {
+  active?: boolean;
+};
+
+type SwimInteractable = {
+  kind: string;
+  label: string;
+  radius: number;
+  position: THREE.Vector3;
+  cullPosition: THREE.Vector3;
+  cullRadius: number;
+  cullDistance: number;
+  root: THREE.Group;
+  npcDisabled: () => boolean;
+  isDisabledForPlayer: () => boolean;
+  interact: () => void;
+  update: (dt: number, time: number) => void;
+};
+
+type MapFeatureRecord = Record<string, unknown>;
+
+type SwimmingMapFeatures = {
+  buildings?: MapFeatureRecord[];
+  paths?: MapFeatureRecord[];
+};
+
+type SwimPlayerLike = {
+  position: THREE.Vector3;
+  rotation: THREE.Euler;
+};
+
+type SwimVelocityLike = {
+  set: (x: number, y: number) => void;
+};
+
+type SwimRigLike = {
+  refs: CharacterRigRefs;
+};
+
+export type SwimmingMinigameOptions = {
+  world: THREE.Group;
+  container?: HTMLElement | null;
+  createBlocker: (minX: number, maxX: number, minZ: number, maxZ: number) => Blocker;
+  interactables: SwimInteractable[];
+  mapFeatures?: SwimmingMapFeatures | null;
+  player: SwimPlayerLike;
+  playerRig: SwimRigLike;
+  playerVelocity: SwimVelocityLike;
+  speak?: (text: string, speaker?: string) => void;
+  updatePlayerActivity?: (state: { kind: string; label: string; detail: string }) => void;
+  resetRigPose?: (refs: CharacterRigRefs) => void;
+  isRidingBike?: () => boolean;
+  removeTreesInArea?: (
+    bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+    padding: number
+  ) => void;
+  playPoolSound?: (intensity: number) => void;
+  playSwimStrokeSound?: (intensity: number) => void;
+};
+
+function clamp01(value: number) {
   return THREE.MathUtils.clamp(value, 0, 1);
 }
 
@@ -23,11 +101,22 @@ function createPanelTexture({
   background = "#0a5d83",
   accent = "#9be7ff",
   text = "#f7fdff",
+}: {
+  title: string;
+  subtitle?: string;
+  width?: number;
+  height?: number;
+  background?: string;
+  accent?: string;
+  text?: string;
 }) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("createPanelTexture: 2D context unavailable");
+  }
   const gradient = ctx.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, background);
   gradient.addColorStop(1, "#08324d");
@@ -58,6 +147,9 @@ function createPoolDeckTexture() {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("createPoolDeckTexture: 2D context unavailable");
+  }
   ctx.fillStyle = "#d9ecef";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -96,6 +188,9 @@ function createPoolWaterTexture() {
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("createPoolWaterTexture: 2D context unavailable");
+  }
   const base = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
   base.addColorStop(0, "#3bd7ff");
   base.addColorStop(0.5, "#1499d4");
@@ -137,7 +232,15 @@ function createPoolWaterTexture() {
   return texture;
 }
 
-function addBox(group, geometry, material, x, y, z, options = {}) {
+function addBox(
+  group: THREE.Group,
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material,
+  x: number,
+  y: number,
+  z: number,
+  options: { rx?: number; ry?: number; rz?: number; castShadow?: boolean; receiveShadow?: boolean } = {}
+) {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(x, y, z);
   mesh.rotation.set(options.rx || 0, options.ry || 0, options.rz || 0);
@@ -147,7 +250,7 @@ function addBox(group, geometry, material, x, y, z, options = {}) {
   return mesh;
 }
 
-function applySwimPose(refs, time, intensity = 1) {
+function applySwimPose(refs: CharacterRigRefs, time: number, intensity = 1) {
   const k = clamp01(intensity);
   const stroke = Math.sin(time * (6.5 + k * 6));
   const strokeOpp = Math.sin(time * (6.5 + k * 6) + Math.PI);
@@ -185,7 +288,7 @@ export function createSwimmingMinigame({
   removeTreesInArea,
   playPoolSound,
   playSwimStrokeSound,
-}) {
+}: SwimmingMinigameOptions) {
   const cfg = SWIMMING_POOL_CONFIG;
   const bounds = {
     minX: cfg.centerX - cfg.areaWidth / 2,
@@ -252,7 +355,15 @@ export function createSwimmingMinigame({
 
   for (let i = 1; i < cfg.laneCount; i += 1) {
     const x = water.minX + i * laneWidth;
-    const lane = addBox(group, new THREE.BoxGeometry(0.08, 0.05, cfg.waterDepth - 1.4), laneMat, x, 0.18, cfg.centerZ, { castShadow: false });
+    const lane = addBox(
+      group,
+      new THREE.BoxGeometry(0.08, 0.05, cfg.waterDepth - 1.4),
+      laneMat,
+      x,
+      0.18,
+      cfg.centerZ,
+      { castShadow: false }
+    ) as THREE.Mesh;
     lane.userData.baseY = lane.position.y;
   }
 
@@ -340,7 +451,7 @@ export function createSwimmingMinigame({
     group.add(pole);
   }
 
-  const ripples = [];
+  const ripples: Array<THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>> = [];
   const rippleMat = new THREE.MeshBasicMaterial({
     color: 0xc9f8ff,
     transparent: true,
@@ -348,7 +459,10 @@ export function createSwimmingMinigame({
     depthWrite: false,
   });
   for (let i = 0; i < 6; i += 1) {
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.25, 0.32, 24), rippleMat.clone());
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.25, 0.32, 24),
+      rippleMat.clone()
+    ) as THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
     ring.rotation.x = -Math.PI / 2;
     ring.position.set(
       water.minX + 1.5 + (i % 3) * 6.8,
@@ -398,13 +512,13 @@ export function createSwimmingMinigame({
     </div>
   `;
   container?.appendChild(hud);
-  const phaseEl = hud.querySelector('[data-swim="phase"]');
-  const countEl = hud.querySelector('[data-swim="count"]');
-  const barEl = hud.querySelector('[data-swim="bar"]');
-  const speedEl = hud.querySelector('[data-swim="speed"]');
-  const tapsEl = hud.querySelector('[data-swim="taps"]');
+  const phaseEl = hud.querySelector('[data-swim="phase"]') as HTMLElement;
+  const countEl = hud.querySelector('[data-swim="count"]') as HTMLElement;
+  const barEl = hud.querySelector('[data-swim="bar"]') as HTMLElement;
+  const speedEl = hud.querySelector('[data-swim="speed"]') as HTMLElement;
+  const tapsEl = hud.querySelector('[data-swim="taps"]') as HTMLElement;
 
-  const state = {
+  const state: SwimHudState = {
     phase: "idle",
     countdown: 0,
     progress: 0,
@@ -427,7 +541,7 @@ export function createSwimmingMinigame({
     return state.phase === "countdown" || state.phase === "race" || state.phase === "finish";
   }
 
-  function isNoBikeZone(x, z) {
+  function isNoBikeZone(x: number, z: number) {
     return (
       x >= bounds.minX - 1.2 &&
       x <= bounds.maxX + 1.2 &&
@@ -436,7 +550,7 @@ export function createSwimmingMinigame({
     );
   }
 
-  function rejectBikeEntry(position) {
+  function rejectBikeEntry(position: { x: number; z: number }) {
     if (!isNoBikeZone(position.x, position.z)) return false;
     if (state.bikeWarnCooldown <= 0) {
       speak?.("Bicicletas ficam fora da area da piscina.", "Piscina");
@@ -445,7 +559,7 @@ export function createSwimmingMinigame({
     return true;
   }
 
-  function setRacePosition(progress, time) {
+  function setRacePosition(progress: number, time: number) {
     const p = clamp01(progress);
     const laneJitter = Math.sin(time * 7.5) * state.speedPulse * 0.08;
     player.position.x = laneX + laneJitter;
@@ -531,7 +645,7 @@ export function createSwimmingMinigame({
     tapsEl.textContent = `${state.strokeCount} toques`;
   }
 
-  function updatePlayer(dt, time) {
+  function updatePlayer(dt: number, time: number) {
     if (!isPlayerControlled()) return false;
     updatePlayerActivity?.({
       kind: "emoting",
@@ -584,7 +698,7 @@ export function createSwimmingMinigame({
     return false;
   }
 
-  function updateEnvironment(dt, time) {
+  function updateEnvironment(dt: number, time: number) {
     state.bikeWarnCooldown = Math.max(0, state.bikeWarnCooldown - dt);
     gateBlocker.active = true;
 
@@ -625,7 +739,7 @@ export function createSwimmingMinigame({
     interact() {
       startRace();
     },
-    update(dt, time) {
+    update(dt: number, time: number) {
       updateEnvironment(dt, time);
     },
   });

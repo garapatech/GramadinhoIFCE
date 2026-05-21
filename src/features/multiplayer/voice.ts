@@ -1,9 +1,61 @@
-const DEFAULT_ICE_SERVERS = [
+import { readPublicEnv } from "@/shared/schemas/env";
+import type { VoicePeerSnapshot, VoiceState, VoiceStatus } from "@/shared/schemas/voice";
+import { voiceStateSchema } from "@/shared/schemas/voice";
+import type { VoiceSignal } from "@/shared/schemas/multiplayer";
+
+type IceServerConfig = RTCIceServer;
+
+type VoiceReadyPayload = {
+  enabled: boolean;
+  muted: boolean;
+};
+
+type VoicePlayer = {
+  id: string;
+  nick: string;
+  voiceEnabled: boolean;
+  voiceMuted: boolean;
+};
+
+type VoicePeer = {
+  id: string;
+  pc: RTCPeerConnection;
+  status: VoiceStatus;
+  pendingCandidates: RTCIceCandidate[];
+  makingOffer: boolean;
+  hasRemoteStream: boolean;
+  autoplayBlocked: boolean;
+  audioEl: HTMLAudioElement | null;
+  remoteStream: MediaStream | null;
+  localTrackIds: Set<string>;
+};
+
+type VoiceSignalEnvelope = {
+  from?: string;
+  target?: string;
+  nick?: string;
+  signal?: VoiceSignal | null;
+};
+
+type VoiceReadyEvent = {
+  id?: string;
+  nick?: string;
+  enabled?: boolean;
+  muted?: boolean;
+};
+
+type CreateVoiceChatOptions = {
+  onChange?: (state: VoiceState) => void;
+  sendReady?: (payload: VoiceReadyPayload) => void;
+  sendSignal?: (target: string, signal: VoiceSignal) => void;
+};
+
+const DEFAULT_ICE_SERVERS: IceServerConfig[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
-const INITIAL_STATE = {
+const INITIAL_STATE: VoiceState = {
   supported: true,
   ready: false,
   enabled: false,
@@ -24,15 +76,16 @@ function getBrowserSupport() {
   );
 }
 
-function getIceServers() {
-  const raw = process.env.NEXT_PUBLIC_RTC_ICE_SERVERS;
+function getIceServers(): IceServerConfig[] {
+  const raw = readPublicEnv().NEXT_PUBLIC_RTC_ICE_SERVERS;
   if (!raw) return DEFAULT_ICE_SERVERS;
 
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0
-      ? parsed
-      : DEFAULT_ICE_SERVERS;
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed as IceServerConfig[];
+    }
+    return DEFAULT_ICE_SERVERS;
   } catch {
     const urls = raw
       .split(",")
@@ -42,17 +95,31 @@ function getIceServers() {
   }
 }
 
-function serializeDescription(description) {
+function serializeDescription(
+  description: RTCSessionDescription | RTCSessionDescriptionInit | null
+): VoiceSignal["description"] | null {
   if (!description) return null;
+  if (description.type !== "offer" && description.type !== "answer") return null;
+  if (!description.sdp) return null;
   return {
     type: description.type,
     sdp: description.sdp,
   };
 }
 
-function serializeCandidate(candidate) {
+function serializeCandidate(candidate: RTCIceCandidate | null) {
   if (!candidate) return null;
-  if (typeof candidate.toJSON === "function") return candidate.toJSON();
+  if (typeof candidate.toJSON === "function") {
+    const json = candidate.toJSON() as RTCIceCandidateInit;
+    if (!json.candidate) return null;
+    return {
+      candidate: json.candidate,
+      sdpMid: json.sdpMid,
+      sdpMLineIndex: json.sdpMLineIndex,
+      usernameFragment: json.usernameFragment,
+    };
+  }
+  if (!candidate.candidate) return null;
   return {
     candidate: candidate.candidate,
     sdpMid: candidate.sdpMid,
@@ -61,7 +128,7 @@ function serializeCandidate(candidate) {
   };
 }
 
-function getErrorMessage(error) {
+function getErrorMessage(error: { name?: string } | null | undefined) {
   if (error?.name === "NotAllowedError" || error?.name === "SecurityError") {
     return "Permissao do microfone negada.";
   }
@@ -74,7 +141,7 @@ function getErrorMessage(error) {
   return "Nao foi possivel ativar o microfone.";
 }
 
-export function getInitialVoiceState() {
+export function getInitialVoiceState(): VoiceState {
   return {
     ...INITIAL_STATE,
     supported: getBrowserSupport(),
@@ -82,22 +149,26 @@ export function getInitialVoiceState() {
   };
 }
 
-export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
+export function createVoiceChat({
+  onChange,
+  sendReady,
+  sendSignal,
+}: CreateVoiceChatOptions = {}) {
   let localId = "";
-  let localStream = null;
+  let localStream: MediaStream | null = null;
   let enabled = false;
   let muted = false;
-  let status = "idle";
+  let status: VoiceStatus = "idle";
   let error = "";
   let closed = false;
 
   const supported = getBrowserSupport();
   const iceServers = getIceServers();
-  const knownPlayers = new Map();
-  const peers = new Map();
+  const knownPlayers = new Map<string, VoicePlayer>();
+  const peers = new Map<string, VoicePeer>();
 
-  function snapshot() {
-    const peerList = Array.from(peers.values()).map((peer) => ({
+  function snapshot(): VoiceState {
+    const peerList: VoicePeerSnapshot[] = Array.from(peers.values()).map((peer) => ({
       id: peer.id,
       nick: knownPlayers.get(peer.id)?.nick || "Player",
       status: peer.status,
@@ -113,7 +184,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
       (peer) => peer.hasAudio || peer.status === "connected"
     ).length;
 
-    let visibleStatus = status;
+    let visibleStatus: VoiceStatus = status;
     if (blocked) {
       visibleStatus = "blocked";
     } else if (!enabled && receivingCount > 0) {
@@ -122,7 +193,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
       visibleStatus = "connecting";
     }
 
-    return {
+    return voiceStateSchema.parse({
       supported,
       ready: !!localId,
       enabled,
@@ -133,55 +204,55 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
       speakerCount,
       receivingCount,
       peers: peerList,
-    };
+    });
   }
 
   function emit() {
     onChange?.(snapshot());
   }
 
-  function setState(nextStatus, nextError = "") {
+  function setState(nextStatus: VoiceStatus, nextError = "") {
     status = nextStatus;
     error = nextError;
     emit();
   }
 
-  function normalizePlayer(player) {
+  function normalizePlayer(player: Partial<VoicePlayer> | null | undefined) {
     if (!player?.id || player.id === localId) return null;
-    const previous = knownPlayers.get(player.id) || {};
+    const previous = knownPlayers.get(player.id);
     return {
       id: player.id,
-      nick: player.nick || previous.nick || "Player",
-      voiceEnabled: player.voiceEnabled === true || previous.voiceEnabled === true,
+      nick: player.nick || previous?.nick || "Player",
+      voiceEnabled: player.voiceEnabled === true || previous?.voiceEnabled === true,
       voiceMuted: player.voiceMuted === true,
-    };
+    } satisfies VoicePlayer;
   }
 
-  function rememberPlayer(player) {
+  function rememberPlayer(player: Partial<VoicePlayer> | null | undefined) {
     const normalized = normalizePlayer(player);
     if (!normalized) return null;
     knownPlayers.set(normalized.id, normalized);
     return normalized;
   }
 
-  function shouldInitiate(remoteId) {
+  function shouldInitiate(remoteId: string) {
     if (!localId) return true;
     return localId.localeCompare(remoteId) < 0;
   }
 
-  function shouldCallPlayer(player) {
+  function shouldCallPlayer(player: VoicePlayer | null | undefined) {
     if (!enabled || !localStream || !player) return false;
     if (!player.voiceEnabled) return true;
     return shouldInitiate(player.id);
   }
 
-  function markPeer(peer, nextStatus) {
+  function markPeer(peer: VoicePeer | null | undefined, nextStatus: VoiceStatus) {
     if (!peer || peer.status === nextStatus) return;
     peer.status = nextStatus;
     emit();
   }
 
-  function addLocalTracks(peer) {
+  function addLocalTracks(peer: VoicePeer | null | undefined) {
     if (!peer || !localStream) return false;
     let added = false;
     for (const track of localStream.getAudioTracks()) {
@@ -193,14 +264,14 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     return added;
   }
 
-  function attachRemoteAudio(peer, stream) {
+  function attachRemoteAudio(peer: VoicePeer, stream: MediaStream) {
     if (!stream || typeof document === "undefined") return;
 
     let audio = peer.audioEl;
     if (!audio) {
       audio = document.createElement("audio");
       audio.autoplay = true;
-      audio.playsInline = true;
+      audio.setAttribute("playsinline", "true");
       audio.dataset.voicePeer = peer.id;
       audio.style.display = "none";
       document.body.appendChild(audio);
@@ -224,8 +295,8 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function removeRemoteAudio(peer) {
-    if (!peer?.audioEl) return;
+  function removeRemoteAudio(peer: VoicePeer) {
+    if (!peer.audioEl) return;
     try {
       peer.audioEl.pause();
       peer.audioEl.srcObject = null;
@@ -234,7 +305,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     peer.audioEl = null;
   }
 
-  function closePeer(id) {
+  function closePeer(id: string) {
     const peer = peers.get(id);
     if (!peer) return;
     peers.delete(id);
@@ -249,17 +320,18 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  async function flushCandidates(peer) {
+  async function flushCandidates(peer: VoicePeer) {
     if (!peer.pc.remoteDescription) return;
     while (peer.pendingCandidates.length > 0) {
       const candidate = peer.pendingCandidates.shift();
+      if (!candidate) continue;
       try {
         await peer.pc.addIceCandidate(candidate);
       } catch {}
     }
   }
 
-  async function createOffer(peer) {
+  async function createOffer(peer: VoicePeer) {
     if (!enabled || !localStream || peer.makingOffer) return;
     if (peer.pc.signalingState !== "stable") return;
 
@@ -270,9 +342,10 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
       const offer = await peer.pc.createOffer();
       if (peer.pc.signalingState !== "stable") return;
       await peer.pc.setLocalDescription(offer);
-      sendSignal?.(peer.id, {
-        description: serializeDescription(peer.pc.localDescription),
-      });
+      const description = serializeDescription(peer.pc.localDescription);
+      if (description) {
+        sendSignal?.(peer.id, { description });
+      }
     } catch {
       markPeer(peer, "failed");
     } finally {
@@ -280,7 +353,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     }
   }
 
-  function ensurePeer(remoteId, initiator = false) {
+  function ensurePeer(remoteId: string, initiator = false) {
     if (!supported || !remoteId || remoteId === localId || closed) return null;
 
     const player = knownPlayers.get(remoteId);
@@ -300,7 +373,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     }
 
     const pc = new RTCPeerConnection({ iceServers });
-    const peer = {
+    const peer: VoicePeer = {
       id: remoteId,
       pc,
       status: "connecting",
@@ -371,19 +444,19 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     }
   }
 
-  async function handleSignal(event) {
+  async function handleSignal(event: VoiceSignalEnvelope) {
     const from = event?.from;
     if (!from || from === localId) return;
     if (event.target && event.target !== localId) return;
     if (!supported) return;
 
     const signal = event.signal || {};
-    const previous = knownPlayers.get(from) || {};
+    const previous = knownPlayers.get(from);
     knownPlayers.set(from, {
       id: from,
-      nick: event.nick || previous.nick || "Player",
+      nick: event.nick || previous?.nick || "Player",
       voiceEnabled: true,
-      voiceMuted: previous.voiceMuted === true,
+      voiceMuted: previous?.voiceMuted === true,
     });
 
     const peer = ensurePeer(from, false);
@@ -391,9 +464,9 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
 
     try {
       if (signal.description) {
-        const description = signal.description;
+        const remoteDescription = signal.description;
 
-        if (description.type === "offer") {
+        if (remoteDescription.type === "offer") {
           const polite = !shouldInitiate(from);
           const offerCollision =
             peer.makingOffer || peer.pc.signalingState !== "stable";
@@ -402,26 +475,27 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
           if (offerCollision) {
             await Promise.all([
               peer.pc.setLocalDescription({ type: "rollback" }),
-              peer.pc.setRemoteDescription(description),
+              peer.pc.setRemoteDescription(remoteDescription),
             ]);
           } else {
-            await peer.pc.setRemoteDescription(description);
+            await peer.pc.setRemoteDescription(remoteDescription);
           }
           await flushCandidates(peer);
           const answer = await peer.pc.createAnswer();
           await peer.pc.setLocalDescription(answer);
-          sendSignal?.(from, {
-            description: serializeDescription(peer.pc.localDescription),
-          });
+          const answerDescription = serializeDescription(peer.pc.localDescription);
+          if (answerDescription) {
+            sendSignal?.(from, { description: answerDescription });
+          }
           markPeer(peer, "answering");
           return;
         }
 
         if (
-          description.type === "answer" &&
+          remoteDescription.type === "answer" &&
           peer.pc.signalingState === "have-local-offer"
         ) {
-          await peer.pc.setRemoteDescription(description);
+          await peer.pc.setRemoteDescription(remoteDescription);
           await flushCandidates(peer);
           markPeer(peer, "connecting");
           return;
@@ -485,7 +559,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     }
   }
 
-  function setMuted(nextMuted) {
+  function setMuted(nextMuted: boolean) {
     if (!localStream || !enabled) return;
     muted = !!nextMuted;
     for (const track of localStream.getAudioTracks()) {
@@ -495,7 +569,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function stop(options = {}) {
+  function stop(options: { notify?: boolean } = {}) {
     const notify = options.notify !== false;
     if (notify && enabled) sendReady?.({ enabled: false, muted: false });
 
@@ -521,7 +595,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     await Promise.allSettled(
       blockedPeers.map(async (peer) => {
         try {
-          await peer.audioEl.play();
+          await peer.audioEl?.play();
           peer.autoplayBlocked = false;
           if (peer.status === "blocked") peer.status = "connected";
         } catch {}
@@ -530,14 +604,14 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function handleReady(event) {
+  function handleReady(event: VoiceReadyEvent) {
     const id = event?.id;
     if (!id || id === localId) return;
 
-    const previous = knownPlayers.get(id) || {};
-    const next = {
+    const previous = knownPlayers.get(id);
+    const next: VoicePlayer = {
       id,
-      nick: event.nick || previous.nick || "Player",
+      nick: event.nick || previous?.nick || "Player",
       voiceEnabled: event.enabled === true,
       voiceMuted: event.muted === true,
     };
@@ -555,7 +629,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function setLocalId(id) {
+  function setLocalId(id: string) {
     localId = id || "";
     for (const playerId of Array.from(knownPlayers.keys())) {
       if (playerId === localId) knownPlayers.delete(playerId);
@@ -563,8 +637,8 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function syncPlayers(players = []) {
-    const seen = new Set();
+  function syncPlayers(players: Array<Partial<VoicePlayer>> = []) {
+    const seen = new Set<string>();
     for (const player of players) {
       const normalized = rememberPlayer(player);
       if (normalized) seen.add(normalized.id);
@@ -579,7 +653,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function addPlayer(player) {
+  function addPlayer(player: Partial<VoicePlayer>) {
     const normalized = rememberPlayer(player);
     if (normalized && enabled) {
       ensurePeer(normalized.id, shouldCallPlayer(normalized));
@@ -587,7 +661,7 @@ export function createVoiceChat({ onChange, sendReady, sendSignal } = {}) {
     emit();
   }
 
-  function removePlayer(id) {
+  function removePlayer(id: string) {
     knownPlayers.delete(id);
     closePeer(id);
     emit();

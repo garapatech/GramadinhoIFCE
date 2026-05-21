@@ -30,4 +30,3 @@ Preferencia de formato:
 - `src/features/game/engine.js` (M)
 - `src/features/game/minigames/espectro.js` (A)
 - `src/features/game/minigames/swimming.js` (A)
-

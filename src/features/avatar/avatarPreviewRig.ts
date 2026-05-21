@@ -1,10 +1,52 @@
-"use client";
-
-import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { avatarToGameAppearance } from "@/features/avatar/avatarConfig";
+import { avatarToGameAppearance, type Avatar } from "@/features/avatar/avatarConfig";
 
-function buildCharacter(app) {
+export type AvatarPreviewRefs = {
+  torso: THREE.Group;
+  head: THREE.Group;
+  leftShoulder: THREE.Group;
+  leftElbow: THREE.Group;
+  rightShoulder: THREE.Group;
+  rightElbow: THREE.Group;
+  leftHip: THREE.Group;
+  leftKnee: THREE.Group;
+  rightHip: THREE.Group;
+  rightKnee: THREE.Group;
+};
+
+export type AvatarPreviewRig = {
+  group: THREE.Group;
+  refs: AvatarPreviewRefs;
+  disposables: Array<THREE.BufferGeometry | THREE.Material>;
+};
+
+function markCastShadow(root: THREE.Object3D) {
+  root.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh) {
+      (obj as THREE.Mesh).castShadow = true;
+    }
+  });
+}
+
+function collectDisposables(root: THREE.Object3D) {
+  const disposables = new Set<THREE.BufferGeometry | THREE.Material>();
+
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry) disposables.add(mesh.geometry);
+    if (mesh.material) {
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach((material) => disposables.add(material));
+      } else {
+        disposables.add(mesh.material);
+      }
+    }
+  });
+
+  return Array.from(disposables);
+}
+
+function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): AvatarPreviewRig {
   const {
     shirtColor,
     pantsColor,
@@ -14,7 +56,7 @@ function buildCharacter(app) {
     hairColor,
     backpack,
     glasses,
-  } = app;
+  } = appearance;
 
   const root = new THREE.Group();
 
@@ -28,7 +70,10 @@ function buildCharacter(app) {
   const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
   const mouthMat = new THREE.MeshStandardMaterial({ color: 0x7f3030, roughness: 0.6 });
   const cheekMat = new THREE.MeshStandardMaterial({
-    color: 0xe08a8a, roughness: 1, transparent: true, opacity: 0.55
+    color: 0xe08a8a,
+    roughness: 1,
+    transparent: true,
+    opacity: 0.55,
   });
 
   const torso = new THREE.Group();
@@ -111,7 +156,6 @@ function buildCharacter(app) {
     head.add(bang);
   }
 
-  // Eyes
   const leftEyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), eyeWhiteMat);
   leftEyeWhite.position.set(-0.135, 0.055, 0.352);
   leftEyeWhite.scale.set(1.06, 0.9, 0.48);
@@ -126,7 +170,6 @@ function buildCharacter(app) {
   rightEye.position.x = 0.12;
   head.add(rightEye);
 
-  // Brows
   const browMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1 });
   const leftBrow = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.019, 0.018), browMat);
   leftBrow.position.set(-0.135, 0.155, 0.366);
@@ -137,20 +180,17 @@ function buildCharacter(app) {
   rightBrow.rotation.z = -0.12;
   head.add(rightBrow);
 
-  // Nose
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.07, 8), skinMat);
   nose.rotation.x = Math.PI / 2;
   nose.position.set(0, -0.018, 0.392);
   head.add(nose);
 
-  // Mouth
   const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.011, 8, 18, Math.PI), mouthMat);
   mouth.position.set(0, -0.135, 0.392);
   mouth.rotation.x = -0.08;
   mouth.scale.y = 0.72;
   head.add(mouth);
 
-  // Cheeks
   const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), cheekMat);
   leftCheek.position.set(-0.225, -0.075, 0.335);
   leftCheek.scale.set(1.12, 0.72, 0.32);
@@ -159,7 +199,6 @@ function buildCharacter(app) {
   rightCheek.position.x = 0.2;
   head.add(rightCheek);
 
-  // Ears
   const leftEar = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), skinMat);
   leftEar.scale.set(0.6, 1, 0.4);
   leftEar.position.set(-0.36, -0.01, 0.02);
@@ -169,9 +208,17 @@ function buildCharacter(app) {
   head.add(rightEar);
 
   if (glasses) {
-    const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5, metalness: 0.4 });
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1a,
+      roughness: 0.5,
+      metalness: 0.4,
+    });
     const lensMat = new THREE.MeshStandardMaterial({
-      color: 0xa9d8ef, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.55,
+      color: 0xa9d8ef,
+      roughness: 0.2,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.55,
     });
     const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 18);
     const leftLens = new THREE.Mesh(lensGeo, frameMat);
@@ -192,7 +239,7 @@ function buildCharacter(app) {
     head.add(bridge);
   }
 
-  function buildArm(side) {
+  function buildArm(side: "left" | "right") {
     const sign = side === "left" ? -1 : 1;
     const shoulder = new THREE.Group();
     shoulder.position.set(sign * 0.48, 0.88, 0);
@@ -226,7 +273,7 @@ function buildCharacter(app) {
     return { shoulder, elbow };
   }
 
-  function buildLeg(side) {
+  function buildLeg(side: "left" | "right") {
     const sign = side === "left" ? -1 : 1;
     const hip = new THREE.Group();
     hip.position.set(sign * 0.18, 1.05, 0);
@@ -262,12 +309,7 @@ function buildCharacter(app) {
   const leftLeg = buildLeg("left");
   const rightLeg = buildLeg("right");
 
-  // Materials/geos for disposal
-  const disposables = [];
-  root.traverse((obj) => {
-    if (obj.geometry) disposables.push(obj.geometry);
-    if (obj.material) disposables.push(obj.material);
-  });
+  markCastShadow(root);
 
   return {
     group: root,
@@ -283,11 +325,15 @@ function buildCharacter(app) {
       rightHip: rightLeg.hip,
       rightKnee: rightLeg.knee,
     },
-    disposables,
+    disposables: collectDisposables(root),
   };
 }
 
-function applyIdlePose(refs, time) {
+export function buildAvatarPreviewRig(avatar: Avatar): AvatarPreviewRig {
+  return buildCharacter(avatarToGameAppearance(avatar));
+}
+
+export function applyAvatarPreviewIdlePose(refs: AvatarPreviewRefs, time: number) {
   const breath = Math.sin(time * 1.6) * 0.05;
   refs.leftShoulder.rotation.x = -0.04 + breath * 0.35;
   refs.rightShoulder.rotation.x = -0.04 - breath * 0.35;
@@ -301,138 +347,6 @@ function applyIdlePose(refs, time) {
   refs.torso.position.y = 1.0 + Math.sin(time * 1.6) * 0.012;
 }
 
-export default function Avatar3DPreview({ avatar }) {
-  const mountRef = useRef(null);
-  const stateRef = useRef(null);
-  const avatarRef = useRef(avatar);
-
-  // Keep latest avatar accessible without rebuilding scene
-  avatarRef.current = avatar;
-
-  useEffect(() => {
-    const mount = mountRef.current;
-    if (!mount) return;
-
-    const width = mount.clientWidth || 240;
-    const height = mount.clientHeight || 320;
-
-    const scene = new THREE.Scene();
-    scene.background = null;
-
-    const camera = new THREE.PerspectiveCamera(26, width / height, 0.1, 50);
-    camera.position.set(0, 1.45, 7.2);
-    camera.lookAt(0, 1.05, 0);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(width, height);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    mount.appendChild(renderer.domElement);
-
-    // Lights
-    const hemi = new THREE.HemisphereLight(0xfff3d6, 0x6f9c7b, 0.85);
-    scene.add(hemi);
-    const key = new THREE.DirectionalLight(0xfff1cd, 1.0);
-    key.position.set(2.5, 4, 3);
-    key.castShadow = true;
-    key.shadow.mapSize.set(512, 512);
-    scene.add(key);
-    const rim = new THREE.DirectionalLight(0xbcd7ff, 0.45);
-    rim.position.set(-3, 2.5, -2.5);
-    scene.add(rim);
-
-    // Soft contact shadow
-    const shadowTex = (() => {
-      const size = 128;
-      const c = document.createElement("canvas");
-      c.width = c.height = size;
-      const ctx = c.getContext("2d");
-      const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-      g.addColorStop(0, "rgba(0,0,0,0.45)");
-      g.addColorStop(0.6, "rgba(0,0,0,0.12)");
-      g.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, size, size);
-      return new THREE.CanvasTexture(c);
-    })();
-    const shadow = new THREE.Mesh(
-      new THREE.PlaneGeometry(2, 1.1),
-      new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false })
-    );
-    shadow.rotation.x = -Math.PI / 2;
-    shadow.position.y = 0.01;
-    scene.add(shadow);
-
-    const rig = buildCharacter(avatarToGameAppearance(avatarRef.current));
-    rig.group.traverse((o) => {
-      if (o.isMesh) {
-        o.castShadow = true;
-      }
-    });
-    scene.add(rig.group);
-
-    const state = {
-      scene,
-      camera,
-      renderer,
-      mount,
-      rig,
-      lastAvatarKey: JSON.stringify(avatarRef.current),
-      stopped: false,
-      startTime: performance.now(),
-    };
-    stateRef.current = state;
-
-    function rebuildIfChanged() {
-      const key = JSON.stringify(avatarRef.current);
-      if (key === state.lastAvatarKey) return;
-      state.lastAvatarKey = key;
-      const oldRig = state.rig;
-      scene.remove(oldRig.group);
-      oldRig.disposables.forEach((d) => d.dispose?.());
-      const newRig = buildCharacter(avatarToGameAppearance(avatarRef.current));
-      newRig.group.traverse((o) => {
-        if (o.isMesh) o.castShadow = true;
-      });
-      scene.add(newRig.group);
-      state.rig = newRig;
-    }
-
-    function onResize() {
-      const w = mount.clientWidth || width;
-      const h = mount.clientHeight || height;
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    }
-    const ro = new ResizeObserver(onResize);
-    ro.observe(mount);
-
-    function tick() {
-      if (state.stopped) return;
-      rebuildIfChanged();
-      const t = (performance.now() - state.startTime) / 1000;
-      // Slow side-to-side rotation like a turntable
-      state.rig.group.rotation.y = Math.sin(t * 0.55) * 0.7;
-      applyIdlePose(state.rig.refs, t);
-      renderer.render(scene, camera);
-      state.raf = requestAnimationFrame(tick);
-    }
-    state.raf = requestAnimationFrame(tick);
-
-    return () => {
-      state.stopped = true;
-      cancelAnimationFrame(state.raf);
-      ro.disconnect();
-      state.rig.disposables.forEach((d) => d.dispose?.());
-      renderer.dispose();
-      if (renderer.domElement.parentNode === mount) {
-        mount.removeChild(renderer.domElement);
-      }
-    };
-  }, []);
-
-  return <div ref={mountRef} className="avatar-3d-stage" aria-hidden="true" />;
+export function disposeAvatarPreviewRig(rig: AvatarPreviewRig) {
+  rig.disposables.forEach((disposable) => disposable.dispose());
 }

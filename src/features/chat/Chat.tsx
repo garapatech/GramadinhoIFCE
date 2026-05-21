@@ -1,12 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import type { ChatMessage } from "@/shared/schemas/multiplayer";
 
 const STATUS_LABEL = {
   connecting: "conectando…",
   connected: "online",
   disconnected: "desconectado",
   error: "sem conexão",
+} as const;
+
+type ChatEntry = ChatMessage & {
+  key?: string;
+  likeCount?: number;
+};
+
+type ChatProps = {
+  messages: ChatEntry[];
+  onSend: (text: string) => boolean;
+  onReact?: (message: ChatEntry) => void;
+  onFocusChange?: (focused: boolean) => void;
+  connection: string;
+  myNick: string;
+  visible: boolean;
+  onToggleVisible?: () => void;
 };
 
 export default function Chat({
@@ -18,10 +35,10 @@ export default function Chat({
   myNick,
   visible,
   onToggleVisible,
-}) {
+}: ChatProps) {
   const [text, setText] = useState("");
-  const inputRef = useRef(null);
-  const listRef = useRef(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -30,10 +47,10 @@ export default function Chat({
   }, [messages, visible]);
 
   useEffect(() => {
-    function onKey(e) {
+    function onKey(e: globalThis.KeyboardEvent) {
       const isInChat = document.activeElement === inputRef.current;
       if (e.code === "KeyT" && !isInChat) {
-        if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+        if (e.target && (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) return;
         e.preventDefault();
         onToggleVisible?.();
         return;
@@ -45,21 +62,25 @@ export default function Chat({
         }
       }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+
+    window.addEventListener("keydown", onKey as EventListener);
+    return () => window.removeEventListener("keydown", onKey as EventListener);
   }, [onToggleVisible]);
 
-  function submit(e) {
-    e.preventDefault();
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     const ok = onSend(text);
     if (ok) setText("");
     inputRef.current?.blur();
   }
 
+  const connectionLabel =
+    STATUS_LABEL[connection as keyof typeof STATUS_LABEL] ?? connection;
+
   return (
     <div className={`chat${visible ? "" : " chat-min"}`}>
       <div className="chat-header">
-        <span className="chat-status">{STATUS_LABEL[connection] || connection}</span>
+        <span className="chat-status">{connectionLabel}</span>
         <button
           type="button"
           className="chat-toggle"
@@ -75,27 +96,30 @@ export default function Chat({
           ref={listRef}
           className={`chat-messages ${messages.length === 0 ? "empty" : ""}`}
         >
-          {messages.map((m, i) => {
-            const isSystem = m.id === "__system__";
-            const isYou = !isSystem && m.nick === myNick;
+          {messages.map((message, index) => {
+            const isSystem = message.id === "__system__";
+            const isYou = !isSystem && message.nick === myNick;
             return (
-              <div key={m.key || i} className={`chat-msg${isSystem ? " system" : ""}${isYou ? " you" : ""}`}>
+              <div
+                key={message.key || index}
+                className={`chat-msg${isSystem ? " system" : ""}${isYou ? " you" : ""}`}
+              >
                 <div className="chat-msg-line">
-                  <span className="nick">{isSystem ? "•" : m.nick}:</span>
-                  <span>{m.text}</span>
+                  <span className="nick">{isSystem ? "•" : message.nick}:</span>
+                  <span>{message.text}</span>
                 </div>
                 {!isSystem && (
                   <div className="chat-msg-actions">
                     <button
                       type="button"
                       className="chat-react"
-                      onClick={() => onReact?.(m)}
+                      onClick={() => onReact?.(message)}
                       title="Curtir esta mensagem"
                     >
                       👍 Curtir
                     </button>
-                    <span className={`chat-like-count${m.likeCount ? " active" : ""}`}>
-                      {m.likeCount ? `+${m.likeCount}` : "0"}
+                    <span className={`chat-like-count${message.likeCount ? " active" : ""}`}>
+                      {message.likeCount ? `+${message.likeCount}` : "0"}
                     </span>
                   </div>
                 )}
@@ -111,12 +135,12 @@ export default function Chat({
           className="chat-input"
           placeholder={visible ? "Aperte Enter para conversar…" : "Digite e Enter (chat oculto)"}
           value={text}
-          onChange={(e) => setText(e.target.value.slice(0, 240))}
+          onChange={(event) => setText(event.target.value.slice(0, 240))}
           onFocus={() => onFocusChange?.(true)}
           onBlur={() => onFocusChange?.(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.currentTarget.blur();
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.currentTarget.blur();
             }
           }}
           maxLength={240}

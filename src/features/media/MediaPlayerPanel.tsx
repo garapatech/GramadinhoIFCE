@@ -1,15 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { resolveMediaEmbed } from "@/features/media/mediaEmbeds";
+import {
+  resolveMediaEmbed,
+  type MediaEmbedSuccess,
+} from "@/features/media/mediaEmbeds";
 
 const STORAGE_KEY = "gramadinho.media.url";
 
-export default function MediaPlayerPanel({ open, onClose, onFocusChange }) {
-  const panelRef = useRef(null);
-  const inputRef = useRef(null);
+type MediaPlayerPanelProps = {
+  open: boolean;
+  onClose?: () => void;
+  onFocusChange?: (focused: boolean) => void;
+};
+
+export default function MediaPlayerPanel({
+  open,
+  onClose,
+  onFocusChange,
+}: MediaPlayerPanelProps) {
+  const panelRef = useRef<HTMLElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [draftUrl, setDraftUrl] = useState("");
-  const [media, setMedia] = useState(null);
+  const [media, setMedia] = useState<MediaEmbedSuccess | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -23,7 +36,7 @@ export default function MediaPlayerPanel({ open, onClose, onFocusChange }) {
       setMedia(resolved);
       setError("");
     } else {
-      setError(resolved.reason);
+      setError("reason" in resolved ? resolved.reason : "");
     }
   }, []);
 
@@ -44,7 +57,7 @@ export default function MediaPlayerPanel({ open, onClose, onFocusChange }) {
   useEffect(() => {
     if (!open) return undefined;
 
-    function onKeyDown(event) {
+    function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
         onClose?.();
@@ -55,11 +68,11 @@ export default function MediaPlayerPanel({ open, onClose, onFocusChange }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  function handleSubmit(event) {
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const resolved = resolveMediaEmbed(draftUrl);
     if (!resolved.ok) {
-      setError(resolved.reason);
+      setError("reason" in resolved ? resolved.reason : "");
       return;
     }
 
@@ -170,9 +183,7 @@ export default function MediaPlayerPanel({ open, onClose, onFocusChange }) {
       ) : (
         <div className="media-empty">
           <strong>Nada tocando agora.</strong>
-          <span>
-            Interaja com a radio, cole a URL e carregue o player.
-          </span>
+          <span>Interaja com a radio, cole a URL e carregue o player.</span>
         </div>
       )}
     </aside>

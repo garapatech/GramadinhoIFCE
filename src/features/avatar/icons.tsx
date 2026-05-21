@@ -1,3 +1,5 @@
+import type { SVGProps } from "react";
+
 const baseProps = {
   width: "1em",
   height: "1em",
@@ -7,9 +9,11 @@ const baseProps = {
   strokeWidth: 1.8,
   strokeLinecap: "round",
   strokeLinejoin: "round",
-};
+} as const satisfies SVGProps<SVGSVGElement>;
 
-export function ShirtIcon(props) {
+type IconProps = SVGProps<SVGSVGElement>;
+
+export function ShirtIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M8 3l-5 3 2 4 3-1v12h12V9l3 1 2-4-5-3-3 2h-6L8 3z" />
@@ -17,7 +21,7 @@ export function ShirtIcon(props) {
   );
 }
 
-export function PantsIcon(props) {
+export function PantsIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M5 3h14l-1 8-1 10h-4l-1-9-1 9H7L6 11 5 3z" />
@@ -26,7 +30,7 @@ export function PantsIcon(props) {
   );
 }
 
-export function ShoesIcon(props) {
+export function ShoesIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M2 16c0-1 1-2 2-2h3l3-5 4 2v3l6 2c1 .3 2 1 2 2v1H2v-3z" />
@@ -35,7 +39,7 @@ export function ShoesIcon(props) {
   );
 }
 
-export function SkinIcon(props) {
+export function SkinIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <circle cx="12" cy="9" r="4" />
@@ -44,7 +48,7 @@ export function SkinIcon(props) {
   );
 }
 
-export function HairIcon(props) {
+export function HairIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M4 14c0-5 4-9 8-9s8 4 8 9" />
@@ -54,7 +58,7 @@ export function HairIcon(props) {
   );
 }
 
-export function BackpackIcon(props) {
+export function BackpackIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M6 8a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8z" />
@@ -64,7 +68,7 @@ export function BackpackIcon(props) {
   );
 }
 
-export function GlassesIcon(props) {
+export function GlassesIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <circle cx="6.5" cy="14" r="3.5" />
@@ -75,7 +79,7 @@ export function GlassesIcon(props) {
   );
 }
 
-export function PaletteIcon(props) {
+export function PaletteIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 2-2 0-1.5-1-2-1-3 0-1 1-2 2-2h2a4 4 0 0 0 4-4 9 9 0 0 0-9-7z" />
@@ -86,7 +90,7 @@ export function PaletteIcon(props) {
   );
 }
 
-export function SparkleIcon(props) {
+export function SparkleIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" />
@@ -95,7 +99,7 @@ export function SparkleIcon(props) {
   );
 }
 
-export function CloseIcon(props) {
+export function CloseIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <path d="M6 6l12 12M18 6L6 18" />

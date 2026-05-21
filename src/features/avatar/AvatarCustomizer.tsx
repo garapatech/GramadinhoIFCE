@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { useEffect, useState, type CSSProperties, type ComponentType } from "react";
+import type { Avatar } from "@/features/avatar/avatarConfig";
 import {
   ShirtIcon,
   PantsIcon,
@@ -20,7 +21,22 @@ const Avatar3DPreview = dynamic(
   { ssr: false, loading: () => <div className="avatar-3d-stage" /> }
 );
 
-const COLOR_FIELDS = [
+type AvatarFieldKey = "shirt" | "pants" | "shoes" | "skin" | "hair" | "backpack";
+
+type AvatarField = {
+  key: AvatarFieldKey;
+  label: string;
+  Icon: ComponentType<{ className?: string }>;
+  palette: string[];
+};
+
+type AvatarCustomizerProps = {
+  avatar: Avatar;
+  onChange?: (avatar: Avatar) => void;
+  onClose?: () => void;
+};
+
+const COLOR_FIELDS: AvatarField[] = [
   {
     key: "shirt",
     label: "Camisa",
@@ -62,15 +78,16 @@ const COLOR_FIELDS = [
 const TABS = [
   { id: "look", label: "Visual", Icon: PaletteIcon },
   { id: "extras", label: "Extras", Icon: SparkleIcon },
-];
+] as const;
 
-export default function AvatarCustomizer({ avatar, onChange, onClose }) {
-  const [tab, setTab] = useState("look");
+export default function AvatarCustomizer({ avatar, onChange, onClose }: AvatarCustomizerProps) {
+  const [tab, setTab] = useState<"look" | "extras">("look");
 
   useEffect(() => {
-    function onKey(e) {
+    function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose?.();
     }
+
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -80,7 +97,7 @@ export default function AvatarCustomizer({ avatar, onChange, onClose }) {
     };
   }, [onClose]);
 
-  function updateField(key, value) {
+  function updateField<K extends keyof Avatar>(key: K, value: Avatar[K]) {
     onChange?.({
       ...avatar,
       [key]: value,
@@ -136,42 +153,43 @@ export default function AvatarCustomizer({ avatar, onChange, onClose }) {
                 <div className="avatar-fields">
                   {COLOR_FIELDS.map((field) => {
                     const FieldIcon = field.Icon;
+                    const color = avatar[field.key];
                     return (
-                    <div key={field.key} className="avatar-field">
-                      <div className="avatar-field-row">
-                        <span className="avatar-field-icon" aria-hidden="true">
-                          <FieldIcon />
-                        </span>
-                        <span className="avatar-field-label">{field.label}</span>
-                        <label
-                          className="avatar-field-picker"
-                          style={{ background: avatar[field.key] }}
-                          title="Cor personalizada"
-                        >
-                          <input
-                            className="avatar-color-input"
-                            type="color"
-                            value={avatar[field.key]}
-                            onChange={(e) => updateField(field.key, e.target.value)}
-                          />
-                        </label>
-                      </div>
-                      <div className="avatar-swatches">
-                        {field.palette.map((color) => {
-                          const selected = avatar[field.key].toLowerCase() === color.toLowerCase();
-                          return (
-                            <button
-                              type="button"
-                              key={color}
-                              className={`avatar-swatch ${selected ? "is-selected" : ""}`}
-                              style={{ background: color }}
-                              onClick={() => updateField(field.key, color)}
-                              aria-label={`${field.label} ${color}`}
+                      <div key={field.key} className="avatar-field">
+                        <div className="avatar-field-row">
+                          <span className="avatar-field-icon" aria-hidden="true">
+                            <FieldIcon />
+                          </span>
+                          <span className="avatar-field-label">{field.label}</span>
+                          <label
+                            className="avatar-field-picker"
+                            style={{ background: color } as CSSProperties}
+                            title="Cor personalizada"
+                          >
+                            <input
+                              className="avatar-color-input"
+                              type="color"
+                              value={color}
+                              onChange={(e) => updateField(field.key, e.target.value)}
                             />
-                          );
-                        })}
+                          </label>
+                        </div>
+                        <div className="avatar-swatches">
+                          {field.palette.map((paletteColor) => {
+                            const selected = color.toLowerCase() === paletteColor.toLowerCase();
+                            return (
+                              <button
+                                type="button"
+                                key={paletteColor}
+                                className={`avatar-swatch ${selected ? "is-selected" : ""}`}
+                                style={{ background: paletteColor }}
+                                onClick={() => updateField(field.key, paletteColor)}
+                                aria-label={`${field.label} ${paletteColor}`}
+                              />
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
                     );
                   })}
                 </div>

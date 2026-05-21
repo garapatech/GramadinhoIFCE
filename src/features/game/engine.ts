@@ -1,29 +1,105 @@
 import * as THREE from "three";
 import { avatarToGameAppearance } from "@/features/avatar/avatarConfig";
+import { getAtmosphereState, getAtmosphereStateKey, type AtmosphereState } from "@/game/atmosphere";
+import { createCameraController } from "@/game/camera";
+import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
 import { createEspectroEvent } from "@/features/game/minigames/espectro";
 import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
+import type {
+  Blocker,
+  BlockerOptions,
+  BootGameOptions,
+  MobileInput,
+  MobileInputUpdate,
+  ReactionOptions,
+  SitOptions,
+} from "@/features/game/engineTypes";
+import { createGateCheckpoint } from "@/features/game/gateCheckpoint";
+import { createDevTools } from "@/game/devtools";
+import { createGameInputBindings } from "@/features/game/inputBindings";
+import { createSpeechOverlay } from "@/features/game/overlay";
+import { createNpcSync } from "@/features/game/npcSync";
+import { renderMinimap } from "@/game/minimap";
+import { createWeatherSystem } from "@/game/weather";
+import { getCampusSurfaceAt } from "@/game/world/campusSurface";
+import { createWorldSpatialHelpers, getDistance2D } from "@/game/world/spatial";
+import {
+  CAMPUS_ENTRY_X,
+  CAMPUS_ENTRY_Z,
+  CAMPUS_ENTRY_WIDTH,
+  CAMPUS_SPAWN,
+  CAMPUS_WALL_HEIGHT,
+  CAMPUS_WALL_LIMIT,
+  CAMPUS_WALL_THICKNESS,
+  campusArena,
+  campusBuildings,
+  campusPaths,
+} from "@/game/world/campusLayout";
+import {
+  destroyGameAudio,
+  ensureAmbientAudio,
+  playBusArrivalSound,
+  playFootstepSound,
+  playParanormalSound,
+  playPoolWaterSound,
+  playSwimStrokeSound,
+  readAmbientAudioState,
+  resetGameAudio,
+  toggleAmbientAudio as toggleGameAmbientAudio,
+  updateAmbientAudio,
+} from "@/game/audio";
+import {
+  createBusSignTexture,
+  createCampusBannerTexture,
+  createGrassTexture,
+  createNoticeTexture,
+  createWindowTexture,
+} from "@/game/campusTextures";
+import {
+  animateCelebrate,
+  animateDance,
+  animateGlitch,
+  animateRun,
+  animateSixSeven,
+  animateWalk,
+  createCharacter,
+  resetRigPose,
+  setCrouchPose,
+  setRestPose,
+  setSittingPose,
+} from "@/game/characterRig";
+import {
+  formatSeconds,
+  getNearestCameraFocusTarget,
+  getNearestInteractable,
+  getNearestTarget,
+  getNoTargetStatus,
+  getRidingBikeStatus,
+  getTargetStatus,
+} from "@/game/playerInteractions";
 
-export function bootGame(opts = {}) {
+const asFunction = (candidate) => (typeof candidate === "function" ? candidate : null);
+const asHandler = (candidate, fallback = () => {}) => asFunction(candidate) || fallback;
+
+export function bootGame(opts: BootGameOptions = {}) {
   const container = opts.container;
   if (!container) throw new Error("bootGame: container is required");
   const localNickname = opts.nickname || "Visitante";
-  const onLocalState = typeof opts.onLocalState === "function" ? opts.onLocalState : () => {};
-  const onLocalEntityState =
-    typeof opts.onLocalEntityState === "function" ? opts.onLocalEntityState : () => {};
-  const onNpcState = typeof opts.onNpcState === "function" ? opts.onNpcState : () => {};
-  const onAtmosphereChange = typeof opts.onAtmosphereChange === "function" ? opts.onAtmosphereChange : () => {};
-  const onCameraModeChange = typeof opts.onCameraModeChange === "function" ? opts.onCameraModeChange : () => {};
-  const onAudioStateChange = typeof opts.onAudioStateChange === "function" ? opts.onAudioStateChange : () => {};
-  const onPlayerStateChange = typeof opts.onPlayerStateChange === "function" ? opts.onPlayerStateChange : () => {};
-  const onEmote = typeof opts.onEmote === "function" ? opts.onEmote : () => {};
-  const onMediaBoothInteract = typeof opts.onMediaBoothInteract === "function" ? opts.onMediaBoothInteract : () => {};
-  const onPvpThrow = typeof opts.onPvpThrow === "function" ? opts.onPvpThrow : () => {};
-  const onPvpHit = typeof opts.onPvpHit === "function" ? opts.onPvpHit : () => {};
-  const onEspectroConsumed = typeof opts.onEspectroConsumed === "function" ? opts.onEspectroConsumed : () => {};
-  const onSecretDisconnect =
-    typeof opts.onSecretDisconnect === "function" ? opts.onSecretDisconnect : () => {};
-  const shouldIgnoreKeys = typeof opts.shouldIgnoreKeys === "function" ? opts.shouldIgnoreKeys : () => false;
-  const getWorldTime = typeof opts.getWorldTime === "function" ? opts.getWorldTime : null;
+  const onLocalState = asHandler(opts.onLocalState);
+  const onLocalEntityState = asHandler(opts.onLocalEntityState);
+  const onNpcState = asHandler(opts.onNpcState);
+  const onAtmosphereChange = asHandler(opts.onAtmosphereChange);
+  const onCameraModeChange = asHandler(opts.onCameraModeChange);
+  const onAudioStateChange = asHandler(opts.onAudioStateChange);
+  const onPlayerStateChange = asHandler(opts.onPlayerStateChange);
+  const onEmote = asHandler(opts.onEmote);
+  const onMediaBoothInteract = asHandler(opts.onMediaBoothInteract);
+  const onPvpThrow = asHandler(opts.onPvpThrow);
+  const onPvpHit = asHandler(opts.onPvpHit);
+  const onEspectroConsumed = asHandler(opts.onEspectroConsumed);
+  const onSecretDisconnect = asHandler(opts.onSecretDisconnect);
+  const shouldIgnoreKeys = asHandler(opts.shouldIgnoreKeys, () => false);
+  const getWorldTime = asFunction(opts.getWorldTime);
   const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
 
   const canvas = container.querySelector('[data-game="scene"]');
@@ -34,6 +110,14 @@ export function bootGame(opts = {}) {
   const speechHintEl = container.querySelector('[data-game="speech-hint"]');
   const minimapCanvas = container.querySelector('[data-game="minimap-canvas"]');
   const minimapCtx = minimapCanvas ? minimapCanvas.getContext("2d") : null;
+  const speechOverlay = createSpeechOverlay({
+    statusEl,
+    speechEl,
+    speechBodyEl,
+    speechNameEl,
+    speechHintEl,
+    pushBubble,
+  });
 
   const errorHandler = (event) => {
     if (statusEl) {
@@ -44,602 +128,40 @@ export function bootGame(opts = {}) {
   };
   window.addEventListener("error", errorHandler);
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xa7d7f7);
-scene.fog = new THREE.Fog(0xa7d7f7, 45, 180);
+  resetGameAudio();
 
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  powerPreference: "high-performance"
-});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-renderer.setClearColor(0xa7d7f7, 1);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFShadowMap;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xa7d7f7);
+  scene.fog = new THREE.Fog(0xa7d7f7, 45, 180);
+
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    antialias: true,
+    powerPreference: "high-performance"
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer.setClearColor(0xa7d7f7, 1);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500);
 camera.position.set(-22, 18, 54);
-let cameraMode = "follow";
-let cameraOrbitYaw = Math.PI / 4;
-let cameraOrbitPitch = 0.68;
-let cameraOrbitDistance = 28.5;
-let cameraDragActive = false;
-let cameraDragX = 0;
-let cameraDragY = 0;
-let cameraFocusTarget = null;
-let ambientAudioEnabled = true;
-let audioContext = null;
-let audioMasterGain = null;
-let audioWindSource = null;
-let audioWindFilter = null;
-let audioWindGain = null;
-let audioMurmurSource = null;
-let audioMurmurFilter = null;
-let audioMurmurGain = null;
-let audioRadioSource = null;
-let audioRadioFilter = null;
-let audioRadioGain = null;
-let audioNextBirdAt = 0;
-let audioNextRadioAt = 0;
-let audioFootstepSide = 1;
 let audioStateKey = "";
-
-function emitCameraModeChange() {
-  onCameraModeChange({
-    mode: cameraMode,
-    label: cameraMode === "follow" ? "travada" : "livre",
-    focusLabel: cameraMode === "orbit" && cameraFocusTarget ? cameraFocusTarget.label : "",
-  });
-}
-
-function clearCameraFocus() {
-  if (!cameraFocusTarget) return;
-  cameraFocusTarget = null;
-  emitCameraModeChange();
-}
-
-function setCameraFocus(target) {
-  if (!target) {
-    clearCameraFocus();
-    return;
-  }
-
-  const nextFocus = {
-    kind: target.kind,
-    id: target.id || "",
-    position: target.position,
-    label: target.label || "Alvo",
-  };
-
-  if (
-    cameraFocusTarget &&
-    cameraFocusTarget.kind === nextFocus.kind &&
-    cameraFocusTarget.id === nextFocus.id &&
-    cameraFocusTarget.position === nextFocus.position &&
-    cameraFocusTarget.label === nextFocus.label
-  ) {
-    return;
-  }
-
-  cameraFocusTarget = nextFocus;
-  emitCameraModeChange();
-}
-
-function getCameraOrbitCenter() {
-  if (cameraMode !== "orbit") return player.position;
-  if (!cameraFocusTarget) return player.position;
-  if (cameraFocusTarget.kind === "remote" && !remotePlayers.has(cameraFocusTarget.id)) {
-    clearCameraFocus();
-    return player.position;
-  }
-  return cameraFocusTarget.position || player.position;
-}
+const cameraController = createCameraController(onCameraModeChange);
 
 function emitAudioStateChange() {
-  const audioState = {
-    enabled: ambientAudioEnabled,
-    label: ambientAudioEnabled ? "ativo" : "desligado",
-  };
+  const audioState = readAmbientAudioState();
   const audioKey = `${audioState.enabled}:${audioState.label}`;
   if (audioKey === audioStateKey) return;
   audioStateKey = audioKey;
   onAudioStateChange(audioState);
 }
 
-function setCameraMode(nextMode) {
-  if (cameraMode === nextMode) return;
-  cameraMode = nextMode;
-  cameraDragActive = false;
-  if (cameraMode !== "orbit") {
-    clearCameraFocus();
-  } else {
-    emitCameraModeChange();
-  }
-}
-
-function toggleCameraMode() {
-  setCameraMode(cameraMode === "follow" ? "orbit" : "follow");
-}
-
-emitCameraModeChange();
-emitAudioStateChange();
-
-function disconnectAudioNode(node) {
-  if (!node) return;
-  try {
-    node.disconnect?.();
-  } catch {}
-}
-
-function stopAudioNode(node) {
-  if (!node) return;
-  try {
-    node.stop?.();
-  } catch {}
-  disconnectAudioNode(node);
-}
-
-function createNoiseBuffer(context, durationSeconds = 2) {
-  const length = Math.max(1, Math.floor(context.sampleRate * durationSeconds));
-  const buffer = context.createBuffer(1, length, context.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < length; i += 1) {
-    data[i] = Math.random() * 2 - 1;
-  }
-  return buffer;
-}
-
-function createAmbientLayer(context, filterType, frequency, q, baseGain) {
-  const source = context.createBufferSource();
-  source.buffer = createNoiseBuffer(context, 2.5);
-  source.loop = true;
-
-  const filter = context.createBiquadFilter();
-  filter.type = filterType;
-  filter.frequency.value = frequency;
-  filter.Q.value = q;
-
-  const gain = context.createGain();
-  gain.gain.value = baseGain;
-
-  source.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioMasterGain);
-  source.start();
-
-  return { source, filter, gain };
-}
-
-function ensureAmbientAudio() {
-  if (!ambientAudioEnabled) return false;
-  if (!audioContext) {
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextCtor) return false;
-    try {
-      audioContext = new AudioContextCtor();
-    } catch {
-      return false;
-    }
-    audioMasterGain = audioContext.createGain();
-    audioMasterGain.gain.value = 0.0;
-    audioMasterGain.connect(audioContext.destination);
-  }
-
-  if (!audioWindSource) {
-    const windLayer = createAmbientLayer(audioContext, "bandpass", 280, 0.85, 0.001);
-    audioWindSource = windLayer.source;
-    audioWindFilter = windLayer.filter;
-    audioWindGain = windLayer.gain;
-  }
-
-  if (!audioMurmurSource) {
-    const murmurLayer = createAmbientLayer(audioContext, "lowpass", 820, 0.45, 0.0006);
-    audioMurmurSource = murmurLayer.source;
-    audioMurmurFilter = murmurLayer.filter;
-    audioMurmurGain = murmurLayer.gain;
-  }
-
-  if (!audioRadioSource) {
-    const radioLayer = createAmbientLayer(audioContext, "bandpass", 1180, 1.25, 0.00018);
-    audioRadioSource = radioLayer.source;
-    audioRadioFilter = radioLayer.filter;
-    audioRadioGain = radioLayer.gain;
-  }
-
-  if (audioContext.state === "suspended") {
-    audioContext.resume().catch(() => {});
-  }
-
-  audioMasterGain.gain.setTargetAtTime(0.42, audioContext.currentTime, 0.08);
-  if (audioNextBirdAt <= 0) {
-    audioNextBirdAt = audioContext.currentTime + 1.5;
-  }
-  if (audioNextRadioAt <= 0) {
-    audioNextRadioAt = audioContext.currentTime + rand(9, 18);
-  }
-  return true;
-}
-
-function chirpBird(now, strength) {
-  if (!audioContext || !audioMasterGain) return;
-  const osc = audioContext.createOscillator();
-  osc.type = "triangle";
-  const filter = audioContext.createBiquadFilter();
-  filter.type = "highpass";
-  filter.frequency.value = 1300;
-  const gain = audioContext.createGain();
-  const peak = 0.018 + strength * 0.018;
-
-  osc.frequency.setValueAtTime(1620 + Math.random() * 720, now);
-  osc.frequency.exponentialRampToValueAtTime(1200 + Math.random() * 420, now + 0.11);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(peak, now + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
-
-  osc.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioMasterGain);
-  osc.start(now);
-  osc.stop(now + 0.22);
-  osc.onended = () => {
-    disconnectAudioNode(osc);
-    disconnectAudioNode(filter);
-    disconnectAudioNode(gain);
-  };
-}
-
-function playFootstepSound(surface, running = false) {
-  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
-
-  const now = audioContext.currentTime;
-  const config = surface === "corridor"
-    ? { filterType: "bandpass", frequency: 920, q: 1.15, duration: 0.16, noiseGain: 0.013, thumpGain: 0.010, thumpFrequency: 124, highpass: 240 }
-    : surface === "cement"
-      ? { filterType: "highpass", frequency: 1450, q: 0.55, duration: 0.11, noiseGain: 0.016, thumpGain: 0.014, thumpFrequency: 92, highpass: 340 }
-      : { filterType: "bandpass", frequency: 560, q: 0.82, duration: 0.15, noiseGain: 0.011, thumpGain: 0.008, thumpFrequency: 108, highpass: 180 };
-
-  const stepSource = audioContext.createBufferSource();
-  stepSource.buffer = createNoiseBuffer(audioContext, config.duration);
-
-  const stepFilter = audioContext.createBiquadFilter();
-  stepFilter.type = config.filterType;
-  stepFilter.frequency.value = config.frequency;
-  stepFilter.Q.value = config.q;
-
-  const stepGain = audioContext.createGain();
-  const peak = config.noiseGain * (running ? 1.28 : 1.0);
-  stepGain.gain.setValueAtTime(0.0001, now);
-  stepGain.gain.exponentialRampToValueAtTime(peak, now + 0.015);
-  stepGain.gain.exponentialRampToValueAtTime(0.0001, now + config.duration);
-
-  const thump = audioContext.createOscillator();
-  thump.type = "sine";
-  thump.frequency.setValueAtTime(config.thumpFrequency + (running ? 12 : 0), now);
-  thump.frequency.exponentialRampToValueAtTime(Math.max(40, config.thumpFrequency * 0.72), now + 0.06);
-
-  const thumpGain = audioContext.createGain();
-  thumpGain.gain.setValueAtTime(0.0001, now);
-  thumpGain.gain.exponentialRampToValueAtTime(config.thumpGain * (running ? 1.1 : 1), now + 0.01);
-  thumpGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.085);
-
-  const pan = audioContext.createStereoPanner?.();
-  if (pan) {
-    audioFootstepSide *= -1;
-    pan.pan.value = audioFootstepSide * (running ? 0.18 : 0.12);
-  }
-
-  const stepOutput = pan || stepGain;
-  stepSource.connect(stepFilter);
-  stepFilter.connect(stepGain);
-  stepGain.connect(stepOutput === stepGain ? audioMasterGain : stepOutput);
-  if (pan) {
-    pan.connect(audioMasterGain);
-  }
-  thump.connect(thumpGain);
-  thumpGain.connect(audioMasterGain);
-
-  stepSource.start(now);
-  stepSource.stop(now + config.duration + 0.02);
-  thump.start(now);
-  thump.stop(now + 0.1);
-
-  stepSource.onended = () => {
-    disconnectAudioNode(stepSource);
-    disconnectAudioNode(stepFilter);
-    disconnectAudioNode(stepGain);
-    if (pan) disconnectAudioNode(pan);
-  };
-  thump.onended = () => {
-    disconnectAudioNode(thump);
-    disconnectAudioNode(thumpGain);
-  };
-}
-
-function playBusArrivalSound(strength = 1) {
-  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
-
-  const now = audioContext.currentTime;
-  const busGain = audioContext.createGain();
-  busGain.gain.setValueAtTime(0.0001, now);
-  busGain.gain.exponentialRampToValueAtTime(0.018 + strength * 0.014, now + 0.04);
-  busGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
-
-  const rumble = audioContext.createOscillator();
-  rumble.type = "sawtooth";
-  rumble.frequency.setValueAtTime(58 + strength * 6, now);
-  rumble.frequency.exponentialRampToValueAtTime(34 + strength * 3, now + 0.5);
-
-  const rumbleFilter = audioContext.createBiquadFilter();
-  rumbleFilter.type = "lowpass";
-  rumbleFilter.frequency.value = 170;
-  rumbleFilter.Q.value = 0.8;
-
-  const hiss = audioContext.createBufferSource();
-  hiss.buffer = createNoiseBuffer(audioContext, 0.45);
-
-  const hissFilter = audioContext.createBiquadFilter();
-  hissFilter.type = "bandpass";
-  hissFilter.frequency.value = 1380;
-  hissFilter.Q.value = 0.95;
-
-  const hissGain = audioContext.createGain();
-  hissGain.gain.setValueAtTime(0.0001, now);
-  hissGain.gain.exponentialRampToValueAtTime(0.009 + strength * 0.007, now + 0.03);
-  hissGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
-
-  const pan = audioContext.createStereoPanner?.();
-  if (pan) {
-    pan.pan.value = Math.max(-0.2, Math.min(0.2, (Math.random() * 0.4 - 0.2) * strength));
-  }
-
-  const output = pan || busGain;
-  rumble.connect(rumbleFilter);
-  rumbleFilter.connect(busGain);
-  busGain.connect(output === busGain ? audioMasterGain : output);
-  if (pan) {
-    pan.connect(audioMasterGain);
-  }
-
-  hiss.connect(hissFilter);
-  hissFilter.connect(hissGain);
-  hissGain.connect(audioMasterGain);
-
-  rumble.start(now);
-  rumble.stop(now + 0.7);
-  hiss.start(now + 0.02);
-  hiss.stop(now + 0.34);
-
-  rumble.onended = () => {
-    disconnectAudioNode(rumble);
-    disconnectAudioNode(rumbleFilter);
-    disconnectAudioNode(busGain);
-    if (pan) disconnectAudioNode(pan);
-  };
-  hiss.onended = () => {
-    disconnectAudioNode(hiss);
-    disconnectAudioNode(hissFilter);
-    disconnectAudioNode(hissGain);
-  };
-}
-
-function playPoolWaterSound(strength = 0.45) {
-  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
-
-  const now = audioContext.currentTime;
-  const source = audioContext.createBufferSource();
-  source.buffer = createNoiseBuffer(audioContext, 0.42);
-
-  const filter = audioContext.createBiquadFilter();
-  filter.type = "bandpass";
-  filter.frequency.value = 620 + strength * 430;
-  filter.Q.value = 0.62;
-
-  const gain = audioContext.createGain();
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.006 + strength * 0.012, now + 0.05);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
-
-  source.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioMasterGain);
-  source.start(now);
-  source.stop(now + 0.46);
-  source.onended = () => {
-    disconnectAudioNode(source);
-    disconnectAudioNode(filter);
-    disconnectAudioNode(gain);
-  };
-}
-
-function playSwimStrokeSound(strength = 0.5) {
-  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
-  playPoolWaterSound(0.72 + strength * 0.35);
-}
-
-function playParanormalSound(strength = 0.5) {
-  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
-
-  const now = audioContext.currentTime;
-  const gain = audioContext.createGain();
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.011 + strength * 0.028, now + 0.04);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
-
-  const low = audioContext.createOscillator();
-  low.type = "sawtooth";
-  low.frequency.setValueAtTime(43 + strength * 12, now);
-  low.frequency.exponentialRampToValueAtTime(31 + strength * 8, now + 1.0);
-
-  const bend = audioContext.createOscillator();
-  bend.type = "sine";
-  bend.frequency.setValueAtTime(212 + Math.random() * 90, now);
-  bend.frequency.exponentialRampToValueAtTime(96 + Math.random() * 32, now + 0.72);
-
-  const filter = audioContext.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.value = 380 + strength * 160;
-  filter.Q.value = 1.6;
-
-  low.connect(filter);
-  bend.connect(filter);
-  filter.connect(gain);
-  gain.connect(audioMasterGain);
-  low.start(now);
-  bend.start(now + 0.03);
-  low.stop(now + 1.25);
-  bend.stop(now + 0.95);
-  low.onended = () => {
-    disconnectAudioNode(low);
-    disconnectAudioNode(bend);
-    disconnectAudioNode(filter);
-    disconnectAudioNode(gain);
-  };
-}
-
-function playCampusRadioJingle(now, intensity = 1) {
-  if (!audioContext || !audioMasterGain) return;
-
-  const notes = [659.25, 783.99, 988.0];
-  const durations = [0.08, 0.09, 0.12];
-  let start = now;
-  for (let i = 0; i < notes.length; i += 1) {
-    const osc = audioContext.createOscillator();
-    osc.type = "square";
-    osc.frequency.setValueAtTime(notes[i], start);
-    osc.frequency.exponentialRampToValueAtTime(notes[i] * 1.02, start + durations[i] * 0.8);
-
-    const filter = audioContext.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = 980 + i * 260;
-    filter.Q.value = 1.3;
-
-    const gain = audioContext.createGain();
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.010 + intensity * 0.004, start + 0.018);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + durations[i]);
-
-    osc.connect(filter);
-    filter.connect(gain);
-    gain.connect(audioMasterGain);
-    osc.start(start);
-    osc.stop(start + durations[i] + 0.02);
-
-    osc.onended = () => {
-      disconnectAudioNode(osc);
-      disconnectAudioNode(filter);
-      disconnectAudioNode(gain);
-    };
-
-    start += durations[i] + 0.035;
-  }
-}
-
-function updateAmbientAudio(time, state) {
-  if (!ambientAudioEnabled) return;
-  ensureAmbientAudio();
-  if (!audioContext || audioContext.state !== "running") return;
-
-  const now = audioContext.currentTime;
-  const daylight = state.daylight;
-  const weather = state.weather || {};
-  const windLevel = 0.004 + weather.wind * 0.02 + weather.cloudMix * 0.003 + weather.rain * 0.006;
-  const murmurLevel = state.label === "fim de aula"
-    ? 0.009
-    : daylight > 0.35
-      ? 0.004 + weather.cloudMix * 0.0025
-      : 0.0025;
-
-  if (audioWindGain) {
-    audioWindGain.gain.setTargetAtTime(windLevel, now, 0.12);
-  }
-
-  if (audioWindFilter) {
-    audioWindFilter.frequency.setTargetAtTime(220 + weather.wind * 110, now, 0.12);
-  }
-
-  if (audioMurmurGain) {
-    audioMurmurGain.gain.setTargetAtTime(murmurLevel, now, 0.2);
-  }
-
-  if (audioMurmurFilter) {
-    audioMurmurFilter.frequency.setTargetAtTime(daylight > 0.4 ? 860 : 620, now, 0.2);
-  }
-
-  if (audioRadioGain) {
-    const radioLevel =
-      0.00008 +
-      daylight * 0.00016 +
-      (state.label === "fim de aula" ? 0.00012 : 0) +
-      (state.weather.rain > 0 ? -0.00002 : 0);
-    audioRadioGain.gain.setTargetAtTime(Math.max(0.00005, radioLevel), now, 0.18);
-  }
-
-  if (audioRadioFilter) {
-    audioRadioFilter.frequency.setTargetAtTime(920 + daylight * 260 + state.weather.cloudMix * 80, now, 0.16);
-    audioRadioFilter.Q.setTargetAtTime(1.05 + state.weather.rain * 0.25, now, 0.16);
-  }
-
-  if (now >= audioNextRadioAt) {
-    const radioWindow =
-      daylight > 0.55
-        ? 0.34
-        : daylight > 0.15
-          ? 0.18
-          : 0.05;
-    if (Math.random() < radioWindow) {
-      playCampusRadioJingle(now, daylight);
-    }
-    audioNextRadioAt = now + rand(18, 42);
-  }
-
-  if (now >= audioNextBirdAt) {
-    const birdWindow = weather.rain > 0.1 ? 0 : daylight > 0.04 ? Math.min(1, 0.12 + daylight * 0.7) : 0.02;
-    if (Math.random() < birdWindow) {
-      chirpBird(now, daylight);
-    }
-    const nextDelay = weather.rain > 0.1
-      ? rand(10, 18)
-      : daylight > 0.6
-        ? rand(2.4, 5.4)
-        : daylight > 0.2
-          ? rand(4.5, 8.5)
-          : rand(11, 19);
-    audioNextBirdAt = now + nextDelay;
-  }
-}
-
-function pointInRotatedRect(x, z, rect) {
-  const dx = x - rect.x;
-  const dz = z - rect.z;
-  const angle = -(rect.rotation || 0);
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const localX = dx * cos - dz * sin;
-  const localZ = dx * sin + dz * cos;
-  return Math.abs(localX) <= rect.width / 2 && Math.abs(localZ) <= rect.depth / 2;
-}
-
-function getGroundSurfaceAt(x, z) {
-  for (const path of mapFeatures.paths) {
-    if (pointInRotatedRect(x, z, path)) {
-      return path.surface || "cement";
-    }
-  }
-  return "grass";
-}
-
-function setAmbientAudioEnabled(nextEnabled) {
-  ambientAudioEnabled = true;
-  if (!ensureAmbientAudio()) {
-    ambientAudioEnabled = true;
-  }
+function toggleAmbientAudio() {
+  toggleGameAmbientAudio();
   emitAudioStateChange();
 }
-
-function toggleAmbientAudio() {
-  setAmbientAudioEnabled(true);
-}
+emitAudioStateChange();
 
 const ambient = new THREE.HemisphereLight(0xdff3ff, 0x5a7c4f, 1.7);
 scene.add(ambient);
@@ -659,17 +181,6 @@ scene.add(sun);
 
 scene.add(new THREE.AmbientLight(0x88aa88, 0.35));
 
-const DAY_CYCLE_SECONDS = 360;
-const WEATHER_CYCLE_SECONDS = 480;
-const atmosphereSnapshot = {
-  clock: "",
-  label: "",
-  mood: "",
-  weather: "",
-  weatherLabel: "",
-  wind: 0
-};
-let lastAtmosphereKey = "";
 const daySkyColor = new THREE.Color(0xa7d7f7);
 const duskSkyColor = new THREE.Color(0x9a8bc8);
 const nightSkyColor = new THREE.Color(0x4f6687);
@@ -691,78 +202,9 @@ const tempWeatherFogColor = new THREE.Color();
 const tempSkyColor = new THREE.Color();
 const tempFogColor = new THREE.Color();
 const tempGroundColor = new THREE.Color();
-
-function formatClock(minutes) {
-  const safe = ((minutes % 1440) + 1440) % 1440;
-  const hours = String(Math.floor(safe / 60)).padStart(2, "0");
-  const mins = String(Math.floor(safe % 60)).padStart(2, "0");
-  return `${hours}:${mins}`;
-}
-
-function getAtmosphereState(time) {
-  const dayPhase = (time % DAY_CYCLE_SECONDS) / DAY_CYCLE_SECONDS;
-  const campusMinutes = (6 * 60 + Math.round(dayPhase * 24 * 60)) % (24 * 60);
-  const hours = campusMinutes / 60;
-
-  let daylight = 0;
-  if (hours >= 6 && hours < 18) {
-    daylight = Math.sin(((hours - 6) / 12) * Math.PI);
-  }
-
-  let label = "noite";
-  let mood = "calmo";
-  if (hours >= 6 && hours < 10) {
-    label = "manhã";
-    mood = daylight > 0.35 ? "acordando" : "calmo";
-  } else if (hours >= 10 && hours < 14) {
-    label = "meio-dia";
-    mood = "movido";
-  } else if (hours >= 14 && hours < 18) {
-    label = "fim de aula";
-    mood = "dourado";
-  }
-
-  return {
-    clock: formatClock(campusMinutes),
-    label,
-    mood,
-    daylight,
-  };
-}
-
-function getWeatherState(time) {
-  const phase = (time % WEATHER_CYCLE_SECONDS) / WEATHER_CYCLE_SECONDS;
-  const cloudMix = Math.max(0, Math.min(1, phase < 0.48 ? phase / 0.48 : phase < 0.72 ? 1 : (1 - phase) / 0.28));
-  let kind = "sol";
-  let label = "ensolarado";
-  let wind = 0.08;
-  let rain = 0;
-
-  if (phase >= 0.48 && phase < 0.72) {
-    kind = "nublado";
-    label = "nublado";
-    wind = 0.24;
-  } else if (phase >= 0.72 && phase < 0.88) {
-    kind = "chuva";
-    label = "chuva";
-    wind = 0.58;
-    rain = 1;
-  } else if (phase >= 0.88) {
-    kind = "vento";
-    label = "vento";
-    wind = 0.38;
-  }
-
-  return {
-    kind,
-    label,
-    wind,
-    rain,
-    cloudMix
-  };
-}
-
-function applyAtmosphere(state) {
+let lastAtmosphereKey = "";
+let currentAtmosphereState: AtmosphereState = defaultAtmosphereState;
+function applyAtmosphere(state: AtmosphereState) {
   const duskMix = Math.min(Math.max(1 - state.daylight * 1.2, 0), 1);
   const nightMix = state.daylight <= 0 ? 1 : Math.max(0, 1 - state.daylight * 1.8);
 
@@ -784,107 +226,15 @@ function applyAtmosphere(state) {
   sun.color.setHex(state.daylight > 0.5 ? (state.weather.rain ? 0xe4e8f4 : 0xfff4d6) : state.daylight > 0.1 ? 0xffcab4 : 0xc9d7ff);
   sun.position.set(28 - state.daylight * 10, 18 + state.daylight * 28, 18 + state.daylight * 8);
 
+  const groundWetness = weatherSystem.getGroundWetness();
   ground.material.color.copy(groundColor).lerp(wetGroundColor, state.weather.rain * 0.12 + groundWetness * 0.08);
   ground.material.roughness = THREE.MathUtils.clamp(1 - state.weather.rain * 0.16 - groundWetness * 0.08, 0.72, 1);
 
-  for (const lamp of streetLamps) {
-    lamp.power = 0;
-    lamp.point.intensity = 0;
-    lamp.point.visible = false;
-    lamp.head.material.emissiveIntensity = 0.08;
-    lamp.head.material.color.setHex(0xf2f4d8);
-    if (lamp.cone) {
-      lamp.cone.visible = false;
-      lamp.cone.material.opacity = 0;
-    }
-    if (lamp.pool) {
-      lamp.pool.visible = false;
-      lamp.pool.material.opacity = 0;
-    }
-  }
-
-  const atmosphereKey = `${state.clock}|${state.label}|${state.mood}|${state.weather.kind}`;
+  const atmosphereKey = getAtmosphereStateKey(state);
   if (atmosphereKey !== lastAtmosphereKey) {
     lastAtmosphereKey = atmosphereKey;
-    atmosphereSnapshot.clock = state.clock;
-    atmosphereSnapshot.label = state.label;
-    atmosphereSnapshot.mood = state.mood;
-    atmosphereSnapshot.weather = state.weather.kind;
-    atmosphereSnapshot.weatherLabel = state.weather.label;
-    atmosphereSnapshot.wind = state.weather.wind;
-    onAtmosphereChange({ ...atmosphereSnapshot });
-  }
-}
-
-function updateWeatherFX(dt, time, state) {
-  const weatherPulse = Math.max(0, Math.min(1, state.weather.rain ? 1 : state.weather.cloudMix * 0.7));
-  const wind = state.weather.wind + (state.daylight > 0 ? Math.sin(time * 0.12) * 0.05 : 0.02);
-  const randomIn = (min, max) => min + (max - min) * Math.random();
-
-  groundWetness = THREE.MathUtils.clamp(
-    groundWetness + state.weather.rain * dt * 1.4 - dt * (state.weather.cloudMix > 0.5 ? 0.01 : 0.035),
-    0,
-    1
-  );
-
-  for (let i = 0; i < cloudSprites.length; i += 1) {
-    const cloud = cloudSprites[i];
-    const data = cloud.userData;
-    cloud.position.x += (data.drift + wind * 0.35) * 0.018;
-    if (cloud.position.x > 82) cloud.position.x = -82;
-    if (cloud.position.x < -82) cloud.position.x = 82;
-    cloud.position.y = data.baseY + Math.sin(time * 0.18 + data.phase) * (0.4 + weatherPulse * 0.7);
-    const scalePulse = 1 + weatherPulse * 0.22 + Math.sin(time * 0.12 + data.phase) * 0.02;
-    cloud.scale.set(data.baseScale * 1.5 * scalePulse, data.baseScale * scalePulse, 1);
-    cloud.material.opacity = 0.54 + weatherPulse * 0.24;
-    cloud.material.color.setHex(state.weather.rain ? 0xe3ebf5 : state.weather.cloudMix > 0.4 ? 0xf4f7fb : 0xffffff);
-  }
-
-  if (state.weather.rain > 0.08) {
-    const centerX = player.position.x;
-    const centerZ = player.position.z;
-    const rainSpan = 28;
-    const rainTop = player.position.y + 21;
-    const rainSpeed = 12 + state.weather.rain * 11 + state.weather.cloudMix * 3;
-    for (let i = 0; i < rainCount; i += 1) {
-      const idx = i * 3;
-      if (rainPositions[idx + 1] > rainTop || rainPositions[idx + 1] === 0) {
-        rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
-        rainPositions[idx + 1] = rainTop - randomIn(0, 18);
-        rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
-        rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
-      }
-
-      rainPositions[idx] += wind * 0.12;
-      rainPositions[idx + 1] -= rainVelocities[i] * 0.016;
-      rainPositions[idx + 2] += wind * 0.04;
-
-      if (rainPositions[idx + 1] < player.position.y - 2) {
-        rainPositions[idx] = centerX + randomIn(-rainSpan, rainSpan);
-        rainPositions[idx + 1] = rainTop + randomIn(0, 8);
-        rainPositions[idx + 2] = centerZ + randomIn(-rainSpan, rainSpan);
-        rainVelocities[i] = rainSpeed * randomIn(0.72, 1.22);
-      }
-    }
-    rainGeometry.attributes.position.needsUpdate = true;
-  }
-  rainField.visible = state.weather.rain > 0.08;
-  rainField.position.set(0, 0, 0);
-
-  for (const tree of weatherTrees) {
-    tree.rotation.z = Math.sin(time * 0.75 + tree.userData.windPhase) * (0.012 + state.weather.wind * 0.06);
-    tree.rotation.x = Math.cos(time * 0.52 + tree.userData.windPhase) * (0.006 + state.weather.wind * 0.03);
-  }
-
-  const puddleBaseOpacity = Math.max(0, groundWetness - 0.06);
-  for (const puddle of puddles) {
-    const phase = puddle.userData.phase || 0;
-    const shimmer = 0.015 * Math.sin(time * 2.4 + phase) + 0.01 * Math.sin(time * 4.9 + phase * 1.7);
-    const size = puddle.userData.baseRadius * (1 + groundWetness * 0.06 + shimmer);
-    puddle.scale.setScalar(size / puddle.userData.baseRadius);
-    puddle.material.opacity = puddleBaseOpacity * (0.18 + Math.max(0, Math.sin(time * 1.7 + phase)) * 0.05);
-    puddle.material.roughness = 0.12 + (1 - groundWetness) * 0.1;
-    puddle.material.emissiveIntensity = 0.05 + groundWetness * 0.16;
+    currentAtmosphereState = state;
+    onAtmosphereChange({ ...state });
   }
 }
 
@@ -902,252 +252,6 @@ function rand(min, max) {
   return min + (max - min) * seeded();
 }
 
-function createGrassTexture() {
-  const size = 256;
-  const c = document.createElement("canvas");
-  c.width = size;
-  c.height = size;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "#6ea34e";
-  ctx.fillRect(0, 0, size, size);
-
-  for (let i = 0; i < 16000; i += 1) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const w = 1 + Math.random() * 2.5;
-    const h = 1 + Math.random() * 2.5;
-    const g = 95 + Math.random() * 55;
-    ctx.fillStyle = `rgba(${40 + Math.random() * 20}, ${g}, ${35 + Math.random() * 16}, ${0.06 + Math.random() * 0.1})`;
-    ctx.fillRect(x, y, w, h);
-  }
-
-  const texture = new THREE.CanvasTexture(c);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(28, 28);
-  texture.anisotropy = 8;
-  return texture;
-}
-
-function createWindowTexture() {
-  const c = document.createElement("canvas");
-  c.width = 128;
-  c.height = 128;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "#9eb0b6";
-  ctx.fillRect(0, 0, 128, 128);
-  ctx.fillStyle = "#5d7881";
-  ctx.fillRect(4, 4, 120, 120);
-  for (let y = 12; y < 120; y += 22) {
-    for (let x = 12; x < 120; x += 18) {
-      const lit = Math.random() > 0.42;
-      ctx.fillStyle = lit ? "#d7e8f2" : "#37505a";
-      ctx.fillRect(x, y, 10, 14);
-    }
-  }
-  const texture = new THREE.CanvasTexture(c);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  return texture;
-}
-
-function createNoticeTexture() {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d");
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-
-  const noticeLines = [
-    "Biblioteca aberta ate 21h",
-    "Mutirao do gramado: sexta",
-    "Sala de convivencia: bloco central",
-    "Se chover, o corredor vira atalho de lenda",
-    "A jardineira passa de novo em poucos minutos",
-    "Quem chegar cedo encontra sombra e fofoca"
-  ];
-
-  const weatherLines = {
-    rain: [
-      "Leve guarda-chuva, o gramado agradece",
-      "Poça nova perto do bloco central",
-      "Chuva surpresa bagunça a saida da aula"
-    ],
-    cloudy: [
-      "Nuvem de tarde, clima de corredor",
-      "Dia bom pra andar sem pressa",
-      "Se pintar vento, as arvores fazem barulho"
-    ],
-    night: [
-      "Noite calma, luzes acesas perto dos blocos",
-      "Campus em modo baixo volume",
-      "Se ouvir eco, talvez seja so o patio"
-    ]
-  };
-
-  function clearBoard(accentColor) {
-    ctx.fillStyle = "#f2e7d8";
-    ctx.fillRect(0, 0, 512, 256);
-    ctx.fillStyle = accentColor;
-    ctx.fillRect(14, 14, 484, 228);
-    ctx.fillStyle = "#f7f2e9";
-    ctx.fillRect(22, 22, 468, 212);
-  }
-
-  function drawLines(title, lines, accentColor, footer) {
-    clearBoard(accentColor);
-    ctx.fillStyle = accentColor;
-    ctx.font = "bold 34px Arial";
-    ctx.fillText(title, 44, 72);
-    ctx.font = "22px Arial";
-    lines.forEach((line, index) => {
-      ctx.fillText(line, 44, 122 + index * 36);
-    });
-    if (footer) {
-      ctx.fillStyle = "#567061";
-      ctx.font = "18px Arial";
-      ctx.fillText(footer, 44, 226);
-    }
-    texture.needsUpdate = true;
-  }
-
-  function pickLine(bucket, time, offset = 0) {
-    if (!bucket.length) return "";
-    return bucket[Math.abs(Math.floor(time / 12 + offset)) % bucket.length];
-  }
-
-  function update(time = 0, state = {}) {
-    const weatherKind = state.weather?.kind || "";
-    const isRainy = weatherKind === "rain" || (state.weather?.rain ?? 0) > 0.08;
-    const isCloudy = weatherKind === "cloudy" || (state.weather?.cloudMix ?? 0) > 0.35;
-    const isNight = (state.daylight ?? 1) < 0.26;
-    const baseLines = [
-      `Agora: ${state.clock || "--:--"} • ${state.label || "campus"}`,
-      state.weatherLabel ? `Clima: ${state.weatherLabel}` : "Clima: observando o patio",
-      pickLine(noticeLines, time, state.daylight || 0)
-    ];
-
-    if (isRainy) {
-      drawLines("Aviso de chuva", [
-        `Agora: ${state.clock || "--:--"} • ${state.label || "campus"}`,
-        state.weatherLabel ? `Clima: ${state.weatherLabel}` : "Clima: chuva ligeira",
-        pickLine(weatherLines.rain, time, 1)
-      ], "#2a5d7d", "Poças podem aparecer depois da chuva");
-      return;
-    }
-
-    if (isNight) {
-      drawLines("Aviso noturno", [
-        `Agora: ${state.clock || "--:--"} • ${state.label || "campus"}`,
-        state.weatherLabel ? `Clima: ${state.weatherLabel}` : "Clima: noite tranquila",
-        pickLine(weatherLines.night, time, 2)
-      ], "#5d6dc9", "Campus em modo baixo volume");
-      return;
-    }
-
-    drawLines(isCloudy ? "Avisos do Campus" : "Mural Vivo", [
-      baseLines[0],
-      baseLines[1],
-      pickLine(isCloudy ? weatherLines.cloudy : noticeLines, time, 0.5)
-    ], isCloudy ? "#345c4a" : "#234634", isCloudy ? "O mural muda com o clima" : "Volte mais tarde para outro recado");
-  }
-
-  update(0, { clock: "07:30", label: "manhã", weatherLabel: "ensolarado", daylight: 0.82, weather: { kind: "clear", rain: 0, cloudMix: 0 } });
-
-  return {
-    texture,
-    update
-  };
-}
-
-function createBusSignTexture() {
-  const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 96;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "#f5efe2";
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.strokeStyle = "#1f6f43";
-  ctx.lineWidth = 6;
-  ctx.strokeRect(3, 3, c.width - 6, c.height - 6);
-  ctx.fillStyle = "#1f6f43";
-  ctx.font = "bold 31px Arial";
-  ctx.fillText("JARDINEIRA", 18, 47);
-  ctx.font = "20px Arial";
-  ctx.fillText("IFCE", 101, 72);
-  const texture = new THREE.CanvasTexture(c);
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function createCampusBannerTexture() {
-  const c = document.createElement("canvas");
-  c.width = 512;
-  c.height = 256;
-  const ctx = c.getContext("2d");
-
-  const gradient = ctx.createLinearGradient(0, 0, c.width, c.height);
-  gradient.addColorStop(0, "#184d34");
-  gradient.addColorStop(0.55, "#1d6a45");
-  gradient.addColorStop(1, "#f3d24d");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, c.width, c.height);
-
-  ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
-  for (let i = -120; i < 620; i += 52) {
-    ctx.beginPath();
-    ctx.moveTo(i, 18);
-    ctx.lineTo(i + 78, 18);
-    ctx.lineTo(i + 118, 238);
-    ctx.lineTo(i + 40, 238);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
-  ctx.lineWidth = 10;
-  ctx.strokeRect(12, 12, 488, 232);
-
-  ctx.fillStyle = "#f8f6ef";
-  ctx.font = "bold 70px Arial";
-  ctx.fillText("IFCE", 42, 106);
-  ctx.font = "bold 28px Arial";
-  ctx.fillText("campus gramadinho", 44, 154);
-  ctx.font = "22px Arial";
-  ctx.fillText("vento, jardineira e conversa de corredor", 44, 190);
-
-  const texture = new THREE.CanvasTexture(c);
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function createCloudTexture() {
-  const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 128;
-  const ctx = c.getContext("2d");
-  ctx.clearRect(0, 0, c.width, c.height);
-
-  const fillBlob = (x, y, r, alpha) => {
-    const gradient = ctx.createRadialGradient(x, y, r * 0.2, x, y, r);
-    gradient.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
-    gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  fillBlob(78, 58, 30, 0.9);
-  fillBlob(108, 46, 36, 0.95);
-  fillBlob(140, 60, 32, 0.92);
-  fillBlob(172, 54, 26, 0.88);
-  fillBlob(126, 68, 42, 0.7);
-
-  const texture = new THREE.CanvasTexture(c);
-  texture.needsUpdate = true;
-  return texture;
-}
-
 const grass = createGrassTexture();
 const windowTexture = createWindowTexture();
 const noticeTexture = createNoticeTexture();
@@ -1157,14 +261,13 @@ const campusBannerTexture = createCampusBannerTexture();
 const world = new THREE.Group();
 scene.add(world);
 
-const blockers = [];
+const blockers: Blocker[] = [];
 const mapFeatures = {
   buildings: [],
   paths: [],
   trees: []
 };
 const interactables = [];
-const streetLamps = [];
 const decorativeProps = [];
 const cameraFrustum = new THREE.Frustum();
 const cameraMatrix = new THREE.Matrix4();
@@ -1177,29 +280,17 @@ const ENTITY_CULL_DIST = {
   remote: 42,
   bus: 56
 };
-const weatherTrees = [];
 const buses = [];
-const puddles = [];
-let groundWetness = 0;
-const cloudTexture = createCloudTexture();
-const cloudLayer = new THREE.Group();
-scene.add(cloudLayer);
-const cloudSprites = [];
-const rainCount = 900;
-const rainPositions = new Float32Array(rainCount * 3);
-const rainVelocities = new Float32Array(rainCount);
-const rainGeometry = new THREE.BufferGeometry();
-rainGeometry.setAttribute("position", new THREE.BufferAttribute(rainPositions, 3));
-const rainMaterial = new THREE.PointsMaterial({
-  color: 0xd9efff,
-  size: 0.13,
-  transparent: true,
-  opacity: 0.34,
-  depthWrite: false
+const defaultPlayerPosition = new THREE.Vector3();
+let playerPositionTarget: { position: THREE.Vector3 } | null = null;
+const weatherSystem = createWeatherSystem({
+  scene,
+  world,
+  mapFeatures,
+  rand,
+  getPlayerPosition: () => playerPositionTarget?.position ?? defaultPlayerPosition,
+  disposeObject3D,
 });
-const rainField = new THREE.Points(rainGeometry, rainMaterial);
-rainField.frustumCulled = false;
-scene.add(rainField);
 
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(170, 170),
@@ -1213,78 +304,8 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 world.add(ground);
 
-function createPuddle(x, z, radius, phase = 0) {
-  const mesh = new THREE.Mesh(
-    new THREE.CircleGeometry(radius, 24),
-    new THREE.MeshStandardMaterial({
-      color: 0x8dc7e6,
-      transparent: true,
-      opacity: 0,
-      roughness: 0.14,
-      metalness: 0.32,
-      emissive: 0x15324a,
-      emissiveIntensity: 0.08,
-      depthWrite: false
-    })
-  );
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(x, 0.041, z);
-  mesh.renderOrder = 2;
-  mesh.userData = {
-    baseRadius: radius,
-    phase
-  };
-  world.add(mesh);
-  puddles.push(mesh);
-  return mesh;
-}
-
-createPuddle(-8, -5, 1.9, 0.15);
-createPuddle(16, 7, 1.6, 1.35);
-createPuddle(-19, 16, 2.1, 2.2);
-createPuddle(8, 21, 1.45, 0.85);
-createPuddle(24, -12, 1.55, 2.95);
-createPuddle(-27, 9, 1.75, 1.8);
-
 const walkways = new THREE.Group();
 world.add(walkways);
-
-const CAMPUS_ENTRY_X = -34;
-const CAMPUS_ENTRY_Z = -70;
-const CAMPUS_ENTRY_WIDTH = 9;
-const CAMPUS_SPAWN = { x: CAMPUS_ENTRY_X, z: -77 };
-const CAMPUS_WALL_LIMIT = 73;
-const CAMPUS_WALL_HEIGHT = 4.2;
-const CAMPUS_WALL_THICKNESS = 1.2;
-
-function createCloudSprite(x, y, z, scale, drift, phase) {
-  const cloud = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: cloudTexture,
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.74,
-      depthWrite: false,
-      fog: false
-    })
-  );
-  cloud.position.set(x, y, z);
-  cloud.scale.set(scale * 1.5, scale, 1);
-  cloud.userData = { drift, phase, baseY: y, baseScale: scale };
-  cloudLayer.add(cloud);
-  cloudSprites.push(cloud);
-  return cloud;
-}
-
-for (let i = 0; i < 7; i += 1) {
-  const x = rand(-70, 70);
-  const y = rand(18, 28);
-  const z = rand(-34, 34);
-  const scale = rand(10, 20);
-  const drift = rand(0.15, 0.36);
-  const phase = rand(0, Math.PI * 2);
-  createCloudSprite(x, y, z, scale, drift, phase);
-}
 
 function addPath(width, depth, x, z, rotation = 0, surface = "cement") {
   mapFeatures.paths.push({ width, depth, x, z, rotation, surface });
@@ -1303,16 +324,11 @@ function addPath(width, depth, x, z, rotation = 0, surface = "cement") {
   walkways.add(path);
 }
 
-addPath(84, 6, 0, -8);
-addPath(6, 66, -10, 10);
-addPath(6, 60, CAMPUS_ENTRY_X, -28);
-addPath(32, 5, 20, 16, Math.PI / 12);
-addPath(26, 5, -28, 18, -Math.PI / 14);
-addPath(18, 4, 2, 28, 0, "corridor");
-addPath(8, 12, CAMPUS_ENTRY_X, -75, 0, "corridor");
-addPath(8, 8, CAMPUS_ENTRY_X, -67, 0, "corridor");
+for (const path of campusPaths) {
+  addPath(path.width, path.depth, path.x, path.z, path.rotation || 0, path.surface || "cement");
+}
 
-function createBlocker(minX, maxX, minZ, maxZ, options = {}) {
+function createBlocker(minX, maxX, minZ, maxZ, options: BlockerOptions = {}) {
   const blocker = {
     minX,
     maxX,
@@ -1364,313 +380,8 @@ function addCampusPerimeter() {
   );
 }
 
-function addGateCheckpoint() {
-  const gateGroup = new THREE.Group();
-  gateGroup.position.set(CAMPUS_ENTRY_X, 0, CAMPUS_ENTRY_Z + 1.4);
-  world.add(gateGroup);
-
-  const gateHud = document.createElement("div");
-  gateHud.className = "gate-hud";
-  gateHud.innerHTML = `
-    <strong data-gate="phase">BLOQUEADO</strong>
-    <span data-gate="hint">interaja com a catraca</span>
-  `;
-  container?.appendChild(gateHud);
-  const gatePhaseEl = gateHud.querySelector('[data-gate="phase"]');
-  const gateHintEl = gateHud.querySelector('[data-gate="hint"]');
-  const gateModal = document.createElement("div");
-  gateModal.className = "gate-modal";
-  gateModal.innerHTML = `
-    <div class="gate-modal-backdrop" data-gate-modal-close="true"></div>
-    <form class="gate-modal-card" data-gate="form">
-      <span class="gate-modal-kicker">Portaria</span>
-      <strong>Liberar catraca</strong>
-      <p>Digite sua matricula para acessar o campus.</p>
-      <input
-        class="gate-modal-input"
-        data-gate="input"
-        type="text"
-        inputmode="numeric"
-        autocomplete="off"
-        maxlength="12"
-        placeholder="Somente numeros"
-      />
-      <div class="gate-modal-error" data-gate="error"></div>
-      <div class="gate-modal-actions">
-        <button type="button" class="gate-modal-button secondary" data-gate="cancel">Cancelar</button>
-        <button type="submit" class="gate-modal-button">Liberar</button>
-      </div>
-    </form>
-  `;
-  container?.appendChild(gateModal);
-  const gateFormEl = gateModal.querySelector('[data-gate="form"]');
-  const gateInputEl = gateModal.querySelector('[data-gate="input"]');
-  const gateErrorEl = gateModal.querySelector('[data-gate="error"]');
-  const gateCancelEl = gateModal.querySelector('[data-gate="cancel"]');
-
-  const metalMaterial = new THREE.MeshStandardMaterial({
-    color: 0x74838b,
-    roughness: 0.42,
-    metalness: 0.88,
-  });
-  const darkMetalMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3c474d,
-    roughness: 0.58,
-    metalness: 0.62,
-  });
-  const floor = new THREE.Mesh(
-    new THREE.BoxGeometry(5.8, 0.14, 4.4),
-    new THREE.MeshStandardMaterial({ color: 0xc9c2b1, roughness: 0.96 })
-  );
-  floor.position.y = 0.07;
-  floor.receiveShadow = true;
-  gateGroup.add(floor);
-
-  const postGeometry = new THREE.BoxGeometry(0.26, 1.3, 0.26);
-  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x55636a, roughness: 0.68, metalness: 0.25 });
-  const armMaterial = metalMaterial;
-  const indicatorMaterial = new THREE.MeshStandardMaterial({ color: 0xc6452f, emissive: 0x4a130d, emissiveIntensity: 0.2 });
-  const posts = [-1.5, 1.5].map((offsetX) => {
-    const post = new THREE.Mesh(postGeometry, postMaterial);
-    post.position.set(offsetX, 0.65, 0);
-    post.castShadow = true;
-    gateGroup.add(post);
-    return post;
-  });
-
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.44, 0.52, 1.05, 24),
-    metalMaterial
-  );
-  body.position.set(0, 0.54, 0.02);
-  body.castShadow = true;
-  gateGroup.add(body);
-
-  const topCap = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.48, 0.48, 0.09, 24),
-    darkMetalMaterial
-  );
-  topCap.position.set(0, 1.09, 0.02);
-  topCap.castShadow = true;
-  gateGroup.add(topCap);
-
-  const reader = new THREE.Mesh(
-    new THREE.BoxGeometry(0.42, 0.2, 0.16),
-    new THREE.MeshStandardMaterial({ color: 0x161d22, roughness: 0.45, metalness: 0.2 })
-  );
-  reader.position.set(0, 1, -0.46);
-  reader.castShadow = true;
-  gateGroup.add(reader);
-
-  const readerGlow = new THREE.Mesh(
-    new THREE.BoxGeometry(0.22, 0.08, 0.03),
-    new THREE.MeshStandardMaterial({
-      color: 0xf2d45c,
-      emissive: 0x7d6200,
-      emissiveIntensity: 0.5,
-      roughness: 0.3,
-      metalness: 0.08,
-    })
-  );
-  readerGlow.position.set(0, 1.01, -0.56);
-  gateGroup.add(readerGlow);
-
-  const armHub = new THREE.Group();
-  armHub.position.set(0, 1.02, 0);
-  gateGroup.add(armHub);
-
-  for (let i = 0; i < 3; i += 1) {
-    const arm = new THREE.Mesh(
-      new THREE.BoxGeometry(0.16, 0.08, 1.22),
-      armMaterial
-    );
-    arm.position.z = 0.61;
-    arm.rotation.y = (Math.PI * 2 * i) / 3;
-    arm.castShadow = true;
-    armHub.add(arm);
-  }
-
-  const armCore = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.08, 0.26, 18),
-    darkMetalMaterial
-  );
-  armCore.rotation.x = Math.PI / 2;
-  armCore.castShadow = true;
-  armHub.add(armCore);
-
-  const indicator = new THREE.Mesh(
-    new THREE.BoxGeometry(0.42, 0.42, 0.42),
-    indicatorMaterial
-  );
-  indicator.position.set(0, 1.52, -0.4);
-  indicator.castShadow = true;
-  gateGroup.add(indicator);
-
-  const sideRailGeometry = new THREE.BoxGeometry(0.12, 0.94, 2.18);
-  [-0.88, 0.88].forEach((offsetX) => {
-    const rail = new THREE.Mesh(sideRailGeometry, darkMetalMaterial);
-    rail.position.set(offsetX, 0.52, 0.2);
-    rail.castShadow = true;
-    gateGroup.add(rail);
-  });
-
-  const header = new THREE.Mesh(
-    new THREE.BoxGeometry(6.2, 0.6, 0.32),
-    new THREE.MeshStandardMaterial({ color: 0x184d34, roughness: 0.82 })
-  );
-  header.position.set(0, 3.3, 0.1);
-  header.castShadow = true;
-  gateGroup.add(header);
-
-  const gateLabel = createNameLabel("PORTARIA", "#f6f5ef", "#f3d24d");
-  gateLabel.scale.set(3.8, 0.92, 1);
-  gateLabel.position.set(0, 3.34, 0.32);
-  gateLabel.renderOrder = 998;
-  gateGroup.add(gateLabel);
-
-  const instructionLabel = createNameLabel("DIGITE SUA MATRICULA", "#fff9dc", "#8ae59e");
-  instructionLabel.scale.set(3.25, 0.72, 1);
-  instructionLabel.position.set(0, 2.36, 0.32);
-  instructionLabel.renderOrder = 998;
-  gateGroup.add(instructionLabel);
-
-  const gateBlocker = createBlocker(
-    CAMPUS_ENTRY_X - 2.1,
-    CAMPUS_ENTRY_X + 2.1,
-    CAMPUS_ENTRY_Z - 0.35,
-    CAMPUS_ENTRY_Z + 2.8
-  );
-
-  let unlocked = false;
-  let armRotation = 0;
-  let lastTyped = "";
-  let modalOpen = false;
-
-  function closeGateModal() {
-    modalOpen = false;
-    gateModal.classList.remove("visible");
-    if (gateInputEl) gateInputEl.blur();
-  }
-
-  function openGateModal() {
-    modalOpen = true;
-    gateModal.classList.add("visible");
-    if (gateInputEl) {
-      gateInputEl.value = lastTyped;
-      requestAnimationFrame(() => gateInputEl.focus());
-      gateInputEl.select?.();
-    }
-    if (gateErrorEl) gateErrorEl.textContent = "";
-  }
-
-  function updateGateHud(visible) {
-    gateHud.classList.toggle("visible", visible);
-    gateHud.classList.toggle("unlocked", unlocked);
-    if (gatePhaseEl) gatePhaseEl.textContent = unlocked ? "LIBERADO" : "BLOQUEADO";
-    if (gateHintEl) gateHintEl.textContent = unlocked ? "" : modalOpen ? "digite sua matricula" : "interaja com a catraca";
-  }
-
-  gateFormEl?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    if (unlocked) {
-      closeGateModal();
-      return;
-    }
-    const typed = String(gateInputEl?.value || "").trim();
-    if (!/^\d+$/.test(typed)) {
-      lastTyped = typed.slice(0, 12);
-      if (gateErrorEl) gateErrorEl.textContent = "Digite apenas numeros.";
-      speak("Digite apenas numeros para validar sua matricula.", "Portaria");
-      updateGateHud(true);
-      gateInputEl?.focus();
-      gateInputEl?.select?.();
-      return;
-    }
-
-    lastTyped = typed.slice(0, 12);
-    unlocked = true;
-    closeGateModal();
-    gateBlocker.active = false;
-    indicatorMaterial.color.setHex(0x3fbf6b);
-    indicatorMaterial.emissive.setHex(0x123f20);
-    indicatorMaterial.emissiveIntensity = 0.35;
-    readerGlow.material.color.setHex(0x8df5a6);
-    readerGlow.material.emissive.setHex(0x1b6b31);
-    speak("Matricula validada. Catraca liberada, acesso autorizado ao campus.", "Portaria");
-    updateGateHud(true);
-  });
-
-  gateInputEl?.addEventListener("input", () => {
-    const digitsOnly = String(gateInputEl.value || "").replace(/\D+/g, "").slice(0, 12);
-    if (gateInputEl.value !== digitsOnly) gateInputEl.value = digitsOnly;
-    lastTyped = digitsOnly;
-    if (gateErrorEl) gateErrorEl.textContent = "";
-    updateGateHud(true);
-  });
-
-  gateInputEl?.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeGateModal();
-      updateGateHud(true);
-    }
-  });
-
-  gateCancelEl?.addEventListener("click", () => {
-    closeGateModal();
-    speak("Sem matricula, sem entrada. Tente novamente na catraca.", "Portaria");
-    updateGateHud(true);
-  });
-
-  gateModal.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    if (target.dataset.gateModalClose === "true") {
-      closeGateModal();
-      updateGateHud(true);
-    }
-  });
-
-  interactables.push({
-    kind: "turnstile",
-    label: "Digite sua matricula",
-    radius: 3.2,
-    position: new THREE.Vector3(CAMPUS_ENTRY_X, 0, CAMPUS_ENTRY_Z - 0.8),
-    root: gateGroup,
-    interact() {
-      if (unlocked) {
-        speak("A catraca ja foi liberada. Pode entrar no campus.", "Portaria");
-        return;
-      }
-      openGateModal();
-      updateGateHud(true);
-    },
-    update(dt) {
-      gateBlocker.active = !unlocked;
-      armRotation = THREE.MathUtils.lerp(
-        armRotation,
-        unlocked ? Math.PI * 0.66 : 0,
-        Math.min(1, dt * (unlocked ? 4.5 : 8))
-      );
-      armHub.rotation.y = armRotation;
-      posts[0].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
-      posts[1].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
-      this.label = unlocked ? "Entrada liberada" : "Digite sua matricula";
-      const visible = getDistance2D(player.position, this.position) <= 5.4;
-      updateGateHud(visible);
-    },
-  });
-
-  return {
-    destroy() {
-      gateHud.remove();
-      gateModal.remove();
-    },
-  };
-}
-
 addCampusPerimeter();
-const gateCheckpoint = addGateCheckpoint();
+let gateCheckpoint: { destroy(): void } | undefined;
 
 function addBuilding({ x, z, width, depth, height, color, roof, name }) {
   mapFeatures.buildings.push({ x, z, width, depth, color, roof });
@@ -1902,15 +613,15 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     interact() {
       if (doorOpen) {
         if (thresholdOccupied()) {
-          speak("Saia um pouco do vão para fechar a porta.", name || "Porta");
+          speechOverlay.speak("Saia um pouco do vão para fechar a porta.", name || "Porta");
           return;
         }
         doorOpen = false;
-        speak("A porta fechou com um clique seco.", name || "Porta");
+        speechOverlay.speak("A porta fechou com um clique seco.", name || "Porta");
         return;
       }
       doorOpen = true;
-      speak(`A porta de ${name || "estrutura"} está aberta. Pode entrar.`, name || "Porta");
+      speechOverlay.speak(`A porta de ${name || "estrutura"} está aberta. Pode entrar.`, name || "Porta");
     },
     update(dt) {
       const targetAngle = doorOpen ? maxDoorAngle : 0;
@@ -1943,27 +654,23 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
   });
 }
 
-addBuilding({ x: 0, z: -28, width: 26, depth: 12, height: 7, color: 0xdbe0dd, roof: 0x8b3d2c, name: "bloco central" });
-addBuilding({ x: -26, z: -16, width: 18, depth: 10, height: 5.5, color: 0xcfd7cc, roof: 0x6c7f56, name: "sala norte" });
-addBuilding({ x: 25, z: -14, width: 17, depth: 10, height: 5.5, color: 0xd6d2c8, roof: 0x8a6b4c, name: "laboratorio" });
-addBuilding({ x: -47, z: -52, width: 11, depth: 8, height: 4.4, color: 0xe4ddd2, roof: 0x375b47, name: "portaria" });
-addBuilding({ x: 18, z: 24, width: 16, depth: 9, height: 5, color: 0xc8d0da, roof: 0x4a6278, name: "biblioteca" });
-addBuilding({ x: -21, z: 26, width: 13, depth: 8, height: 4.5, color: 0xddddcf, roof: 0x64725f, name: "secretaria" });
-addBuilding({ x: 0, z: 10, width: 10, depth: 8, height: 4.2, color: 0xe3dad0, roof: 0x715142, name: "atelier" });
+for (const building of campusBuildings) {
+  addBuilding(building);
+}
 
 // Quadra de Queimado (PvP Arena)
-const ARENA_CX = 40;
-const ARENA_CZ = 42;
-const ARENA_W = 26;
-const ARENA_D = 18;
+const ARENA_CX = campusArena.x;
+const ARENA_CZ = campusArena.z;
+const ARENA_W = campusArena.width;
+const ARENA_D = campusArena.depth;
 /* arena build scope */ {
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x4e7c2e, roughness: 1 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: campusArena.floorColor, roughness: 1 });
   const arenaFloor = new THREE.Mesh(new THREE.BoxGeometry(ARENA_W, 0.07, ARENA_D), floorMat);
   arenaFloor.position.set(ARENA_CX, 0.035, ARENA_CZ);
   arenaFloor.receiveShadow = true;
   world.add(arenaFloor);
 
-  const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+  const lineMat = new THREE.MeshStandardMaterial({ color: campusArena.lineColor, roughness: 0.9 });
   function addCourtLine(x, z, w, d) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, d), lineMat);
     m.position.set(x, 0.07, z);
@@ -1975,7 +682,7 @@ const ARENA_D = 18;
   addCourtLine(ARENA_CX - ARENA_W / 2, ARENA_CZ, 0.18, ARENA_D + 0.18);
   addCourtLine(ARENA_CX + ARENA_W / 2, ARENA_CZ, 0.18, ARENA_D + 0.18);
 
-  const postMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0.3 });
+  const postMat = new THREE.MeshStandardMaterial({ color: campusArena.postColor, roughness: 0.7, metalness: 0.3 });
   const postGeo = new THREE.CylinderGeometry(0.09, 0.09, 2.4, 8);
   for (const [px, pz] of [
     [ARENA_CX - ARENA_W / 2, ARENA_CZ - ARENA_D / 2],
@@ -1994,7 +701,7 @@ const ARENA_D = 18;
   // Placa "QUEIMADO"
   const signPole = new THREE.Mesh(
     new THREE.CylinderGeometry(0.06, 0.06, 3.2, 8),
-    new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.7, metalness: 0.4 })
+    new THREE.MeshStandardMaterial({ color: campusArena.signPoleColor, roughness: 0.7, metalness: 0.4 })
   );
   signPole.position.set(ARENA_CX, 1.6, ARENA_CZ - ARENA_D / 2 - 1.2);
   signPole.castShadow = true;
@@ -2002,588 +709,33 @@ const ARENA_D = 18;
 
   const signBoard = new THREE.Mesh(
     new THREE.BoxGeometry(3.8, 1.0, 0.12),
-    new THREE.MeshStandardMaterial({ color: 0xd4421a, roughness: 0.8 })
+    new THREE.MeshStandardMaterial({ color: campusArena.signBoardColor, roughness: 0.8 })
   );
   signBoard.position.set(ARENA_CX, 3.5, ARENA_CZ - ARENA_D / 2 - 1.2);
   signBoard.castShadow = true;
   world.add(signBoard);
 
-  mapFeatures.buildings.push({ x: ARENA_CX, z: ARENA_CZ, width: ARENA_W, depth: ARENA_D, color: 0x4e7c2e, roof: 0xffffff, name: "quadra pvp" });
+  mapFeatures.buildings.push({ x: ARENA_CX, z: ARENA_CZ, width: ARENA_W, depth: ARENA_D, color: campusArena.floorColor, roof: 0xffffff, name: campusArena.name });
 }
 
-function createTree() {
-  const tree = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.38, 0.48, 2.8, 8),
-    new THREE.MeshStandardMaterial({ color: 0x7a5636, roughness: 1 })
-  );
-  trunk.position.y = 1.4;
-  trunk.castShadow = true;
-  tree.add(trunk);
-
-  const crown = new THREE.Mesh(
-    new THREE.SphereGeometry(1.6, 10, 10),
-    new THREE.MeshStandardMaterial({ color: 0x44753e, roughness: 1 })
-  );
-  crown.position.y = 3.2;
-  crown.castShadow = true;
-  tree.add(crown);
-  return tree;
-}
-
-for (let i = 0; i < 86; i += 1) {
-  const tree = createTree();
-  const side = i % 4;
-  let x = rand(-77, 77);
-  let z = rand(-77, 77);
-  if (side === 0) z = rand(-79, -57);
-  if (side === 1) z = rand(57, 79);
-  if (side === 2) x = rand(-79, -57);
-  if (side === 3) x = rand(57, 79);
-  tree.position.set(x, 0, z);
-  tree.rotation.y = rand(0, Math.PI * 2);
-  tree.userData.windPhase = rand(0, Math.PI * 2);
-  world.add(tree);
-  mapFeatures.trees.push({ x, z });
-  weatherTrees.push(tree);
-}
-
-function createCharacter({
-  shirtColor,
-  pantsColor,
-  shoesColor,
-  skinColor,
-  backpackColor,
-  hairColor = 0x3a2516,
-  scale = 1,
-  backpack = true,
-  glasses = false
-}) {
-  const root = new THREE.Group();
-  root.scale.setScalar(scale);
-
-  const skin = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 1 });
-  const faceMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.96 });
-  const shirt = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.92 });
-  const pants = new THREE.MeshStandardMaterial({ color: pantsColor, roughness: 0.98 });
-  const shoes = new THREE.MeshStandardMaterial({ color: shoesColor, roughness: 1 });
-  const backpackMat = new THREE.MeshStandardMaterial({ color: backpackColor, roughness: 1 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1 });
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.4 });
-
-  const torso = new THREE.Group();
-  torso.position.set(0, 1.0, 0);
-  root.add(torso);
-
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.46, 6, 16), shirt);
-  body.position.y = 0.45;
-  body.scale.set(1.14, 0.92, 0.9);
-  body.castShadow = true;
-  torso.add(body);
-
-  const shirtFront = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.62, 0.035), new THREE.MeshStandardMaterial({
-    color: new THREE.Color(shirtColor).offsetHSL(0, -0.05, 0.12).getHex(),
-    roughness: 0.92
-  }));
-  shirtFront.position.set(0, 0.48, 0.33);
-  torso.add(shirtFront);
-
-  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.035, 8, 18), shirt);
-  collar.position.y = 0.92;
-  collar.rotation.x = Math.PI / 2;
-  collar.scale.set(1.2, 0.78, 1);
-  torso.add(collar);
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.18, 10), skin);
-  neck.position.y = 1.02;
-  neck.castShadow = true;
-  torso.add(neck);
-
-  if (backpack) {
-    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.78, 0.22), backpackMat);
-    pack.position.set(0, 0.5, -0.34);
-    pack.castShadow = true;
-    torso.add(pack);
-
-    const strapL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.78, 0.08), backpackMat);
-    strapL.position.set(-0.2, 0.55, -0.2);
-    torso.add(strapL);
-    const strapR = strapL.clone();
-    strapR.position.x = 0.2;
-    torso.add(strapR);
-  }
-
-  const head = new THREE.Group();
-  head.position.set(0, 1.16, 0.02);
-  torso.add(head);
-
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.39, 26, 24), skin);
-  skull.scale.set(1.02, 1.08, 0.95);
-  skull.castShadow = true;
-  head.add(skull);
-
-  const facePatch = new THREE.Mesh(new THREE.SphereGeometry(0.34, 20, 18), faceMat);
-  facePatch.position.set(0, -0.04, 0.21);
-  facePatch.scale.set(0.95, 1.05, 0.46);
-  facePatch.castShadow = false;
-  head.add(facePatch);
-
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.405, 24, 20, 0, Math.PI * 2, 0, Math.PI / 1.86), hairMat);
-  hair.position.set(0, 0.15, -0.035);
-  hair.scale.set(1.04, 0.78, 1.02);
-  hair.castShadow = true;
-  head.add(hair);
-
-  const bangGeo = new THREE.SphereGeometry(0.075, 10, 8);
-  const bangData = [
-    [-0.22, 0.22, 0.2, 0.18, 0.12],
-    [-0.08, 0.25, 0.235, 0.04, 0.08],
-    [0.08, 0.25, 0.235, -0.04, 0.08],
-    [0.22, 0.22, 0.2, -0.18, 0.12],
-  ];
-  for (const [x, y, z, rz, rx] of bangData) {
-    const bang = new THREE.Mesh(bangGeo, hairMat);
-    bang.position.set(x, y, z);
-    bang.scale.set(1.18, 0.62, 0.55);
-    bang.rotation.z = rz;
-    bang.rotation.x = rx;
-    bang.castShadow = true;
-    head.add(bang);
-  }
-
-  const hairBack = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), hairMat);
-  hairBack.position.set(0, -0.08, -0.27);
-  hairBack.scale.set(1.18, 1.08, 0.82);
-  head.add(hairBack);
-
-  const leftSideHair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), hairMat);
-  leftSideHair.position.set(-0.34, 0.02, -0.02);
-  leftSideHair.scale.set(0.58, 1.22, 0.72);
-  head.add(leftSideHair);
-  const rightSideHair = leftSideHair.clone();
-  rightSideHair.position.x = 0.28;
-  head.add(rightSideHair);
-
-  const leftEar = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), skin);
-  leftEar.scale.set(0.6, 1, 0.4);
-  leftEar.position.set(-0.36, -0.01, 0.02);
-  head.add(leftEar);
-  const rightEar = leftEar.clone();
-  rightEar.position.x = 0.32;
-  head.add(rightEar);
-
-  const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
-  const leftEyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), eyeWhiteMat);
-  leftEyeWhite.position.set(-0.135, 0.055, 0.352);
-  leftEyeWhite.scale.set(1.06, 0.9, 0.48);
-  head.add(leftEyeWhite);
-  const rightEyeWhite = leftEyeWhite.clone();
-  rightEyeWhite.position.x = 0.12;
-  head.add(rightEyeWhite);
-
-  const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 10), eyeMat);
-  leftEye.position.set(-0.135, 0.052, 0.402);
-  head.add(leftEye);
-  const rightEye = leftEye.clone();
-  rightEye.position.x = 0.12;
-  head.add(rightEye);
-
-  const browMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1 });
-  const leftSpark = new THREE.Mesh(new THREE.SphereGeometry(0.013, 6, 6), eyeWhiteMat);
-  leftSpark.position.set(-0.146, 0.067, 0.428);
-  head.add(leftSpark);
-  const rightSpark = leftSpark.clone();
-  rightSpark.position.x = 0.115;
-  head.add(rightSpark);
-
-  const leftBrow = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.019, 0.018), browMat);
-  leftBrow.position.set(-0.135, 0.155, 0.366);
-  leftBrow.rotation.z = 0.12;
-  head.add(leftBrow);
-  const rightBrow = leftBrow.clone();
-  rightBrow.position.x = 0.12;
-  rightBrow.rotation.z = -0.12;
-  head.add(rightBrow);
-
-  const noseMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 1 });
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.07, 8), noseMat);
-  nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, -0.018, 0.392);
-  head.add(nose);
-
-  const mouthMat = new THREE.MeshStandardMaterial({ color: 0x7f3030, roughness: 0.6 });
-  const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.011, 8, 18, Math.PI), mouthMat);
-  mouth.position.set(0, -0.135, 0.392);
-  mouth.rotation.x = -0.08;
-  mouth.scale.y = 0.72;
-  head.add(mouth);
-
-  const cheekMat = new THREE.MeshStandardMaterial({
-    color: 0xe08a8a, roughness: 1, transparent: true, opacity: 0.55
-  });
-  const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), cheekMat);
-  leftCheek.position.set(-0.225, -0.075, 0.335);
-  leftCheek.scale.set(1.12, 0.72, 0.32);
-  head.add(leftCheek);
-  const rightCheek = leftCheek.clone();
-  rightCheek.position.x = 0.2;
-  head.add(rightCheek);
-
-  if (glasses) {
-    const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5, metalness: 0.4 });
-    const lensMat = new THREE.MeshStandardMaterial({
-      color: 0xa9d8ef, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.55
-    });
-    const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 18);
-    const leftLens = new THREE.Mesh(lensGeo, frameMat);
-    leftLens.position.set(-0.13, 0.06, 0.365);
-    head.add(leftLens);
-    const rightLens = leftLens.clone();
-    rightLens.position.x = 0.12;
-    head.add(rightLens);
-
-    const innerGeo = new THREE.CircleGeometry(0.082, 16);
-    const leftGlass = new THREE.Mesh(innerGeo, lensMat);
-    leftGlass.position.set(-0.13, 0.06, 0.367);
-    head.add(leftGlass);
-    const rightGlass = leftGlass.clone();
-    rightGlass.position.x = 0.12;
-    head.add(rightGlass);
-
-    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.012), frameMat);
-    bridge.position.set(0, 0.06, 0.365);
-    head.add(bridge);
-
-    const templeGeo = new THREE.BoxGeometry(0.16, 0.012, 0.012);
-    const leftTemple = new THREE.Mesh(templeGeo, frameMat);
-    leftTemple.position.set(-0.25, 0.06, 0.25);
-    leftTemple.rotation.y = 0.4;
-    head.add(leftTemple);
-    const rightTemple = leftTemple.clone();
-    rightTemple.position.x = 0.22;
-    rightTemple.rotation.y = -0.4;
-    head.add(rightTemple);
-  }
-
-  function buildArm(side) {
-    const sign = side === "left" ? -1 : 1;
-    const shoulder = new THREE.Group();
-    shoulder.position.set(sign * 0.48, 0.88, 0);
-    shoulder.rotation.z = sign * 0.12;
-    shoulder.rotation.x = -0.03;
-    torso.add(shoulder);
-
-    const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), shirt);
-    shoulderBall.castShadow = true;
-    shoulder.add(shoulderBall);
-
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.34, 5, 12), shirt);
-    upperArm.position.y = -0.25;
-    upperArm.rotation.z = sign * 0.02;
-    upperArm.castShadow = true;
-    shoulder.add(upperArm);
-
-    const elbow = new THREE.Group();
-    elbow.position.y = -0.48;
-    shoulder.add(elbow);
-
-    const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 10), shirt);
-    elbowBall.scale.set(1.05, 0.82, 1.05);
-    elbowBall.castShadow = true;
-    elbow.add(elbowBall);
-
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.082, 0.36, 5, 12), skin);
-    forearm.position.y = -0.27;
-    forearm.castShadow = true;
-    elbow.add(forearm);
-
-    const wrist = new THREE.Mesh(new THREE.SphereGeometry(0.073, 10, 8), skin);
-    wrist.position.y = -0.49;
-    wrist.scale.set(1, 0.8, 1);
-    elbow.add(wrist);
-
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), skin);
-    hand.position.y = -0.59;
-    hand.scale.set(0.95, 1.12, 0.78);
-    hand.castShadow = true;
-    elbow.add(hand);
-
-    for (const x of [-0.045, 0, 0.045]) {
-      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.065, 3, 6), skin);
-      finger.position.set(x, -0.68, 0.02);
-      finger.castShadow = true;
-      elbow.add(finger);
-    }
-
-    return { shoulder, elbow };
-  }
-
-  const leftArm = buildArm("left");
-  const rightArm = buildArm("right");
-
-  function buildLeg(side) {
-    const sign = side === "left" ? -1 : 1;
-    const hip = new THREE.Group();
-    hip.position.set(sign * 0.18, 1.05, 0);
-    root.add(hip);
-
-    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), pants);
-    hipBall.castShadow = true;
-    hip.add(hipBall);
-
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.42, 12), pants);
-    thigh.position.y = -0.225;
-    thigh.castShadow = true;
-    hip.add(thigh);
-
-    const knee = new THREE.Group();
-    knee.position.y = -0.45;
-    hip.add(knee);
-
-    const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), pants);
-    kneeBall.castShadow = true;
-    knee.add(kneeBall);
-
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.42, 12), pants);
-    shin.position.y = -0.225;
-    shin.castShadow = true;
-    knee.add(shin);
-
-    const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), pants);
-    ankle.position.y = -0.44;
-    ankle.scale.set(1, 0.72, 1);
-    ankle.castShadow = true;
-    knee.add(ankle);
-
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.13, 0.5), shoes);
-    foot.position.set(0, -0.48, 0.1);
-    foot.castShadow = true;
-    knee.add(foot);
-
-    const heelCap = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), shoes);
-    heelCap.position.set(0, -0.47, -0.1);
-    heelCap.scale.set(1.2, 0.7, 0.9);
-    knee.add(heelCap);
-
-    return { hip, knee };
-  }
-
-  const leftLeg = buildLeg("left");
-  const rightLeg = buildLeg("right");
-
-  return {
-    group: root,
-    refs: {
-      torso,
-      head,
-      leftShoulder: leftArm.shoulder,
-      leftElbow: leftArm.elbow,
-      rightShoulder: rightArm.shoulder,
-      rightElbow: rightArm.elbow,
-      leftHip: leftLeg.hip,
-      leftKnee: leftLeg.knee,
-      rightHip: rightLeg.hip,
-      rightKnee: rightLeg.knee
-    }
-  };
-}
-
-function animateWalk(refs, walkPhase, intensity) {
-  const k = Math.min(Math.max(intensity, 0), 1);
-  const armSwing = Math.sin(walkPhase) * 1.0 * k;
-  const legSwing = Math.sin(walkPhase) * 0.85 * k;
-
-  refs.leftShoulder.rotation.x = -0.03;
-  refs.rightShoulder.rotation.x = -0.03;
-  refs.leftShoulder.rotation.z = -0.01;
-  refs.rightShoulder.rotation.z = 0.01;
-  refs.leftElbow.rotation.x = 0.1 + armSwing * 0.82;
-  refs.rightElbow.rotation.x = 0.1 - armSwing * 0.82;
-
-  refs.leftHip.rotation.x = -legSwing;
-  refs.rightHip.rotation.x = legSwing;
-  refs.leftKnee.rotation.x = Math.max(0, legSwing) * 1.2;
-  refs.rightKnee.rotation.x = Math.max(0, -legSwing) * 1.2;
-
-  refs.torso.rotation.y = -armSwing * 0.14;
-  refs.head.rotation.y = armSwing * 0.07;
-  refs.head.rotation.x = Math.sin(walkPhase * 2) * 0.05;
-}
-
-function setRestPose(refs, time, offset = 0) {
-  const breath = Math.sin(time * 1.6 + offset) * 0.05;
-  refs.leftShoulder.rotation.x = -0.04 + breath * 0.35;
-  refs.rightShoulder.rotation.x = -0.04 - breath * 0.35;
-  refs.leftElbow.rotation.x = 0.14 + breath * 0.25;
-  refs.rightElbow.rotation.x = 0.14 + breath * 0.25;
-  refs.leftHip.rotation.x = 0;
-  refs.rightHip.rotation.x = 0;
-  refs.leftKnee.rotation.x = 0.05;
-  refs.rightKnee.rotation.x = 0.05;
-  refs.torso.rotation.y = Math.sin(time * 0.6 + offset) * 0.04;
-  refs.head.rotation.y = Math.sin(time * 0.5 + offset * 1.3) * 0.18;
-  refs.head.rotation.x = Math.sin(time * 0.8 + offset) * 0.04;
-}
-
-function animateCelebrate(refs, time, intensity = 1) {
-  const k = Math.min(Math.max(intensity, 0), 1);
-  const bounce = Math.sin(time * 7.5) * 0.18 * k;
-  const armLift = 1.05 + Math.abs(Math.sin(time * 6.5)) * 0.4 * k;
-  refs.leftShoulder.rotation.x = -0.88 - bounce;
-  refs.rightShoulder.rotation.x = -0.88 - bounce;
-  refs.leftShoulder.rotation.z = 0.22 + Math.sin(time * 4.2) * 0.12 * k;
-  refs.rightShoulder.rotation.z = -0.22 - Math.sin(time * 4.2) * 0.12 * k;
-  refs.leftElbow.rotation.x = armLift;
-  refs.rightElbow.rotation.x = armLift;
-  refs.leftElbow.rotation.z = Math.sin(time * 5.1) * 0.08 * k;
-  refs.rightElbow.rotation.z = -Math.sin(time * 5.1) * 0.08 * k;
-  refs.leftHip.rotation.x = bounce * 0.15;
-  refs.rightHip.rotation.x = bounce * 0.15;
-  refs.leftKnee.rotation.x = 0.15 + Math.max(0, bounce) * 0.45;
-  refs.rightKnee.rotation.x = 0.15 + Math.max(0, bounce) * 0.45;
-  refs.torso.rotation.x = 0.1 + bounce * 0.45;
-  refs.torso.rotation.y = Math.sin(time * 3.8) * 0.18 * k;
-  refs.head.rotation.x = -0.08 + Math.sin(time * 8.2) * 0.04 * k;
-  refs.head.rotation.y = Math.sin(time * 3.8) * 0.14 * k;
-  refs.head.rotation.z = Math.sin(time * 6.9) * 0.1 * k;
-}
-
-function setSittingPose(refs) {
-  refs.leftShoulder.rotation.x = -0.08;
-  refs.rightShoulder.rotation.x = -0.08;
-  refs.leftElbow.rotation.x = 0.42;
-  refs.rightElbow.rotation.x = 0.42;
-  refs.leftHip.rotation.x = -Math.PI / 2.2;
-  refs.rightHip.rotation.x = -Math.PI / 2.2;
-  refs.leftKnee.rotation.x = Math.PI / 2.3;
-  refs.rightKnee.rotation.x = Math.PI / 2.3;
-  refs.torso.rotation.y = 0;
-  refs.head.rotation.x = -0.05;
-  refs.head.rotation.y = 0;
-}
-
-function animateRun(refs, walkPhase, intensity) {
-  const k = Math.min(Math.max(intensity, 0), 1);
-  const armSwing = Math.sin(walkPhase) * 1.6 * k;
-  const legSwing = Math.sin(walkPhase) * 1.35 * k;
-  refs.leftShoulder.rotation.x = -0.08;
-  refs.rightShoulder.rotation.x = -0.08;
-  refs.leftShoulder.rotation.z = 0.1;
-  refs.rightShoulder.rotation.z = -0.1;
-  refs.leftElbow.rotation.x = 0.45 + armSwing * 1.35;
-  refs.rightElbow.rotation.x = 0.45 - armSwing * 1.35;
-  refs.leftElbow.rotation.z = 0.03;
-  refs.rightElbow.rotation.z = -0.03;
-  refs.leftHip.rotation.x = -legSwing;
-  refs.rightHip.rotation.x = legSwing;
-  refs.leftKnee.rotation.x = Math.max(0, legSwing) * 1.7;
-  refs.rightKnee.rotation.x = Math.max(0, -legSwing) * 1.7;
-  refs.torso.rotation.x = 0.12 * k;
-  refs.torso.rotation.y = -armSwing * 0.12;
-  refs.head.rotation.x = 0.02 - Math.sin(walkPhase * 2) * 0.03;
-  refs.head.rotation.y = armSwing * 0.05;
-}
-
-function setCrouchPose(refs, time, intensity) {
-  const wobble = Math.sin(time * 6) * 0.06 * intensity;
-  refs.leftShoulder.rotation.x = 0.12 + wobble;
-  refs.rightShoulder.rotation.x = 0.12 - wobble;
-  refs.leftElbow.rotation.x = 0.88;
-  refs.rightElbow.rotation.x = 0.88;
-  refs.leftHip.rotation.x = -0.9 - wobble * 0.4;
-  refs.rightHip.rotation.x = -0.9 + wobble * 0.4;
-  refs.leftKnee.rotation.x = 1.6;
-  refs.rightKnee.rotation.x = 1.6;
-  refs.torso.rotation.x = 0.35;
-  refs.torso.rotation.y = wobble * 0.3;
-  refs.head.rotation.x = -0.15;
-  refs.head.rotation.y = wobble * 0.3;
-}
-
-function resetRigPose(refs) {
-  for (const key of Object.keys(refs)) {
-    const obj = refs[key];
-    if (obj && obj.rotation) obj.rotation.set(0, 0, 0);
-  }
-}
-
-function animateDance(refs, time) {
-  const t = time * 4.2;
-  const sway = Math.sin(t);
-  const bob = Math.sin(t * 2) * 0.08;
-  refs.leftShoulder.rotation.x = -1.18 + sway * 0.18;
-  refs.rightShoulder.rotation.x = -1.18 - sway * 0.18;
-  refs.leftShoulder.rotation.y = 0;
-  refs.rightShoulder.rotation.y = 0;
-  refs.leftShoulder.rotation.z = 0.4 + Math.cos(t) * 0.12;
-  refs.rightShoulder.rotation.z = -0.4 - Math.cos(t) * 0.12;
-  refs.leftElbow.rotation.x = 0.95 + Math.sin(t + 0.5) * 0.16;
-  refs.rightElbow.rotation.x = 0.95 - Math.sin(t + 0.5) * 0.16;
-  refs.leftElbow.rotation.z = 0.04;
-  refs.rightElbow.rotation.z = -0.04;
-  refs.leftHip.rotation.x = sway * 0.16;
-  refs.rightHip.rotation.x = -sway * 0.16;
-  refs.leftKnee.rotation.x = 0.12 + Math.max(0, sway) * 0.18;
-  refs.rightKnee.rotation.x = 0.12 + Math.max(0, -sway) * 0.18;
-  refs.torso.rotation.x = 0;
-  refs.torso.rotation.y = sway * 0.16;
-  refs.torso.rotation.z = sway * 0.06;
-  refs.head.rotation.y = sway * 0.16;
-  refs.head.rotation.x = bob;
-  refs.head.rotation.z = sway * 0.04;
-}
-
-function animateSixSeven(refs, time, offset = 0) {
-  const t = time * 5.4 + offset;
-  const wave = Math.sin(t);
-  refs.leftShoulder.rotation.x = -0.14;
-  refs.rightShoulder.rotation.x = -0.14;
-  refs.leftShoulder.rotation.y = 0;
-  refs.rightShoulder.rotation.y = 0;
-  refs.leftShoulder.rotation.z = -0.2;
-  refs.rightShoulder.rotation.z = 0.2;
-  refs.leftElbow.rotation.x = -1.18 + wave * 0.58;
-  refs.rightElbow.rotation.x = -1.18 - wave * 0.58;
-  refs.leftElbow.rotation.y = 0;
-  refs.rightElbow.rotation.y = 0;
-  refs.leftElbow.rotation.z = -0.08;
-  refs.rightElbow.rotation.z = 0.08;
-  refs.leftHip.rotation.x = Math.max(0, -wave) * 0.08;
-  refs.rightHip.rotation.x = Math.max(0, wave) * 0.08;
-  refs.leftKnee.rotation.x = 0.08 + Math.max(0, wave) * 0.12;
-  refs.rightKnee.rotation.x = 0.08 + Math.max(0, -wave) * 0.12;
-  refs.torso.rotation.y = wave * 0.08;
-  refs.torso.rotation.z = wave * 0.04;
-  refs.head.rotation.y = -wave * 0.1;
-  refs.head.rotation.x = -0.02 + Math.sin(t * 2) * 0.025;
-}
-
-function animateGlitch(refs, time, intensity = 1, offset = 0) {
-  const wobble = Math.sin(time * 26 + offset) * 0.18 * intensity;
-  const snap = Math.sin(time * 41 + offset * 0.7) * 0.08 * intensity;
-  const jitter = Math.sin(time * 55 + offset * 1.9) * 0.05 * intensity;
-
-  refs.torso.rotation.y = wobble * 0.8;
-  refs.torso.rotation.z = snap * 0.7;
-  refs.head.rotation.y = wobble * 1.2;
-  refs.head.rotation.x = snap * 0.9;
-  refs.head.rotation.z = jitter;
-  refs.leftShoulder.rotation.x += wobble * 0.25;
-  refs.rightShoulder.rotation.x -= wobble * 0.25;
-  refs.leftShoulder.rotation.z = snap * 0.45;
-  refs.rightShoulder.rotation.z = -snap * 0.45;
-  refs.leftElbow.rotation.x += jitter * 0.9;
-  refs.rightElbow.rotation.x -= jitter * 0.9;
-  refs.leftHip.rotation.x += snap * 0.35;
-  refs.rightHip.rotation.x -= snap * 0.35;
-  refs.leftKnee.rotation.z = wobble * 0.22;
-  refs.rightKnee.rotation.z = -wobble * 0.22;
-}
 
 const playerRig = createCharacter(avatarToGameAppearance(opts.avatar));
 const player = playerRig.group;
 world.add(player);
+playerPositionTarget = player;
 player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
+gateCheckpoint = createGateCheckpoint({
+  container: container as HTMLElement | null | undefined,
+  world,
+  interactables,
+  createBlocker,
+  createNameLabel,
+  getDistance2D,
+  player,
+  speak: speechOverlay.speak,
+  entryX: CAMPUS_ENTRY_X,
+  entryZ: CAMPUS_ENTRY_Z,
+});
 
 function createNameLabel(text, color = "#fff8dc", accent = "#62ff9f") {
   const canvasEl = document.createElement("canvas");
@@ -3098,7 +1250,7 @@ function triggerNearbyDance() {
   triggerNearbyReaction(player.position, "cheer", { skipLocal: true });
 }
 
-function triggerNearbyCelebrate(origin, duration = 3.2, options = {}) {
+function triggerNearbyCelebrate(origin, duration = 3.2, options: ReactionOptions = {}) {
   const RADIUS = 6.5;
   const skipLocal = options.skipLocal === true;
   const skipRemoteId = options.skipRemoteId || "";
@@ -3122,7 +1274,7 @@ function triggerNearbyCelebrate(origin, duration = 3.2, options = {}) {
   triggerNearbyReaction(origin, "cheer", { skipLocal, skipRemoteId });
 }
 
-function triggerNearbyReaction(origin, kind = "like", options = {}) {
+function triggerNearbyReaction(origin, kind = "like", options: ReactionOptions = {}) {
   const RADIUS = 6.25;
   const skipLocal = options.skipLocal === true;
   const skipRemoteId = options.skipRemoteId || "";
@@ -3403,7 +1555,7 @@ function createBench(x, z, rotation = 0) {
         position: sitSpot.clone(),
         rotation: rotation + Math.PI
       };
-      speak("Sentando para descansar um pouco.", "Banco");
+      speechOverlay.speak("Sentando para descansar um pouco.", "Banco");
     },
     npcInteract(npc) {
       npc.pose = {
@@ -3475,7 +1627,7 @@ function createFountain(x, z) {
     npcDuration: 1.7,
     interact() {
       pulseWater();
-      speak("A agua respinga e refresca o caminho.", "Fonte");
+      speechOverlay.speak("A agua respinga e refresca o caminho.", "Fonte");
     },
     npcInteract() {
       pulseWater();
@@ -3535,7 +1687,7 @@ function createNoticeBoard(x, z, rotation = 0) {
     npcDuration: 2.1,
     interact() {
       pulse = 1;
-      speak("Biblioteca ate 21h. Mutirao do gramado sexta.", "Painel de avisos");
+      speechOverlay.speak("Biblioteca ate 21h. Mutirao do gramado sexta.", "Painel de avisos");
     },
     npcInteract() {
       pulse = 1;
@@ -3595,7 +1747,7 @@ function createCampusBanner(x, z, rotation = 0) {
 
   decorativeProps.push({
     update(dt, time) {
-      const wind = Math.max(0.12, atmosphereSnapshot.wind * 0.9 + 0.08);
+      const wind = Math.max(0.12, currentAtmosphereState.weather.wind * 0.9 + 0.08);
       const sway = 0.04 + wind * 0.16;
       for (let i = 0; i < clothPositions.count; i += 1) {
         const index = i * 3;
@@ -3647,7 +1799,7 @@ function createBall(x, z) {
     npcDuration: 0.9,
     interact() {
       kickBall(player.position);
-      speak("A bola sai rolando pelo gramado.", "Bola");
+      speechOverlay.speak("A bola sai rolando pelo gramado.", "Bola");
     },
     npcInteract(npc) {
       kickBall(npc.group.position);
@@ -3833,11 +1985,11 @@ function createBike(x, z, rotation = 0) {
       swimmingMinigame?.isNoBikeZone(player.position.x, player.position.z) ||
       swimmingMinigame?.isNoBikeZone(bike.position.x, bike.position.z)
     ) {
-      speak("Bicicletas ficam fora da area da piscina.", "Piscina");
+      speechOverlay.speak("Bicicletas ficam fora da area da piscina.", "Piscina");
       return;
     }
     if (bikeState.remoteMountedBy) {
-      speak("Essa bicicleta ja esta sendo usada por outro player.", "Bicicleta");
+      speechOverlay.speak("Essa bicicleta ja esta sendo usada por outro player.", "Bicicleta");
       return;
     }
     if (playerState.ridingBike === bikeState) return;
@@ -3852,14 +2004,14 @@ function createBike(x, z, rotation = 0) {
     playerState.jumpVel = 0;
     playerVelocity.multiplyScalar(0.2);
     emitBikeState(true);
-    speak("Voce subiu na bicicleta. Pedale com WASD e use E longe de objetos para descer.", "Bicicleta");
+    speechOverlay.speak("Voce subiu na bicicleta. Pedale com WASD e use E longe de objetos para descer.", "Bicicleta");
   }
 
   function dismountBike() {
     if (playerState.ridingBike !== bikeState) return false;
     const spot = findDismountSpot();
     if (!spot) {
-      speak("Nao ha espaco para descer da bicicleta aqui.", "Bicicleta");
+      speechOverlay.speak("Nao ha espaco para descer da bicicleta aqui.", "Bicicleta");
       return false;
     }
     player.position.set(spot.x, 0, spot.z);
@@ -3874,7 +2026,7 @@ function createBike(x, z, rotation = 0) {
     player.rotation.x = 0;
     playerVelocity.set(0, 0);
     emitBikeState(false);
-    speak("Voce desceu da bicicleta.", "Bicicleta");
+    speechOverlay.speak("Voce desceu da bicicleta.", "Bicicleta");
     return true;
   }
 
@@ -4119,7 +2271,7 @@ function createCampusBus(routePoints) {
   const seatAnchor = new THREE.Vector3();
   const initialPathYaw = routeSegments[0]?.yaw ?? Math.PI / 2;
   bus.rotation.y = routeYawToBusYaw(initialPathYaw);
-  const state = {
+  const state: any = {
     group: bus,
     route,
     routeSegments,
@@ -4296,7 +2448,7 @@ function createCampusBus(routePoints) {
   world.add(bus);
   buses.push(state);
 
-  const busInteractable = {
+  const busInteractable: any = {
     kind: "bus",
     label: "Jardineira",
     radius: 4.6,
@@ -4309,13 +2461,13 @@ function createCampusBus(routePoints) {
       state.rideBeacon = 1.2;
       if (state.crowdCount >= 3) {
         if (state.crowdComplaintCooldown <= 0) {
-          speak("Chegou tarde. Essa jardineira ja lotou. Espera a proxima.", "Motorista");
+          speechOverlay.speak("Chegou tarde. Essa jardineira ja lotou. Espera a proxima.", "Motorista");
           state.crowdComplaintCooldown = 5.5;
         }
         return;
       }
       if (state.crowdCount >= 2) {
-        speak("Vai apertado, mas ainda cabe mais um.", "Motorista");
+        speechOverlay.speak("Vai apertado, mas ainda cabe mais um.", "Motorista");
       }
       enterSitState(
         {
@@ -4329,7 +2481,7 @@ function createCampusBus(routePoints) {
           endSpeaker: "Jardineira"
         }
       );
-      speak("Voce embarcou na jardineira do campus.", "Jardineira");
+      speechOverlay.speak("Voce embarcou na jardineira do campus.", "Jardineira");
     },
     update(dt, time) {
       moveAlongRoute(dt, time);
@@ -4346,103 +2498,6 @@ function createCampusBus(routePoints) {
   busInteractable.crowdLabel = state.crowdLabel;
   busInteractable.crowdCount = state.crowdCount;
   interactables.push(busInteractable);
-}
-
-function createLamp(x, z) {
-  const lamp = new THREE.Group();
-  const lampState = {
-    head: null,
-    point: null,
-    cone: null,
-    pool: null,
-    power: 0,
-    phase: rand(0, Math.PI * 2)
-  };
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.1, 4.2, 10),
-    new THREE.MeshStandardMaterial({ color: 0x55606a, roughness: 0.9 })
-  );
-  pole.position.y = 2.1;
-  pole.castShadow = true;
-  lamp.add(pole);
-
-  const arm = new THREE.Mesh(
-    new THREE.BoxGeometry(1.1, 0.08, 0.08),
-    new THREE.MeshStandardMaterial({ color: 0x55606a, roughness: 0.9 })
-  );
-  arm.position.set(0.46, 4.02, 0);
-  arm.castShadow = true;
-  lamp.add(arm);
-
-  const head = new THREE.Mesh(
-    new THREE.BoxGeometry(0.35, 0.18, 0.3),
-    new THREE.MeshStandardMaterial({ color: 0xf2f4d8, emissive: 0xf7f1b0, emissiveIntensity: 0.55 })
-  );
-  head.position.set(1.0, 4.0, 0);
-  head.castShadow = true;
-  lamp.add(head);
-  lampState.head = head;
-
-  const point = new THREE.PointLight(0xffe8a3, 0, 12, 2);
-  point.position.set(1.0, 4.0, 0);
-  lamp.add(point);
-  lampState.point = point;
-
-  const cone = new THREE.Mesh(
-    new THREE.ConeGeometry(3.05, 4.8, 32, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xffe6a3,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending
-    })
-  );
-  cone.position.set(1.0, 1.82, 0);
-  cone.renderOrder = 2;
-  cone.visible = false;
-  lamp.add(cone);
-  lampState.cone = cone;
-
-  const pool = new THREE.Mesh(
-    new THREE.CircleGeometry(4.25, 40),
-    new THREE.MeshBasicMaterial({
-      color: 0xffdf8a,
-      transparent: true,
-      opacity: 0,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending
-    })
-  );
-  pool.rotation.x = -Math.PI / 2;
-  pool.position.set(1.0, 0.025, 0);
-  pool.renderOrder = 1;
-  pool.visible = false;
-  lamp.add(pool);
-  lampState.pool = pool;
-
-  lamp.position.set(x, 0, z);
-  lamp.visible = false;
-  world.add(lamp);
-  streetLamps.push(lampState);
-
-  interactables.push({
-    kind: "lamp",
-    label: "Poste",
-    radius: 0,
-    position: new THREE.Vector3(x, 0, z),
-    root: lamp,
-    npcApproachRadius: 1.1,
-    npcDuration: 1.1,
-    interact() {
-      speak("Os postes acendem automaticamente quando anoitece.", "Poste");
-    },
-    update() {
-      const pulse = 0.04 + Math.sin(clock.elapsedTime * 5 + lampState.phase) * 0.02;
-      head.material.emissiveIntensity = 0.08 + lampState.power * 1.9 + pulse * Math.max(0.1, lampState.point.intensity);
-    }
-  });
 }
 
 function createSnackCart(x, z, rotation = 0) {
@@ -4497,7 +2552,7 @@ function createSnackCart(x, z, rotation = 0) {
     npcDuration: 1.8,
     interact() {
       pulse = 1;
-      speak("O carrinho tem um cheirinho bom de lanche.", "Carrinho");
+      speechOverlay.speak("O carrinho tem um cheirinho bom de lanche.", "Carrinho");
     },
     npcInteract() {
       pulse = 1;
@@ -4564,7 +2619,7 @@ function createReadingTable(x, z, rotation = 0) {
     npcDuration: 2.4,
     interact() {
       pulse = 1;
-      speak("Mesa boa para revisar anotações e combinar planos.", "Mesa");
+      speechOverlay.speak("Mesa boa para revisar anotações e combinar planos.", "Mesa");
     },
     npcInteract() {
       pulse = 1;
@@ -4612,7 +2667,7 @@ function createInfoKiosk(x, z, rotation = 0) {
     npcDuration: 1.9,
     interact() {
       pulse = 1;
-      speak("O quiosque mostra o caminho mais movimentado do campus.", "Quiosque");
+      speechOverlay.speak("O quiosque mostra o caminho mais movimentado do campus.", "Quiosque");
     },
     npcInteract() {
       pulse = 1;
@@ -4658,7 +2713,7 @@ function createBikeRack(x, z, rotation = 0) {
     npcDuration: 1.4,
     interact() {
       pulse = 1;
-      speak("O bicicletário está pronto para a próxima corrida.", "Bicicletário");
+      speechOverlay.speak("O bicicletário está pronto para a próxima corrida.", "Bicicletário");
     },
     npcInteract() {
       pulse = 1;
@@ -4743,7 +2798,7 @@ function createMusicTotem(x, z, rotation = 0) {
     interact() {
       pulse = 1;
       onMediaBoothInteract();
-      speak("Cole um link do YouTube ou Spotify para tocar na radio.", "Radio do campus");
+      speechOverlay.speak("Cole um link do YouTube ou Spotify para tocar na radio.", "Radio do campus");
     },
     npcInteract() {
       pulse = Math.max(pulse, 0.35);
@@ -4795,7 +2850,7 @@ function createWaterStation(x, z, rotation = 0) {
     npcDuration: 1.2,
     interact() {
       pulse = 1;
-      speak("Um gole de água gelada ajuda a voltar pro ritmo.", "Bebedouro");
+      speechOverlay.speak("Um gole de água gelada ajuda a voltar pro ritmo.", "Bebedouro");
     },
     npcInteract() {
       pulse = 1;
@@ -4920,7 +2975,7 @@ const pigeons = [];
 
 function createDuckEntity(x, z) {
   const visuals = createDuck(x, z);
-  const state = {
+  const state: any = {
     name: "Pato",
     kind: "duck",
     group: visuals.group,
@@ -5091,7 +3146,7 @@ function choosePigeonTarget(pigeon, spread = 3.4) {
 
 function createPigeonEntity(x, z) {
   const visuals = createPigeon(x, z);
-  const state = {
+  const state: any = {
     name: "Pombo",
     kind: "pigeon",
     group: visuals.group,
@@ -5352,7 +3407,7 @@ function createNpc(config) {
   const anchors = config.path.map(({ x, z }) => new THREE.Vector3(x, 0, z));
   const id = `npc:${npcs.length}`;
 
-  const state = {
+  const state: any = {
     id,
     name: config.name,
     rig,
@@ -5412,7 +3467,7 @@ function createNpc(config) {
 
 const npcs = [];
 const npcById = new Map();
-let npcAuthorityActive = false;
+const npcSync = createNpcSync();
 createNpc({
   name: "Ana",
   start: { x: -2, z: 18 },
@@ -5941,45 +3996,16 @@ createNpc({
   }
 });
 
-function getNpcNetAnim(npc) {
-  if (npc.pose?.type === "sit") return "sit";
-  if (npc.dancing && npc.danceTimer > 0) return "dance";
-  if (npc.celebrateTimer && npc.celebrateTimer > 0) return "celebrate";
-  if (npc.state === "wander" || npc.state === "approach" || npc.state === "react") {
-    return npc.running ? "run" : "walk";
-  }
-  return "idle";
-}
-
 function serializeNpcStates() {
-  return npcs.map((npc) => ({
-    id: npc.id,
-    x: npc.group.position.x,
-    y: npc.group.position.y,
-    z: npc.group.position.z,
-    ry: npc.group.rotation.y,
-    speed: npc.speed,
-    anim: getNpcNetAnim(npc),
-  }));
+  return npcSync.serializeNpcStates(npcs);
 }
 
 function setNpcAuthority(active) {
-  npcAuthorityActive = active === true;
+  npcSync.setNpcAuthority(active);
 }
 
 function applyNpcSnapshots(snapshots = []) {
-  if (npcAuthorityActive) return;
-  for (const snapshot of snapshots) {
-    const npc = npcById.get(snapshot?.id);
-    if (!npc) continue;
-    if (typeof snapshot.x === "number") npc.targetX = snapshot.x;
-    if (typeof snapshot.y === "number") npc.targetY = snapshot.y;
-    if (typeof snapshot.z === "number") npc.targetZ = snapshot.z;
-    if (typeof snapshot.ry === "number") npc.targetRy = snapshot.ry;
-    npc.netAnim = typeof snapshot.anim === "string" ? snapshot.anim : "idle";
-    npc.speed = typeof snapshot.speed === "number" ? snapshot.speed : npc.speed;
-    npc.hasNetState = true;
-  }
+  npcSync.applyNpcSnapshots(npcById, snapshots);
 }
 
 function updateNpcFromSnapshot(npc, dt, time) {
@@ -6044,438 +4070,23 @@ createPigeonEntity(6.8, -3.1);
 createPigeonEntity(8.5, -1.2);
 createPigeonEntity(7.2, 0.8);
 
-const devRaycaster = new THREE.Raycaster();
-const devPointerNdc = new THREE.Vector2();
-const devGroundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-const devGroundPoint = new THREE.Vector3();
-const devDragOffset = new THREE.Vector3();
-const devObjectWorldPosition = new THREE.Vector3();
-const devParentLocalPosition = new THREE.Vector3();
-const devSelectionBox = new THREE.BoxHelper(world, 0x62ff9f);
-devSelectionBox.visible = false;
-devSelectionBox.renderOrder = 1000;
-devSelectionBox.material.depthTest = false;
-scene.add(devSelectionBox);
-
-const devOverlay = document.createElement("div");
-devOverlay.className = "dev-tools-panel";
-devOverlay.hidden = true;
-container.appendChild(devOverlay);
-
-const devPointer = {
-  cssX: 0,
-  cssY: 0,
-  deviceX: 0,
-  deviceY: 0,
-  worldX: 0,
-  worldZ: 0,
-  hasWorld: false,
-};
-let devMode = false;
-let devSelected = null;
-let devDragging = false;
-let devSelectionMoved = false;
-
-const DEV_GAMEPLAY_KEYS = new Set([
-  "KeyW",
-  "KeyA",
-  "KeyS",
-  "KeyD",
-  "ArrowUp",
-  "ArrowDown",
-  "ArrowLeft",
-  "ArrowRight",
-  "KeyE",
-  "Space",
-  "KeyG",
-  "Digit1",
-  "Digit2",
-  "Digit3",
-  "Digit4",
-  "Digit5",
-]);
-
-function formatDevNumber(value, digits = 2) {
-  return Number.isFinite(value) ? value.toFixed(digits) : "--";
-}
-
-function escapeDevText(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function getCanvasPointer(event) {
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, rect.width);
-  const height = Math.max(1, rect.height);
-  const cssX = THREE.MathUtils.clamp(event.clientX - rect.left, 0, width);
-  const cssY = THREE.MathUtils.clamp(event.clientY - rect.top, 0, height);
-  const pixelRatio = renderer.getPixelRatio ? renderer.getPixelRatio() : window.devicePixelRatio || 1;
-
-  devPointer.cssX = cssX;
-  devPointer.cssY = cssY;
-  devPointer.deviceX = cssX * pixelRatio;
-  devPointer.deviceY = cssY * pixelRatio;
-  devPointerNdc.set((cssX / width) * 2 - 1, -(cssY / height) * 2 + 1);
-  return devPointer;
-}
-
-function updateDevGroundPoint(event) {
-  getCanvasPointer(event);
-  devRaycaster.setFromCamera(devPointerNdc, camera);
-  const hit = devRaycaster.ray.intersectPlane(devGroundPlane, devGroundPoint);
-  devPointer.hasWorld = !!hit;
-  if (hit) {
-    devPointer.worldX = hit.x;
-    devPointer.worldZ = hit.z;
-  }
-  return hit;
-}
-
-function getDevTargetWorldPosition(target, out = devObjectWorldPosition) {
-  if (!target?.object) return out.set(0, 0, 0);
-  return target.object.getWorldPosition(out);
-}
-
-function findBikeStateByGroup(group) {
-  for (const bike of sharedBikes.values()) {
-    if (bike.group === group) return bike;
-  }
-  return null;
-}
-
-function collectDevTargets() {
-  const targets = [];
-  const seen = new Set();
-
-  function addTarget({ object, label, kind, entityType, entity, position, pickRadius = 1.8 }) {
-    if (!object || seen.has(object.uuid)) return;
-    seen.add(object.uuid);
-    targets.push({
-      object,
-      label: label || kind || object.name || "Objeto",
-      kind: kind || "objeto",
-      entityType,
-      entity,
-      position,
-      pickRadius,
-    });
-  }
-
-  addTarget({
-    object: player,
-    label: "Jogador local",
-    kind: "player",
-    entityType: "player",
-    entity: player,
-    position: player.position,
-    pickRadius: 1.4,
-  });
-
-  for (const item of interactables) {
-    if (!item?.root || item.kind === "door" || item.kind === "bus") continue;
-    addTarget({
-      object: item.root,
-      label: item.label,
-      kind: item.kind || "interagivel",
-      entityType: "interactable",
-      entity: item,
-      position: item.position,
-      pickRadius: Math.max(1.4, item.radius || item.npcApproachRadius || 1.8),
-    });
-  }
-
-  for (const npc of npcs) {
-    addTarget({
-      object: npc.group,
-      label: npc.name,
-      kind: "npc",
-      entityType: "npc",
-      entity: npc,
-      position: npc.group.position,
-      pickRadius: 1.6,
-    });
-  }
-
-  for (const duck of ducks) {
-    addTarget({
-      object: duck.group,
-      label: duck.name,
-      kind: "duck",
-      entityType: "duck",
-      entity: duck,
-      position: duck.group.position,
-      pickRadius: 1.2,
-    });
-  }
-
-  for (const pigeon of pigeons) {
-    addTarget({
-      object: pigeon.group,
-      label: pigeon.name,
-      kind: "pigeon",
-      entityType: "pigeon",
-      entity: pigeon,
-      position: pigeon.group.position,
-      pickRadius: 1,
-    });
-  }
-
-  return targets;
-}
-
-function resolveDevTargetFromObject(object, targetByUuid) {
-  let current = object;
-  while (current) {
-    const target = targetByUuid.get(current.uuid);
-    if (target) return target;
-    current = current.parent;
-  }
-  return null;
-}
-
-function pickDevTarget(event) {
-  const groundHit = updateDevGroundPoint(event);
-  const targets = collectDevTargets();
-  const targetByUuid = new Map();
-  const roots = [];
-
-  for (const target of targets) {
-    target.object.traverse?.((node) => targetByUuid.set(node.uuid, target));
-    roots.push(target.object);
-  }
-
-  devRaycaster.setFromCamera(devPointerNdc, camera);
-  const hits = devRaycaster.intersectObjects(roots, true);
-  for (const hit of hits) {
-    const target = resolveDevTargetFromObject(hit.object, targetByUuid);
-    if (target) return target;
-  }
-
-  if (!groundHit) return null;
-
-  let fallback = null;
-  let fallbackDistance = Infinity;
-  for (const target of targets) {
-    const position = getDevTargetWorldPosition(target);
-    const distance = Math.hypot(position.x - groundHit.x, position.z - groundHit.z);
-    if (distance <= target.pickRadius && distance < fallbackDistance) {
-      fallback = target;
-      fallbackDistance = distance;
-    }
-  }
-  return fallback;
-}
-
-function applyDevMove(target, worldX, worldZ) {
-  if (!target?.object) return;
-  const x = THREE.MathUtils.clamp(worldX, -68, 68);
-  const z = THREE.MathUtils.clamp(worldZ, -68, 68);
-
-  if (target.object.parent) {
-    devParentLocalPosition.set(x, 0, z);
-    target.object.parent.worldToLocal(devParentLocalPosition);
-    target.object.position.x = devParentLocalPosition.x;
-    target.object.position.z = devParentLocalPosition.z;
-  } else {
-    target.object.position.x = x;
-    target.object.position.z = z;
-  }
-
-  if (target.position) {
-    target.position.x = x;
-    target.position.z = z;
-  }
-
-  if (target.entityType === "npc" && target.entity) {
-    target.entity.home.set(x, 0, z);
-    target.entity.moveTarget.set(x, 0, z);
-    target.entity.targetX = x;
-    target.entity.targetZ = z;
-    target.entity.pause = 0.6;
-    target.entity.focus = null;
-    target.entity.pose = null;
-  } else if ((target.entityType === "duck" || target.entityType === "pigeon") && target.entity) {
-    target.entity.home.set(x, 0, z);
-    target.entity.target.set(x, 0, z);
-    target.entity.waitTimer = 0.4;
-    target.entity.wanderTimer = 0.4;
-    target.entity.fleeTimer = 0;
-  } else if (target.entityType === "interactable" && target.entity) {
-    const bike = findBikeStateByGroup(target.object);
-    if (bike) {
-      bike.targetX = x;
-      bike.targetZ = z;
-      bike.hasSharedState = false;
-      bike.emitState?.(false);
-    }
-  }
-
-  if (target.entityType === "player") {
-    playerVelocity.set(0, 0);
-  }
-
-  devSelectionMoved = true;
-  updateDevSelectionBox();
-  updateDevOverlay();
-}
-
-function moveDevSelectionBy(dx, dz) {
-  if (!devSelected) return false;
-  const position = getDevTargetWorldPosition(devSelected);
-  applyDevMove(devSelected, position.x + dx, position.z + dz);
-  return true;
-}
-
-function setDevSelected(target) {
-  devSelected = target;
-  devSelectionMoved = false;
-  updateDevSelectionBox();
-  updateDevOverlay();
-}
-
-function updateDevSelectionBox() {
-  if (!devSelected?.object || !devMode) {
-    devSelectionBox.visible = false;
-    return;
-  }
-  devSelectionBox.setFromObject(devSelected.object);
-  devSelectionBox.visible = true;
-}
-
-function updateDevCursor() {
-  if (!canvas?.style) return;
-  if (!devMode) {
-    canvas.style.cursor = "";
-    return;
-  }
-  canvas.style.cursor = devDragging ? "grabbing" : devSelected ? "grab" : "crosshair";
-}
-
-function updateDevOverlay() {
-  if (!devMode) {
-    devOverlay.hidden = true;
-    return;
-  }
-
-  devOverlay.hidden = false;
-  const selectedPosition = devSelected ? getDevTargetWorldPosition(devSelected) : null;
-  const selectedLabel = devSelected
-    ? `${devSelected.label} (${devSelected.kind})`
-    : "nenhum";
-  const selectedLine = selectedPosition
-    ? `pos x ${formatDevNumber(selectedPosition.x)} / z ${formatDevNumber(selectedPosition.z)}`
-    : "clique em um objeto para selecionar";
-
-  devOverlay.innerHTML = `
-    <div class="dev-tools-title">Modo desenvolvedor</div>
-    <div class="dev-tools-grid">
-      <span>pixel CSS</span><strong>${formatDevNumber(devPointer.cssX, 0)}, ${formatDevNumber(devPointer.cssY, 0)}</strong>
-      <span>pixel canvas</span><strong>${formatDevNumber(devPointer.deviceX, 0)}, ${formatDevNumber(devPointer.deviceY, 0)}</strong>
-      <span>mundo</span><strong>${devPointer.hasWorld ? `x ${formatDevNumber(devPointer.worldX)} / z ${formatDevNumber(devPointer.worldZ)}` : "--"}</strong>
-      <span>seleção</span><strong>${escapeDevText(selectedLabel)}</strong>
-      <span>posição</span><strong>${selectedLine}</strong>
-    </div>
-    <div class="dev-tools-help">
-      F2 liga/desliga · clique e arraste move · setas ajustam · Shift = passo maior · Alt = fino · Esc limpa
-    </div>
-    ${devSelectionMoved ? `<div class="dev-tools-copy">Use x ${formatDevNumber(selectedPosition?.x)} / z ${formatDevNumber(selectedPosition?.z)} no código se quiser persistir.</div>` : ""}
-  `;
-}
-
-function setDevMode(nextMode) {
-  devMode = nextMode === true;
-  devDragging = false;
-  cameraDragActive = false;
-  keys.clear();
-  if (!devMode) {
-    setDevSelected(null);
-  }
-  updateDevCursor();
-  updateDevSelectionBox();
-  updateDevOverlay();
-}
-
-function handleDevKeyDown(event) {
-  if (event.code === "F2" && !event.repeat) {
-    event.preventDefault();
-    setDevMode(!devMode);
-    return true;
-  }
-
-  if (!devMode) return false;
-
-  if (event.code === "Escape") {
-    event.preventDefault();
-    setDevSelected(null);
-    return true;
-  }
-
-  const nudgeStep = event.altKey ? 0.05 : event.shiftKey ? 1 : 0.25;
-  const nudgeByCode = {
-    ArrowUp: [0, -nudgeStep],
-    ArrowDown: [0, nudgeStep],
-    ArrowLeft: [-nudgeStep, 0],
-    ArrowRight: [nudgeStep, 0],
-  };
-  const nudge = nudgeByCode[event.code];
-  if (nudge) {
-    event.preventDefault();
-    moveDevSelectionBy(nudge[0], nudge[1]);
-    return true;
-  }
-
-  if (DEV_GAMEPLAY_KEYS.has(event.code)) {
-    event.preventDefault();
-    return true;
-  }
-
-  return false;
-}
-
-function handleDevPointerDown(event) {
-  if (!devMode || event.button !== 0) return false;
-  event.preventDefault();
-  event.stopPropagation();
-  const hit = updateDevGroundPoint(event);
-  const target = pickDevTarget(event);
-  setDevSelected(target);
-
-  if (target && hit) {
-    const position = getDevTargetWorldPosition(target);
-    devDragOffset.set(position.x - hit.x, 0, position.z - hit.z);
-    devDragging = true;
-  }
-
-  updateDevCursor();
-  return true;
-}
-
-function handleDevPointerMove(event) {
-  if (!devMode) return false;
-  const hit = updateDevGroundPoint(event);
-
-  if (devDragging && devSelected && hit) {
-    event.preventDefault();
-    applyDevMove(devSelected, hit.x + devDragOffset.x, hit.z + devDragOffset.z);
-    return true;
-  }
-
-  updateDevOverlay();
-  return false;
-}
-
-function handleDevPointerUp(event) {
-  if (!devMode || !devDragging) return false;
-  event.preventDefault();
-  devDragging = false;
-  updateDevCursor();
-  updateDevOverlay();
-  return true;
-}
+const devTools = createDevTools({
+  scene,
+  world,
+  container,
+  canvas,
+  renderer,
+  camera,
+  player,
+  interactables,
+  npcs,
+  ducks,
+  pigeons,
+  sharedBikes,
+  clearInputState: () => keys.clear(),
+  stopCameraDrag: () => cameraController.endDrag(),
+  stopPlayerMotion: () => playerVelocity.set(0, 0),
+});
 
 const inputVector = new THREE.Vector2();
 const cameraGroundBasis = {
@@ -6483,7 +4094,7 @@ const cameraGroundBasis = {
   right: new THREE.Vector2(),
 };
 const playerWorldInput = new THREE.Vector2();
-const mobileInput = {
+const mobileInput: MobileInput = {
   x: 0,
   y: 0,
   running: false,
@@ -6497,7 +4108,7 @@ function getInputVector() {
   return inputVector.set(x, z);
 }
 
-function setMobileInput(nextInput = {}) {
+function setMobileInput(nextInput: MobileInputUpdate = {}) {
   if (typeof nextInput.x === "number") {
     mobileInput.x = THREE.MathUtils.clamp(nextInput.x, -1, 1);
   }
@@ -6507,17 +4118,17 @@ function setMobileInput(nextInput = {}) {
   if (typeof nextInput.running === "boolean") {
     mobileInput.running = nextInput.running;
   }
-  if (ambientAudioEnabled) ensureAmbientAudio();
+  if (readAmbientAudioState().enabled) ensureAmbientAudio();
 }
 
 function queueMobileInteract() {
   interactQueued = true;
-  if (ambientAudioEnabled) ensureAmbientAudio();
+  if (readAmbientAudioState().enabled) ensureAmbientAudio();
 }
 
 function queueMobileJump() {
   jumpQueued = true;
-  if (ambientAudioEnabled) ensureAmbientAudio();
+  if (readAmbientAudioState().enabled) ensureAmbientAudio();
 }
 
 function getCameraGroundBasis() {
@@ -6538,172 +4149,46 @@ const keys = new Set();
 let interactQueued = false;
 let jumpQueued = false;
 let queuedEmoteKind = null;
-
-function isEditableEventTarget(target) {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return (
-    target.isContentEditable ||
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.closest("input, textarea, select, [contenteditable='true']")
-  );
-}
-
-function shouldIgnoreInputEvent(event) {
-  if (event && isEditableEventTarget(event.target)) return true;
-  return shouldIgnoreKeys(event);
-}
-
-const keydownHandler = (event) => {
-  if (ambientAudioEnabled) ensureAmbientAudio();
-  if (handleDevKeyDown(event)) return;
-  if (shouldIgnoreInputEvent(event)) return;
-  if (event.code === "Space" && swimmingMinigame?.isPlayerControlled()) {
-    event.preventDefault();
-    swimmingMinigame.queueStroke();
-    return;
-  }
-  if (event.code === "KeyE" && swimmingMinigame?.isPlayerControlled()) {
-    event.preventDefault();
-    swimmingMinigame.queueCancel();
-    return;
-  }
-  if (event.code === "KeyQ" && espectroEvent?.isSecretActive()) {
-    event.preventDefault();
-    espectroEvent.queueThrow();
-    return;
-  }
-  keys.add(event.code);
-  if (event.code === "KeyC" && !event.repeat) {
-    event.preventDefault();
-    toggleCameraMode();
-  }
-  if (event.code === "KeyF" && !event.repeat) {
-    event.preventDefault();
-    toggleCameraFocus();
-  }
-  if (event.code === "KeyE") interactQueued = true;
-  if (event.code === "Space") {
-    event.preventDefault();
+const inputBindings = createGameInputBindings({
+  cameraController,
+  devTools,
+  ensureAmbientAudio,
+  isAmbientAudioEnabled: () => readAmbientAudioState().enabled,
+  shouldIgnoreKeys,
+  onPressKey: (code) => keys.add(code),
+  onReleaseKey: (code) => keys.delete(code),
+  isSwimmingPlayerControlled: () => swimmingMinigame?.isPlayerControlled() ?? false,
+  queueSwimmingStroke: () => swimmingMinigame?.queueStroke(),
+  queueSwimmingCancel: () => swimmingMinigame?.queueCancel(),
+  isEspectroSecretActive: () => espectroEvent?.isSecretActive() ?? false,
+  queueEspectroThrow: () => espectroEvent?.queueThrow(),
+  onToggleCameraFocus: () => toggleCameraFocus(),
+  onQueueInteract: () => {
+    interactQueued = true;
+  },
+  onQueueJump: () => {
     jumpQueued = true;
-  }
-  if (event.code === "KeyG") queuedEmoteKind = event.shiftKey ? "glitch" : "dance";
-  if (event.code === "Digit1") queuedEmoteKind = "laugh";
-  if (event.code === "Digit2") queuedEmoteKind = "sixseven";
-  if (event.code === "Digit3") queuedEmoteKind = "wave";
-  if (event.code === "Digit4") queuedEmoteKind = "point";
-  if (event.code === "Digit5") queuedEmoteKind = "cheer";
-  if (event.code === "KeyQ" && !event.repeat && pvpActiveMatch) {
-    event.preventDefault();
-    queuedPvpThrow = true;
-  }
-};
-const keyupHandler = (event) => {
-  if (shouldIgnoreInputEvent(event)) return;
-  keys.delete(event.code);
-};
-const mousedownHandler = (event) => {
-  if (ambientAudioEnabled) ensureAmbientAudio();
-  if (handleDevPointerDown(event)) return;
-  if (event.button !== 0 && event.button !== 2) return;
-  event.preventDefault();
-  if (cameraMode !== "orbit" || shouldIgnoreInputEvent(event)) return;
-  cameraDragActive = true;
-  cameraDragX = event.clientX;
-  cameraDragY = event.clientY;
-};
-const mousemoveHandler = (event) => {
-  if (handleDevPointerMove(event)) return;
-  if (cameraMode !== "orbit" || !cameraDragActive || shouldIgnoreInputEvent(event)) return;
-  const dx = event.clientX - cameraDragX;
-  const dy = event.clientY - cameraDragY;
-  cameraDragX = event.clientX;
-  cameraDragY = event.clientY;
-  cameraOrbitYaw -= dx * 0.0055;
-  cameraOrbitPitch = THREE.MathUtils.clamp(cameraOrbitPitch - dy * 0.0045, 0.22, 1.08);
-};
-const mouseupHandler = (event) => {
-  if (handleDevPointerUp(event)) return;
-  cameraDragActive = false;
-};
-const contextmenuHandler = (event) => {
-  event.preventDefault();
-  cameraDragActive = false;
-};
-const wheelHandler = (event) => {
-  if (ambientAudioEnabled) ensureAmbientAudio();
-  if (cameraMode !== "orbit" || shouldIgnoreInputEvent(event)) return;
-  event.preventDefault();
-  cameraOrbitDistance = THREE.MathUtils.clamp(cameraOrbitDistance + event.deltaY * 0.02, 16, 38);
-};
-window.addEventListener("keydown", keydownHandler);
-window.addEventListener("keyup", keyupHandler);
-window.addEventListener("mousedown", mousedownHandler);
-window.addEventListener("mousemove", mousemoveHandler);
-window.addEventListener("mouseup", mouseupHandler);
-window.addEventListener("contextmenu", contextmenuHandler);
-window.addEventListener("wheel", wheelHandler, { passive: false });
-const blurHandler = () => keys.clear();
-const resetCameraDrag = () => {
-  cameraDragActive = false;
-};
-window.addEventListener("blur", blurHandler);
-window.addEventListener("blur", resetCameraDrag);
+  },
+  onQueueEmote: (kind) => {
+    queuedEmoteKind = kind;
+  },
+  onQueuePvpThrow: () => {
+    if (pvpActiveMatch) queuedPvpThrow = true;
+  },
+  clearKeys: () => keys.clear(),
+});
 
-function showSpeech(text, speaker, hint) {
-  if (!speechEl) return;
-  if (speechBodyEl) speechBodyEl.textContent = text;
-  if (speechNameEl) speechNameEl.textContent = speaker || "Aviso";
-  if (speechHintEl) speechHintEl.textContent = hint || "[E]";
-  speechEl.classList.add("visible");
-}
-
-function hideSpeech() {
-  if (!speechEl) return;
-  speechEl.classList.remove("visible");
-}
-
-function speak(text, speaker) {
-  if (!speechEl) {
-    pushBubble("__local__", text, 3.2);
-    return;
-  }
-  showSpeech(text, speaker, "");
-  speechEl.dataset.locked = "1";
-  speechEl.dataset.ttl = "2.6";
-}
-
-function setStatus(text) {
-  if (!statusEl) return;
-  if (!text) {
-    statusEl.textContent = "";
-    statusEl.style.opacity = "0";
-    statusEl.dataset.active = "0";
-    return;
-  }
-  statusEl.textContent = text;
-  statusEl.style.opacity = "1";
-  statusEl.dataset.active = "1";
-}
-
-function clearSpeech() {
-  if (!speechEl) return;
-  if (speechEl.dataset.locked === "1") return;
-  hideSpeech();
-}
-
-function releaseSpeechLock(dt) {
-  if (!speechEl) return;
-  if (speechEl.dataset.ttl) {
-    const ttl = Math.max(0, Number(speechEl.dataset.ttl) - dt);
-    speechEl.dataset.ttl = String(ttl);
-    if (ttl <= 0) {
-      speechEl.dataset.locked = "0";
-      hideSpeech();
-      delete speechEl.dataset.ttl;
+function syncInteractionProximityState() {
+  for (const npc of npcs) {
+    const inRange = getDistance2D(player.position, npc.group.position) < npc.radius;
+    if (inRange && !npc.nearby) {
+      npc.previewLine = pickRandomLine(npc);
     }
+    npc.nearby = inRange;
+  }
+
+  for (const duck of ducks) {
+    duck.nearby = getDistance2D(player.position, duck.group.position) < duck.radius;
   }
 }
 
@@ -6713,6 +4198,10 @@ let playerFootstepDistance = 0;
 const playerRadius = 0.55;
 const npcRadius = 0.48;
 const worldLimit = 83;
+const { isBlockedAt, clampPointToWorld } = createWorldSpatialHelpers({
+  blockers,
+  worldLimit,
+});
 const maxSpeed = 7.2;
 const accel = 22;
 const drag = 10;
@@ -6735,23 +4224,7 @@ function forceDismountCurrentBike() {
 }
 
 function removeTreesInArea(bounds, padding = 1.6) {
-  const minX = bounds.minX - padding;
-  const maxX = bounds.maxX + padding;
-  const minZ = bounds.minZ - padding;
-  const maxZ = bounds.maxZ + padding;
-
-  for (let i = weatherTrees.length - 1; i >= 0; i -= 1) {
-    const tree = weatherTrees[i];
-    const { x, z } = tree.position;
-    if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
-    world.remove(tree);
-    disposeObject3D(tree);
-    weatherTrees.splice(i, 1);
-  }
-
-  mapFeatures.trees = mapFeatures.trees.filter(
-    (tree) => tree.x < minX || tree.x > maxX || tree.z < minZ || tree.z > maxZ
-  );
+  weatherSystem.removeTreesInArea(bounds, padding);
 }
 
 swimmingMinigame = createSwimmingMinigame({
@@ -6763,7 +4236,7 @@ swimmingMinigame = createSwimmingMinigame({
   player,
   playerRig,
   playerVelocity,
-  speak,
+  speak: speechOverlay.speak,
   updatePlayerActivity,
   resetRigPose,
   isRidingBike: () => !!playerState.ridingBike,
@@ -6820,7 +4293,7 @@ function resolveCollisions(axis, radius = playerRadius) {
   }
 }
 
-function enterSitState(target, options = {}) {
+function enterSitState(target, options: SitOptions = {}) {
   playerState.sitting = true;
   playerState.sitTimer = options.duration ?? 2.6;
   playerState.sitTarget = target;
@@ -6880,7 +4353,7 @@ function updatePlayer(dt, time) {
     if (playerState.sitTimer <= 0) {
       playerState.sitting = false;
       playerState.sitTarget = null;
-      speak(playerState.sitEndMessage || "Voce se levantou.", playerState.sitEndSpeaker || "Banco");
+      speechOverlay.speak(playerState.sitEndMessage || "Voce se levantou.", playerState.sitEndSpeaker || "Banco");
       playerState.sitLabel = "";
       playerState.sitEndMessage = "";
       playerState.sitEndSpeaker = "Banco";
@@ -7139,7 +4612,7 @@ function updatePlayer(dt, time) {
   }
 
   const grounded = !playerState.jumping;
-  const surface = getGroundSurfaceAt(player.position.x, player.position.z);
+  const surface = getCampusSurfaceAt(player.position.x, player.position.z);
   if (!moving || isCrouching || !grounded || speed < 0.9) {
     playerFootstepDistance = 0;
   } else {
@@ -7183,10 +4656,6 @@ function updatePlayer(dt, time) {
   }
 }
 
-function getDistance2D(a, b) {
-  return Math.hypot(a.x - b.x, a.z - b.z);
-}
-
 function refreshCameraFrustum() {
   camera.updateMatrixWorld();
   cameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -7205,45 +4674,13 @@ function isWithinCamera(entity, radius, maxDistance, positionOverride = null) {
 }
 
 function updateRenderableVisibility(entity, radius, maxDistance, positionOverride = null) {
-  if (devMode) {
+  if (devTools.isEnabled()) {
     if (entity.visible !== true) entity.visible = true;
     return true;
   }
   const visible = isWithinCamera(entity, radius, maxDistance, positionOverride);
   if (entity.visible !== visible) entity.visible = visible;
   return visible;
-}
-
-function isInsideWorldBounds(x, z, radius = 0) {
-  return (
-    x >= -worldLimit + radius &&
-    x <= worldLimit - radius &&
-    z >= -worldLimit + radius &&
-    z <= worldLimit - radius
-  );
-}
-
-function isBlockedAt(x, z, radius = npcRadius) {
-  if (!isInsideWorldBounds(x, z, radius)) return true;
-  for (const box of blockers) {
-    if (box.active === false) continue;
-    if (
-      x > box.minX - radius &&
-      x < box.maxX + radius &&
-      z > box.minZ - radius &&
-      z < box.maxZ + radius
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function clampPointToWorld(point, radius = 0) {
-  point.x = THREE.MathUtils.clamp(point.x, -worldLimit + radius, worldLimit - radius);
-  point.z = THREE.MathUtils.clamp(point.z, -worldLimit + radius, worldLimit - radius);
-  point.y = 0;
-  return point;
 }
 
 function setNpcRestState(npc, time) {
@@ -7484,106 +4921,15 @@ function moveNpcTowards(npc, target, dt, time, arrivalRadius = 0.3) {
   return distance - step <= arrivalRadius + 0.02 ? "reached" : "moving";
 }
 
-function getNearestTarget() {
-  let best = null;
-  let bestDistance = Infinity;
-
-  for (const npc of npcs) {
-    const distance = getDistance2D(player.position, npc.group.position);
-    if (distance < npc.radius && distance < bestDistance) {
-      best = npc;
-      bestDistance = distance;
-    }
-  }
-
-  for (const duck of ducks) {
-    const distance = getDistance2D(player.position, duck.group.position);
-    if (distance < duck.radius && distance < bestDistance) {
-      best = duck;
-      bestDistance = distance;
-    }
-  }
-
-  for (const item of interactables) {
-    if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(player.position, item.position);
-    if (distance < item.radius && distance < bestDistance) {
-      best = item;
-      bestDistance = distance;
-    }
-  }
-
-  return best;
-}
-
-function getNearestCameraFocusTarget(maxDistance = 28) {
-  let best = null;
-  let bestDistance = Infinity;
-
-  for (const r of remotePlayers.values()) {
-    const distance = getDistance2D(player.position, r.group.position);
-    if (distance < maxDistance && distance < bestDistance) {
-      best = {
-        kind: "remote",
-        id: r.id,
-        position: r.group.position,
-        label: r.nick || "Player",
-      };
-      bestDistance = distance;
-    }
-  }
-
-  for (const item of interactables) {
-    if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(player.position, item.position);
-    if (distance < maxDistance && distance < bestDistance) {
-      best = {
-        kind: "point",
-        id: item.kind || item.label || "point",
-        position: item.position,
-        label: item.label || "Ponto",
-      };
-      bestDistance = distance;
-    }
-  }
-
-  return best;
-}
-
 function toggleCameraFocus() {
-  if (cameraMode !== "orbit") return;
-  if (cameraFocusTarget) {
-    clearCameraFocus();
+  if (cameraController.mode !== "orbit") return;
+  if (cameraController.focusTarget) {
+    cameraController.clearFocus();
     return;
   }
 
-  const target = getNearestCameraFocusTarget();
-  if (target) setCameraFocus(target);
-}
-
-function formatDistanceMeters(distance) {
-  const rounded = Math.max(0, Math.round(distance * 10) / 10);
-  return `${String(rounded).replace(".", ",")}m`;
-}
-
-function formatSeconds(seconds) {
-  const safe = Math.max(0, seconds);
-  return `${Math.ceil(safe)}s`;
-}
-
-function getNearestInteractable(maxDistance = 7) {
-  let best = null;
-  let bestDistance = maxDistance;
-
-  for (const item of interactables) {
-    if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(player.position, item.position);
-    if (distance > bestDistance) continue;
-    best = { item, distance };
-    bestDistance = distance;
-  }
-
-  return best;
+  const target = getNearestCameraFocusTarget(player.position, remotePlayers.values(), interactables, isInteractableAvailableForPlayer);
+  if (target) cameraController.setFocus(target);
 }
 
 function updateNpc(npc, dt, time) {
@@ -7790,57 +5136,39 @@ function updateNpc(npc, dt, time) {
 function updateInteractionUI() {
   if (playerState.sitting) {
     const rideLabel = playerState.sitLabel || "banco";
-    setStatus(`No ${rideLabel} • faltam ${formatSeconds(playerState.sitTimer)} para descer.`);
-    clearSpeech();
+    speechOverlay.setStatus(`No ${rideLabel} • faltam ${formatSeconds(playerState.sitTimer)} para descer.`);
+    speechOverlay.clearSpeech();
     return;
   }
 
-  for (const npc of npcs) {
-    const inRange = getDistance2D(player.position, npc.group.position) < npc.radius;
-    if (inRange && !npc.nearby) {
-      npc.previewLine = pickRandomLine(npc);
-    }
-    npc.nearby = inRange;
-  }
-  for (const duck of ducks) {
-    duck.nearby = getDistance2D(player.position, duck.group.position) < duck.radius;
-  }
+  syncInteractionProximityState();
 
-  const target = getNearestTarget();
+  const target = getNearestTarget(player.position, npcs, ducks, interactables, isInteractableAvailableForPlayer);
   if (!target) {
     if (playerState.ridingBike) {
-      setStatus("Na bicicleta • Space/Pular da grau • Shift acelera • E desce.");
-      clearSpeech();
+      speechOverlay.setStatus(getRidingBikeStatus());
+      speechOverlay.clearSpeech();
       return;
     }
-    const nearestInteractable = getNearestInteractable();
-    const weatherText = atmosphereSnapshot.weatherLabel ? ` • ${atmosphereSnapshot.weatherLabel}` : "";
-    if (nearestInteractable) {
-      const busCrowdText = nearestInteractable.item.kind === "bus" && nearestInteractable.item.crowdLabel
-        ? ` • ${nearestInteractable.item.crowdLabel}`
-        : "";
-      setStatus(
-        `Perto de ${nearestInteractable.item.label}${busCrowdText} • ${formatDistanceMeters(nearestInteractable.distance)} para interagir.`
-      );
-    } else {
-      setStatus(
-        `WASD ou setas para mover. E para interagir. • ${atmosphereSnapshot.clock} ${atmosphereSnapshot.label}${weatherText}`
-      );
-    }
-    clearSpeech();
+    speechOverlay.setStatus(
+      getNoTargetStatus(
+        currentAtmosphereState,
+        getNearestInteractable(player.position, interactables, isInteractableAvailableForPlayer)
+      )
+    );
+    speechOverlay.clearSpeech();
     return;
   }
 
   if (target.lines) {
     if (speechEl && speechEl.dataset.locked !== "1") {
-      showSpeech(target.previewLine, target.name, "[E] falar");
+      speechOverlay.showSpeech(target.previewLine, target.name, "[E] falar");
     }
     return;
   }
 
-  const crowdText = target.kind === "bus" && target.crowdLabel ? ` • ${target.crowdLabel}` : "";
-  setStatus(`${target.label}${crowdText} • ${formatDistanceMeters(getDistance2D(player.position, target.position))}`);
-  clearSpeech();
+  speechOverlay.setStatus(getTargetStatus(player.position, target));
+  speechOverlay.clearSpeech();
 }
 
 function syncEntityVisibility() {
@@ -7873,7 +5201,7 @@ function handleInteraction() {
   if (!interactQueued) return;
   interactQueued = false;
   if (playerState.sitting) return;
-  const target = getNearestTarget();
+  const target = getNearestTarget(player.position, npcs, ducks, interactables, isInteractableAvailableForPlayer);
   if (!target) {
     if (playerState.ridingBike?.mounted) {
       playerState.ridingBike.dismount?.();
@@ -7886,8 +5214,13 @@ function handleInteraction() {
     target.previewLine = line;
     target.pause = 1.2;
     target.talkCooldown = 0.5;
-    pushBubble({ group: target.group, key: target.bubbleKey }, line, 4.2);
-    target.group.rotation.y = lerpAngle(target.group.rotation.y, Math.atan2(player.position.x - target.group.position.x, player.position.z - target.group.position.z), 0.35);
+    const targetGroup = target.group as THREE.Group;
+    pushBubble({ group: targetGroup, key: target.bubbleKey }, line, 4.2);
+    targetGroup.rotation.y = lerpAngle(
+      targetGroup.rotation.y,
+      Math.atan2(player.position.x - targetGroup.position.x, player.position.z - targetGroup.position.z),
+      0.35
+    );
     return;
   }
 
@@ -7896,284 +5229,28 @@ function handleInteraction() {
   }
 }
 
-const MINIMAP_WORLD = 170;
-const MINIMAP_SIZE = 220;
-const MINIMAP_SCALE = MINIMAP_SIZE / MINIMAP_WORLD;
-
-function hexFromInt(value) {
-  return `#${value.toString(16).padStart(6, "0")}`;
-}
-
-function roundedRectPath(ctx, x, y, w, h, r) {
-  const radius = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
-}
-
-function worldToMapX(x) {
-  return MINIMAP_SIZE / 2 + x * MINIMAP_SCALE;
-}
-
-function worldToMapY(z) {
-  return MINIMAP_SIZE / 2 + z * MINIMAP_SCALE;
-}
-
 function drawMinimap() {
   if (!minimapCtx) return;
-  const ctx = minimapCtx;
-  const size = MINIMAP_SIZE;
-  const half = size / 2;
-  const inset = 5;
-  const contentInset = 10;
-
-  ctx.clearRect(0, 0, size, size);
-
-  roundedRectPath(ctx, inset, inset, size - inset * 2, size - inset * 2, 18);
-  const background = ctx.createRadialGradient(half - 8, half - 10, 18, half, half, half);
-  background.addColorStop(0, "#8fd46f");
-  background.addColorStop(0.56, "#6ea34e");
-  background.addColorStop(1, "#4f7c38");
-  ctx.fillStyle = background;
-  ctx.fill();
-
-  ctx.save();
-  roundedRectPath(ctx, inset, inset, size - inset * 2, size - inset * 2, 18);
-  ctx.clip();
-
-  ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
-  ctx.fillRect(0, 0, size, size);
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-  ctx.lineWidth = 1;
-  for (let i = -2; i <= 2; i += 1) {
-    const x = half + i * 28;
-    ctx.beginPath();
-    ctx.moveTo(x, contentInset);
-    ctx.lineTo(x, size - contentInset);
-    ctx.stroke();
-
-    const y = half + i * 28;
-    ctx.beginPath();
-    ctx.moveTo(contentInset, y);
-    ctx.lineTo(size - contentInset, y);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = "rgba(38, 66, 37, 0.48)";
-  for (const tree of mapFeatures.trees) {
-    const mx = worldToMapX(tree.x);
-    const my = worldToMapY(tree.z);
-    ctx.beginPath();
-    ctx.arc(mx, my, 1.9, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  for (const path of mapFeatures.paths) {
-    ctx.save();
-    ctx.translate(worldToMapX(path.x), worldToMapY(path.z));
-    ctx.rotate(path.rotation || 0);
-    const w = path.width * MINIMAP_SCALE;
-    const h = path.depth * MINIMAP_SCALE;
-    ctx.fillStyle = path.surface === "corridor" ? "#b7ae9c" : "#d1c8b9";
-    ctx.strokeStyle = path.surface === "corridor" ? "rgba(78, 69, 57, 0.34)" : "rgba(78, 69, 57, 0.22)";
-    ctx.lineWidth = 1;
-    ctx.fillRect(-w / 2, -h / 2, w, h);
-    ctx.strokeRect(-w / 2, -h / 2, w, h);
-    if (path.surface === "corridor") {
-      ctx.strokeStyle = "rgba(255, 248, 220, 0.45)";
-      ctx.lineWidth = 0.8;
-      ctx.beginPath();
-      ctx.moveTo(-w / 2 + 1, 0);
-      ctx.lineTo(w / 2 - 1, 0);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  for (const b of mapFeatures.buildings) {
-    const mx = worldToMapX(b.x);
-    const my = worldToMapY(b.z);
-    const w = b.width * MINIMAP_SCALE;
-    const h = b.depth * MINIMAP_SCALE;
-    ctx.fillStyle = hexFromInt(b.color);
-    ctx.fillRect(mx - w / 2, my - h / 2, w, h);
-    ctx.strokeStyle = "rgba(40, 58, 42, 0.55)";
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(mx - w / 2, my - h / 2, w, h);
-    ctx.fillStyle = hexFromInt(b.roof);
-    ctx.fillRect(mx - w / 2 + 1, my - h / 2 + 1, w - 2, 3);
-  }
-
-  ctx.fillStyle = "#f7d36a";
-  for (const item of interactables) {
-    if (!isInteractableAvailableForPlayer(item)) continue;
-    const mx = worldToMapX(item.position.x);
-    const my = worldToMapY(item.position.z);
-    ctx.beginPath();
-    ctx.moveTo(mx, my - 3.2);
-    ctx.lineTo(mx + 3.2, my);
-    ctx.lineTo(mx, my + 3.2);
-    ctx.lineTo(mx - 3.2, my);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.42)";
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-  }
-
-  for (const r of remotePlayers.values()) {
-    const rmx = worldToMapX(r.group.position.x);
-    const rmy = worldToMapY(r.group.position.z);
-    ctx.fillStyle = r.mapColor || "#ffe28f";
-    ctx.strokeStyle = "rgba(255, 248, 220, 0.7)";
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    ctx.arc(rmx, rmy, 3.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  for (const npc of npcs) {
-    const mx = worldToMapX(npc.group.position.x);
-    const my = worldToMapY(npc.group.position.z);
-    ctx.fillStyle = npc.mapColor || "#ffffff";
-    ctx.beginPath();
-    ctx.arc(mx, my, 3.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  const espectroMarker = espectroEvent?.getMapMarker?.();
-  if (espectroMarker) {
-    const mx = worldToMapX(espectroMarker.x);
-    const my = worldToMapY(espectroMarker.z);
-    const blink = 0.45 + 0.55 * ((Math.sin(performance.now() * 0.012) + 1) / 2);
-    ctx.fillStyle = espectroMarker.color || "#000000";
-    ctx.globalAlpha = blink;
-    ctx.beginPath();
-    ctx.arc(mx, my, 3.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.35 + blink * 0.65;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
-  for (const duck of ducks) {
-    const mx = worldToMapX(duck.group.position.x);
-    const my = worldToMapY(duck.group.position.z);
-    ctx.fillStyle = duck.mapColor;
-    ctx.beginPath();
-    ctx.arc(mx, my, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-  }
-
-  for (const pigeon of pigeons) {
-    const mx = worldToMapX(pigeon.group.position.x);
-    const my = worldToMapY(pigeon.group.position.z);
-    ctx.fillStyle = pigeon.mapColor;
-    ctx.beginPath();
-    ctx.arc(mx, my, 1.8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
-    ctx.lineWidth = 0.7;
-    ctx.stroke();
-  }
-
-  for (const bus of buses) {
-    const mx = worldToMapX(bus.position.x);
-    const my = worldToMapY(bus.position.z);
-    ctx.save();
-    ctx.translate(mx, my);
-    ctx.rotate(-bus.facingYaw);
-    ctx.fillStyle = "#23824c";
-    ctx.strokeStyle = "#f7f4ea";
-    ctx.lineWidth = 1;
-    ctx.fillRect(-4, -2.3, 8, 4.6);
-    ctx.strokeRect(-4, -2.3, 8, 4.6);
-    ctx.restore();
-  }
-
-  const pmx = worldToMapX(player.position.x);
-  const pmy = worldToMapY(player.position.z);
-  const angle = Math.atan2(facing.x, facing.y);
-
-  ctx.save();
-  ctx.translate(pmx, pmy);
-  ctx.fillStyle = "rgba(98, 255, 159, 0.16)";
-  ctx.beginPath();
-  ctx.arc(0, 0, 9, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.save();
-  ctx.translate(pmx, pmy);
-  ctx.rotate(-angle);
-  ctx.shadowColor = "rgba(98, 255, 159, 0.45)";
-  ctx.shadowBlur = 8;
-  ctx.fillStyle = "#62ff9f";
-  ctx.strokeStyle = "rgba(17, 46, 27, 0.85)";
-  ctx.lineWidth = 1.15;
-  ctx.beginPath();
-  ctx.moveTo(0, -6);
-  ctx.lineTo(4.5, 4);
-  ctx.lineTo(0, 2);
-  ctx.lineTo(-4.5, 4);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(contentInset - 2, contentInset - 2, size - (contentInset - 2) * 2, size - (contentInset - 2) * 2);
-
-  ctx.fillStyle = "rgba(255, 255, 255, 0.84)";
-  ctx.font = "900 11px Nunito, Arial, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("N", size - 22, 22);
-  ctx.strokeStyle = "rgba(23, 68, 43, 0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(size - 22, 30);
-  ctx.lineTo(size - 22, 44);
-  ctx.stroke();
-
-  ctx.restore();
+  renderMinimap(minimapCtx, {
+    mapFeatures,
+    interactables: interactables.map((item) => ({
+      available: isInteractableAvailableForPlayer(item),
+      position: item.position,
+    })),
+    remotePlayers: Array.from(remotePlayers.values()),
+    npcs,
+    ducks,
+    pigeons,
+    buses,
+    player,
+    facing,
+    espectroMarker: espectroEvent?.getMapMarker?.(),
+    now: performance.now(),
+  });
 }
 
 function updateCamera() {
-  if (cameraMode === "orbit") {
-    const orbitCenter = getCameraOrbitCenter();
-    const horizontalDistance = Math.cos(cameraOrbitPitch) * cameraOrbitDistance;
-    const verticalOffset = Math.sin(cameraOrbitPitch) * cameraOrbitDistance;
-    camera.position.set(
-      orbitCenter.x + Math.cos(cameraOrbitYaw) * horizontalDistance,
-      orbitCenter.y + 4.5 + verticalOffset,
-      orbitCenter.z + Math.sin(cameraOrbitYaw) * horizontalDistance
-    );
-  } else {
-    camera.position.set(player.position.x + 14, player.position.y + 18, player.position.z + 14);
-  }
-  const lookAtTarget = cameraMode === "orbit" && cameraFocusTarget ? getCameraOrbitCenter() : player.position;
-  camera.lookAt(lookAtTarget.x, 1.25, lookAtTarget.z);
+  cameraController.updateCamera(camera, player.position, (id) => remotePlayers.has(id));
 }
 
 function resize() {
@@ -8199,19 +5276,17 @@ function tick() {
   const dt = Math.min(clock.getDelta(), 0.033);
   const time = getWorldTime ? getWorldTime() : clock.elapsedTime;
   const atmosphereState = getAtmosphereState(time);
-  const weatherState = getWeatherState(time);
-  const combinedState = { ...atmosphereState, weather: weatherState };
-  applyAtmosphere(combinedState);
-  updateWeatherFX(dt, time, combinedState);
-  noticeTexture.update(time, combinedState);
-  updateAmbientAudio(time, combinedState);
+  applyAtmosphere(atmosphereState);
+  weatherSystem.update(dt, time, atmosphereState);
+  noticeTexture.update(time, atmosphereState);
+  updateAmbientAudio(time, atmosphereState);
 
-  releaseSpeechLock(dt);
+  speechOverlay.releaseSpeechLock(dt);
   updatePlayer(dt, time);
   handleInteraction();
 
   for (const npc of npcs) {
-    if (npcAuthorityActive) updateNpc(npc, dt, time);
+    if (npcSync.isNpcAuthorityActive()) updateNpc(npc, dt, time);
     else updateNpcFromSnapshot(npc, dt, time);
   }
 
@@ -8247,7 +5322,7 @@ function tick() {
       activity: playerActivitySnapshot.kind,
       jumpY: playerState.jumpY,
     });
-    if (npcAuthorityActive) {
+    if (npcSync.isNpcAuthorityActive()) {
       onNpcState(serializeNpcStates());
     }
     if (playerState.ridingBike?.mounted) {
@@ -8264,7 +5339,7 @@ function tick() {
   updateCamera();
   refreshCameraFrustum();
   syncEntityVisibility();
-  updateDevSelectionBox();
+  devTools.updateSelectionBox();
   minimapTimer += dt;
   if (minimapTimer >= 0.1) {
     minimapTimer = 0;
@@ -8414,44 +5489,17 @@ function queueMobilePvpThrow() {
 function destroy() {
   running = false;
   if (rafId) cancelAnimationFrame(rafId);
-  ambientAudioEnabled = false;
-  window.removeEventListener("keydown", keydownHandler);
-  window.removeEventListener("keyup", keyupHandler);
-  window.removeEventListener("mousedown", mousedownHandler);
-  window.removeEventListener("mousemove", mousemoveHandler);
-  window.removeEventListener("mouseup", mouseupHandler);
-  window.removeEventListener("contextmenu", contextmenuHandler);
-  window.removeEventListener("wheel", wheelHandler);
-  window.removeEventListener("blur", blurHandler);
-  window.removeEventListener("blur", resetCameraDrag);
+  destroyGameAudio();
+  inputBindings.destroy();
   window.removeEventListener("resize", resizeHandler);
   window.removeEventListener("error", errorHandler);
   gateCheckpoint?.destroy?.();
   swimmingMinigame?.destroy?.();
   espectroEvent?.destroy?.();
+  weatherSystem.destroy();
   swimmingMinigame = null;
   espectroEvent = null;
-  devOverlay.remove();
-  scene.remove(devSelectionBox);
-  disposeObject3D(devSelectionBox);
-  stopAudioNode(audioWindSource);
-  stopAudioNode(audioMurmurSource);
-  stopAudioNode(audioRadioSource);
-  audioWindSource = null;
-  audioWindFilter = null;
-  audioWindGain = null;
-  audioMurmurSource = null;
-  audioMurmurFilter = null;
-  audioMurmurGain = null;
-  audioRadioSource = null;
-  audioRadioFilter = null;
-  audioRadioGain = null;
-  audioNextBirdAt = 0;
-  if (audioContext) {
-    audioContext.close?.().catch(() => {});
-  }
-  audioContext = null;
-  audioMasterGain = null;
+  devTools.destroy();
   disposeObject3D(scene);
   renderer.dispose?.();
 }
@@ -8476,7 +5524,7 @@ function destroy() {
     setMobileInput,
     queueMobileInteract,
     queueMobileJump,
-    toggleCameraMode,
+    toggleCameraMode: cameraController.toggleMode,
     pvpSetMatch,
     pvpShowThrow,
     pvpShowHit,

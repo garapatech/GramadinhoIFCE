@@ -1,4 +1,5 @@
 import type * as Party from "partykit/server";
+import { parseOutboundSocketMessage } from "@/shared/schemas/multiplayer";
 
 type PlayerState = {
   id: string;
@@ -322,13 +323,14 @@ export default class GameRoom implements Party.Server {
   }
 
   onMessage(message: string, sender: Party.Connection) {
-    let msg: any;
+    let raw: unknown;
     try {
-      msg = JSON.parse(message);
+      raw = JSON.parse(message);
     } catch {
       return;
     }
-    if (!msg || typeof msg.type !== "string") return;
+    const msg = parseOutboundSocketMessage(raw);
+    if (!msg) return;
 
     if (msg.type === "join") {
       const nick = sanitize(msg.nick, MAX_NICK) || "Anon";
@@ -656,7 +658,7 @@ export default class GameRoom implements Party.Server {
       const player = this.players.get(sender.id);
       const text = sanitize(msg.text, MAX_TEXT);
       if (!text) return;
-      const nick = player?.nick || sanitize(msg.nick, MAX_NICK) || "Anon";
+      const nick = player?.nick || "Anon";
       const chat: ChatMsg = {
         id: sender.id,
         nick,
