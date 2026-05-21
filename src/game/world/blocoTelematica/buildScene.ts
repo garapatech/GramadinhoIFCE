@@ -16,12 +16,14 @@ import {
 // fica a escada. Cabe ao longo do muro norte do campus sem brigar com
 // outros prédios (portaria fica a x<-41).
 const BLOCO_WIDTH = 90; // ao longo de X (eixo do corredor)
-const BLOCO_DEPTH = 9;  // ao longo de Z (norte<->sul do corredor)
-const CORRIDOR_DEPTH = 1.8; // largura do corredor central
-// Largura do espaco da escada (sacrificado no centro do corpo principal,
-// sem sair pra fora — o bloco continua retangular pra caber entre muro
-// norte e a piscina).
-const STAIR_BAY_WIDTH = 5;
+const BLOCO_DEPTH = 16; // ao longo de Z, mais grosso pra salas maiores
+const CORRIDOR_DEPTH = 4; // corredor central bem mais largo
+
+// Trecho central reservado para lounge (cadeiras/mesa, sem salas). 12m de
+// largura no centro do corredor.
+const LOUNGE_HALF_WIDTH = 6;
+// Trecho da ponta leste reservado pra escada (sem salas).
+const STAIR_END_WIDTH = 8;
 const STORY_HEIGHT = 3.6;
 const STORIES = 2;
 const TOTAL_HEIGHT = STORY_HEIGHT * STORIES;
@@ -244,11 +246,18 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   }
 
   // -------- Salas (paredes internas) --------
-  // Pra cada andar, agrupamos por fileira e construímos paredes verticais
-  // (perpendiculares ao corredor) entre salas adjacentes, e a parede do
-  // corredor com aberturas a cada gap (porta de sala). Cada parede vira
-  // tambem um blocker (collision XZ), guardado na lista do andar para
-  // alternar conforme o player muda de piso.
+  // Layout em T: o bloco eh um retangulo, mas dentro tem duas asas de salas
+  // (oeste e leste do lounge central) e o "pe do T" eh o lounge — ocupa
+  // toda a profundidade no centro do bloco, sem paredes internas. A
+  // escada fica na ponta leste, atras de uma parede divisoria.
+  const STAIR_END_MIN_X = halfW - STAIR_END_WIDTH;
+
+  type Wing = {
+    rooms: Room[];
+    outerX: number;   // borda virada pro lado de fora do bloco (parede externa)
+    loungeX: number;  // borda virada pro lounge
+  };
+
   function buildStoryRooms(rooms: Room[], storyY: number): BlockerHandle[] {
     const storyBlockers: BlockerHandle[] = [];
     const registerInnerBlocker = (
@@ -259,78 +268,95 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       const handle = createBlocker(
         centerX + localMinX, centerX + localMaxX,
         centerZ + localMinZ, centerZ + localMaxZ,
-        { active: storyY < 0.001 }, // só térreo começa ativo
+        { active: storyY < 0.001 },
       );
       if (handle) storyBlockers.push(handle);
     };
 
-    const rowGroups: Record<Row, Room[]> = { north: [], south: [] };
-    for (const r of rooms) rowGroups[r.row].push(r);
-    for (const row of ["north", "south"] as Row[]) {
-      rowGroups[row].sort((a, b) => a.worldX - b.worldX);
-    }
+    const leftRooms = rooms.filter((r) => r.worldX < -LOUNGE_HALF_WIDTH);
+    const rightRooms = rooms.filter(
+      (r) => r.worldX > LOUNGE_HALF_WIDTH && r.worldX < STAIR_END_MIN_X - 0.5,
+    );
+    const wings: Wing[] = [
+      { rooms: leftRooms, outerX: -halfW + WALL_THICKNESS, loungeX: -LOUNGE_HALF_WIDTH },
+      { rooms: rightRooms, outerX: STAIR_END_MIN_X, loungeX: LOUNGE_HALF_WIDTH },
+    ];
 
     const wallH = STORY_HEIGHT;
     const t2 = INNER_WALL_THICKNESS / 2;
+    const roomDoor = 1.4;
 
-    for (const row of ["north", "south"] as Row[]) {
-      const list = rowGroups[row];
-      const rowZCenter = row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
-      const rowDepth = row === "north" ? NORTH_ROW_DEPTH : SOUTH_ROW_DEPTH;
-      const corridorEdgeZ = row === "north"
-        ? rowZCenter + rowDepth / 2
-        : rowZCenter - rowDepth / 2;
-      const outerEdgeZ = row === "north"
-        ? rowZCenter - rowDepth / 2
-        : rowZCenter + rowDepth / 2;
-
-      // Paredes entre salas adjacentes (perpendiculares ao corredor)
-      for (let i = 0; i < list.length - 1; i++) {
-        const a = list[i];
-        const b = list[i + 1];
-        const wallX = (a.worldX + b.worldX) / 2;
-        const wallDepth = Math.abs(corridorEdgeZ - outerEdgeZ);
-        const wallZ = (corridorEdgeZ + outerEdgeZ) / 2;
-        addBox(INNER_WALL_THICKNESS, wallH, wallDepth, wallX, storyY + wallH / 2, wallZ, innerMat);
-        registerInnerBlocker(
-          wallX - t2, wallX + t2,
-          wallZ - wallDepth / 2, wallZ + wallDepth / 2,
-        );
+    for (const wing of wings) {
+      const xMin = Math.min(wing.outerX, wing.loungeX);
+      const xMax = Math.max(wing.outerX, wing.loungeX);
+      const rowGroups: Record<Row, Room[]> = { north: [], south: [] };
+      for (const r of wing.rooms) rowGroups[r.row].push(r);
+      for (const row of ["north", "south"] as Row[]) {
+        rowGroups[row].sort((a, b) => a.worldX - b.worldX);
       }
 
-      // Parede do corredor: para cada sala, dois trechos (esquerdo e direito
-      // da porta da sala). Porta da sala = 1.2m no centro da face do
-      // corredor.
-      const roomDoor = 1.2;
-      for (let i = 0; i < list.length; i++) {
-        const r = list[i];
-        const prevX = i === 0 ? -halfW + WALL_THICKNESS : (list[i - 1].worldX + r.worldX) / 2;
-        const nextX = i === list.length - 1 ? halfW - WALL_THICKNESS : (r.worldX + list[i + 1].worldX) / 2;
-        const leftW = r.worldX - roomDoor / 2 - prevX;
-        const rightW = nextX - (r.worldX + roomDoor / 2);
-        if (leftW > 0.1) {
-          const cx = prevX + leftW / 2;
-          addBox(leftW, wallH, INNER_WALL_THICKNESS,
-            cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
+      for (const row of ["north", "south"] as Row[]) {
+        const list = rowGroups[row];
+        if (list.length === 0) continue;
+        const rowZCenter = row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
+        const rowDepth = row === "north" ? NORTH_ROW_DEPTH : SOUTH_ROW_DEPTH;
+        const corridorEdgeZ = row === "north"
+          ? rowZCenter + rowDepth / 2
+          : rowZCenter - rowDepth / 2;
+        const outerEdgeZ = row === "north"
+          ? rowZCenter - rowDepth / 2
+          : rowZCenter + rowDepth / 2;
+        const wallZ = (corridorEdgeZ + outerEdgeZ) / 2;
+
+        // Paredes entre salas adjacentes (perpendiculares ao corredor)
+        for (let i = 0; i < list.length - 1; i++) {
+          const wallX = (list[i].worldX + list[i + 1].worldX) / 2;
+          addBox(INNER_WALL_THICKNESS, wallH, rowDepth, wallX, storyY + wallH / 2, wallZ, innerMat);
           registerInnerBlocker(
-            cx - leftW / 2, cx + leftW / 2,
-            corridorEdgeZ - t2, corridorEdgeZ + t2,
+            wallX - t2, wallX + t2,
+            wallZ - rowDepth / 2, wallZ + rowDepth / 2,
           );
         }
-        if (rightW > 0.1) {
-          const cx = r.worldX + roomDoor / 2 + rightW / 2;
-          addBox(rightW, wallH, INNER_WALL_THICKNESS,
-            cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
-          registerInnerBlocker(
-            cx - rightW / 2, cx + rightW / 2,
-            corridorEdgeZ - t2, corridorEdgeZ + t2,
-          );
+
+        // Cap wall fechando a ponta da ala virada pro lounge
+        addBox(INNER_WALL_THICKNESS, wallH, rowDepth,
+          wing.loungeX, storyY + wallH / 2, wallZ, innerMat);
+        registerInnerBlocker(
+          wing.loungeX - t2, wing.loungeX + t2,
+          wallZ - rowDepth / 2, wallZ + rowDepth / 2,
+        );
+
+        // Parede do corredor (trechos esquerdo e direito da porta de cada sala)
+        for (let i = 0; i < list.length; i++) {
+          const r = list[i];
+          const prevX = i === 0 ? xMin : (list[i - 1].worldX + r.worldX) / 2;
+          const nextX = i === list.length - 1 ? xMax : (r.worldX + list[i + 1].worldX) / 2;
+          const leftW = r.worldX - roomDoor / 2 - prevX;
+          const rightW = nextX - (r.worldX + roomDoor / 2);
+          if (leftW > 0.1) {
+            const cx = prevX + leftW / 2;
+            addBox(leftW, wallH, INNER_WALL_THICKNESS,
+              cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
+            registerInnerBlocker(
+              cx - leftW / 2, cx + leftW / 2,
+              corridorEdgeZ - t2, corridorEdgeZ + t2,
+            );
+          }
+          if (rightW > 0.1) {
+            const cx = r.worldX + roomDoor / 2 + rightW / 2;
+            addBox(rightW, wallH, INNER_WALL_THICKNESS,
+              cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
+            registerInnerBlocker(
+              cx - rightW / 2, cx + rightW / 2,
+              corridorEdgeZ - t2, corridorEdgeZ + t2,
+            );
+          }
         }
       }
     }
 
-    // Labels das salas
-    for (const r of rooms) {
+    // Labels das salas (so as que ficaram nas alas)
+    for (const r of [...leftRooms, ...rightRooms]) {
       const rowZ = r.row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
       const sprite = makeLabelSprite(r.label.text);
       sprite.position.set(r.worldX, storyY + wallH - 0.6, rowZ);
@@ -340,49 +366,123 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     return storyBlockers;
   }
 
-  // Salas, removendo as que ficam no espaco central da escada
-  const stairBayMinX = -STAIR_BAY_WIDTH / 2;
-  const stairBayMaxX = STAIR_BAY_WIDTH / 2;
-  const dropStairBay = (rooms: Room[]) =>
-    rooms.filter((r) => r.worldX < stairBayMinX - 0.5 || r.worldX > stairBayMaxX + 0.5);
-
-  const terreoBlockers = buildStoryRooms(dropStairBay(buildRoomList(terreoPlanta)), 0);
-  const superiorBlockers = buildStoryRooms(dropStairBay(buildRoomList(superiorPlanta)), STORY_HEIGHT);
+  const terreoBlockers = buildStoryRooms(buildRoomList(terreoPlanta), 0);
+  const superiorBlockers = buildStoryRooms(buildRoomList(superiorPlanta), STORY_HEIGHT);
 
   // -------- Laje intermediaria + teto --------
-  // Laje com vao aberto na area da escada (dois blocos: leste e oeste)
-  const slabSideW = (BLOCO_WIDTH - STAIR_BAY_WIDTH) / 2;
-  addBox(slabSideW, 0.16, BLOCO_DEPTH + 0.2,
-    -BLOCO_WIDTH / 2 + slabSideW / 2, STORY_HEIGHT, 0, slabMat);
-  addBox(slabSideW, 0.16, BLOCO_DEPTH + 0.2,
-    BLOCO_WIDTH / 2 - slabSideW / 2, STORY_HEIGHT, 0, slabMat);
-  // teto continuo
+  // Laje cobre tudo menos o vao da escada (na ponta leste)
+  const slabMainW = BLOCO_WIDTH - STAIR_END_WIDTH;
+  addBox(slabMainW, 0.16, BLOCO_DEPTH + 0.2,
+    -halfW + slabMainW / 2, STORY_HEIGHT, 0, slabMat);
   addBox(BLOCO_WIDTH + 0.4, 0.6, BLOCO_DEPTH + 0.4, 0, TOTAL_HEIGHT + 0.3, 0, roofMat);
 
-  // -------- Escada interna no centro --------
-  // Sobe de y=0 ate STORY_HEIGHT, ocupando do norte (z=-halfD) ate o
-  // corredor (z=-CORRIDOR_DEPTH/2). Patamar fica encostado no corredor.
-  const stairLengthZ = halfD - CORRIDOR_DEPTH / 2;
-  const stairStartZ = -halfD + WALL_THICKNESS;
-  const stepCount = 14;
-  const stepDepth = (stairLengthZ - WALL_THICKNESS) / stepCount;
+  // -------- Lounge central (cadeiras + mesa) --------
+  // Ocupa o trecho central do corredor e expande pra dentro das fileiras
+  // norte/sul. Eh um espaco aberto sem paredes internas, com mobiliario.
+  const loungeY = 0.04;
+  // Tapete delimitando area
+  const loungeRug = new THREE.Mesh(
+    new THREE.BoxGeometry(LOUNGE_HALF_WIDTH * 2 - 0.6, 0.03, CORRIDOR_DEPTH + 2),
+    new THREE.MeshStandardMaterial({ color: 0x506f8a, roughness: 1 }),
+  );
+  loungeRug.position.set(0, loungeY + 0.04, 0);
+  loungeRug.receiveShadow = true;
+  group.add(loungeRug);
+  // Mesa central
+  const tableMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.7 });
+  const table = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 1.2), tableMat);
+  table.position.set(0, loungeY + 0.55, 0);
+  table.castShadow = true;
+  group.add(table);
+  for (const [tx, tz] of [
+    [-1.0, -0.5], [1.0, -0.5], [-1.0, 0.5], [1.0, 0.5],
+  ] as [number, number][]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), tableMat);
+    leg.position.set(tx, loungeY + 0.25, tz);
+    group.add(leg);
+  }
+  // Cadeiras ao redor (visual + blocker)
+  const chairMat = new THREE.MeshStandardMaterial({ color: 0x3d6b4a, roughness: 0.85 });
+  const chairPositions: [number, number, number][] = [
+    [-3.5, 0, 0], [3.5, 0, 0],
+    [-1.8, 0, -2.4], [1.8, 0, -2.4],
+    [-1.8, 0, 2.4], [1.8, 0, 2.4],
+    [-3.5, Math.PI / 2, -2.6], [3.5, -Math.PI / 2, -2.6],
+    [-3.5, Math.PI / 2, 2.6], [3.5, -Math.PI / 2, 2.6],
+  ];
+  for (const [cx, ry, cz] of chairPositions) {
+    const chairGroup = new THREE.Group();
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.7), chairMat);
+    seat.position.y = 0.45;
+    seat.castShadow = true;
+    chairGroup.add(seat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.85, 0.1), chairMat);
+    back.position.set(0, 0.85, -0.3);
+    chairGroup.add(back);
+    chairGroup.position.set(cx, loungeY, cz);
+    chairGroup.rotation.y = ry;
+    group.add(chairGroup);
+  }
+  // Plantas de canto pra dar vida
+  const plantPotMat = new THREE.MeshStandardMaterial({ color: 0x8b5a3c, roughness: 0.95 });
+  const plantLeafMat = new THREE.MeshStandardMaterial({ color: 0x3a7a3a, roughness: 0.8 });
+  for (const [px, pz] of [
+    [-LOUNGE_HALF_WIDTH + 0.6, -CORRIDOR_DEPTH / 2 - 0.6],
+    [LOUNGE_HALF_WIDTH - 0.6, -CORRIDOR_DEPTH / 2 - 0.6],
+    [-LOUNGE_HALF_WIDTH + 0.6, CORRIDOR_DEPTH / 2 + 0.6],
+    [LOUNGE_HALF_WIDTH - 0.6, CORRIDOR_DEPTH / 2 + 0.6],
+  ] as [number, number][]) {
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 0.5, 12), plantPotMat);
+    pot.position.set(px, loungeY + 0.25, pz);
+    group.add(pot);
+    const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 8), plantLeafMat);
+    leaves.position.set(px, loungeY + 0.7, pz);
+    group.add(leaves);
+  }
+
+  // -------- Escada na ponta leste --------
+  // Ocupa a faixa x: [halfW - STAIR_END_WIDTH, halfW] em toda a profundidade.
+  // Sobe de sul (y=0) pra norte (y=STORY_HEIGHT), ao longo de Z.
+  const stairXCenter = halfW - STAIR_END_WIDTH / 2;
+  const stairLengthZ = BLOCO_DEPTH - WALL_THICKNESS * 2;
+  const stairZTop = -halfD + WALL_THICKNESS;     // norte → y=STORY_HEIGHT
+  const stairZBottom = halfD - WALL_THICKNESS;   // sul → y=0
+  const stepCount = 16;
+  const stepDepth = stairLengthZ / stepCount;
   const stepHeight = STORY_HEIGHT / stepCount;
-  const stairW = STAIR_BAY_WIDTH - 0.4;
+  const stairW = STAIR_END_WIDTH - 1.2;
   for (let i = 0; i < stepCount; i++) {
     const sy = i * stepHeight + stepHeight / 2;
-    const sz = stairStartZ + i * stepDepth + stepDepth / 2;
-    addBox(stairW, stepHeight, stepDepth, 0, sy, sz, stairMat, false);
+    // i=0 fica embaixo no sul, i=N-1 fica em cima no norte
+    const sz = stairZBottom - i * stepDepth - stepDepth / 2;
+    addBox(stairW, stepHeight, stepDepth, stairXCenter, sy, sz, stairMat, false);
   }
-  // Corrimao simples nas laterais (visual)
-  for (const sx of [-stairW / 2, stairW / 2]) {
+  // Corrimaos
+  for (const sx of [stairXCenter - stairW / 2, stairXCenter + stairW / 2]) {
     const rail = new THREE.Mesh(
       new THREE.BoxGeometry(0.08, 1.1, stairLengthZ),
       stairMat,
     );
-    rail.position.set(sx, STORY_HEIGHT / 2 + 0.55, stairStartZ + stairLengthZ / 2);
+    rail.position.set(sx, STORY_HEIGHT / 2 + 0.55, 0);
     rail.castShadow = true;
     group.add(rail);
   }
+  // Parede divisoria entre corredor e escada (com vao no corredor pra
+  // chegar nela). So no terreo (no superior eh o desembarque).
+  // Borda oeste da escada (parede x = STAIR_END_MIN_X) — duas tiras (norte e sul)
+  // deixando um vao de 2.5m no centro vertical pra acesso.
+  const stairWallHN = (BLOCO_DEPTH - 2.5) / 2;
+  // trecho norte
+  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
+    STAIR_END_MIN_X, STORY_HEIGHT / 2, -halfD + stairWallHN / 2, innerMat);
+  // trecho sul
+  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
+    STAIR_END_MIN_X, STORY_HEIGHT / 2, halfD - stairWallHN / 2, innerMat);
+  // No segundo andar tambem ha uma parede igual (mas a escada esta aberta)
+  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
+    STAIR_END_MIN_X, STORY_HEIGHT + STORY_HEIGHT / 2, -halfD + stairWallHN / 2, innerMat);
+  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
+    STAIR_END_MIN_X, STORY_HEIGHT + STORY_HEIGHT / 2, halfD - stairWallHN / 2, innerMat);
 
   // -------- Placa na fachada --------
   const signCanvas = document.createElement("canvas");
@@ -448,9 +548,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       { mat: roofMat, target: 0.08 },
       { mat: slabMat, target: 0.32 },
     ];
-    const STAIR_BOTTOM_Z = -CORRIDOR_DEPTH / 2;        // y=0 aqui
-    const STAIR_TOP_Z = -halfD + WALL_THICKNESS;       // y=STORY_HEIGHT aqui
-    const STAIR_HALF_W = STAIR_BAY_WIDTH / 2 - 0.2;
+    // Escada agora fica na ponta leste, indo de sul (y=0) pra norte (y=top)
+    const STAIR_BOTTOM_Z = halfD - WALL_THICKNESS;     // sul → y=0
+    const STAIR_TOP_Z = -halfD + WALL_THICKNESS;       // norte → y=STORY_HEIGHT
+    const STAIR_MIN_X = STAIR_END_MIN_X + 0.4;
+    const STAIR_MAX_X = halfW - WALL_THICKNESS;
     let playerFloorY = 0; // estado: 0 (terreo) ou STORY_HEIGHT (superior)
 
     interactables.push({
@@ -471,7 +573,8 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // Atualiza Y do andar conforme o jogador caminha
         const inStairZone =
           insideFootprint &&
-          Math.abs(localX) < STAIR_HALF_W &&
+          localX > STAIR_MIN_X &&
+          localX < STAIR_MAX_X &&
           localZ <= STAIR_BOTTOM_Z &&
           localZ >= STAIR_TOP_Z;
         if (inStairZone) {
