@@ -205,10 +205,24 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   };
 
   // -------- Piso do andar (chao bege) --------
-  for (let story = 0; story < STORIES; story++) {
-    const y = story * STORY_HEIGHT + 0.04;
-    addBox(BLOCO_WIDTH, 0.08, BLOCO_DEPTH, 0, y, 0, floorMat, false);
-  }
+  // O piso do superior eh exatamente o que o player ve "como teto" quando
+  // esta no terreo olhando pra cima. Guardamos refs pra esconder no
+  // toggle, igual aos outros elementos por andar.
+  const floorTerreoMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(BLOCO_WIDTH, 0.08, BLOCO_DEPTH),
+    floorMat,
+  );
+  floorTerreoMesh.position.set(0, 0.04, 0);
+  floorTerreoMesh.receiveShadow = true;
+  group.add(floorTerreoMesh);
+
+  const floorSuperiorMesh = new THREE.Mesh(
+    new THREE.BoxGeometry(BLOCO_WIDTH, 0.08, BLOCO_DEPTH),
+    floorMat,
+  );
+  floorSuperiorMesh.position.set(0, STORY_HEIGHT + 0.04, 0);
+  floorSuperiorMesh.receiveShadow = true;
+  group.add(floorSuperiorMesh);
 
   // -------- Paredes externas do corpo principal --------
   // Norte e sul, com aberturas implicitas pra entrada (porta na fachada sul)
@@ -216,33 +230,52 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   const halfD = BLOCO_DEPTH / 2;
   const DOOR_W = 3;
 
+  // Paredes externas ficam guardadas pra cada andar separadamente, pra
+  // poder esconder as do andar oposto quando o player muda de piso.
+  const outerMeshesTerreo: THREE.Mesh[] = [];
+  const outerMeshesSuperior: THREE.Mesh[] = [];
+
+  const addOuterWall = (
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+    story: number,
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), outerMat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    (story === 0 ? outerMeshesTerreo : outerMeshesSuperior).push(mesh);
+    return mesh;
+  };
+
   for (let story = 0; story < STORIES; story++) {
     const y = story * STORY_HEIGHT + STORY_HEIGHT / 2;
 
     // Parede norte (fundo, virada pro centro do campus, longe da camera)
-    addBox(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
-      0, y, -halfD + WALL_THICKNESS / 2, outerMat);
+    addOuterWall(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
+      0, y, -halfD + WALL_THICKNESS / 2, story);
 
     // Parede sul (fachada, virada pro muro/camera) com porta no centro (so terreo)
     if (story === 0) {
       const sideW = (BLOCO_WIDTH - DOOR_W) / 2;
-      addBox(sideW, STORY_HEIGHT, WALL_THICKNESS,
-        -DOOR_W / 2 - sideW / 2, y, halfD - WALL_THICKNESS / 2, outerMat);
-      addBox(sideW, STORY_HEIGHT, WALL_THICKNESS,
-        DOOR_W / 2 + sideW / 2, y, halfD - WALL_THICKNESS / 2, outerMat);
+      addOuterWall(sideW, STORY_HEIGHT, WALL_THICKNESS,
+        -DOOR_W / 2 - sideW / 2, y, halfD - WALL_THICKNESS / 2, story);
+      addOuterWall(sideW, STORY_HEIGHT, WALL_THICKNESS,
+        DOOR_W / 2 + sideW / 2, y, halfD - WALL_THICKNESS / 2, story);
       const lintelH = STORY_HEIGHT - 2.4;
-      addBox(DOOR_W, lintelH, WALL_THICKNESS,
-        0, 2.4 + lintelH / 2, halfD - WALL_THICKNESS / 2, outerMat);
+      addOuterWall(DOOR_W, lintelH, WALL_THICKNESS,
+        0, 2.4 + lintelH / 2, halfD - WALL_THICKNESS / 2, story);
     } else {
-      addBox(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
-        0, y, halfD - WALL_THICKNESS / 2, outerMat);
+      addOuterWall(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
+        0, y, halfD - WALL_THICKNESS / 2, story);
     }
 
     // Paredes laterais leste/oeste
-    addBox(WALL_THICKNESS, STORY_HEIGHT, BLOCO_DEPTH,
-      -halfW + WALL_THICKNESS / 2, y, 0, outerMat);
-    addBox(WALL_THICKNESS, STORY_HEIGHT, BLOCO_DEPTH,
-      halfW - WALL_THICKNESS / 2, y, 0, outerMat);
+    addOuterWall(WALL_THICKNESS, STORY_HEIGHT, BLOCO_DEPTH,
+      -halfW + WALL_THICKNESS / 2, y, 0, story);
+    addOuterWall(WALL_THICKNESS, STORY_HEIGHT, BLOCO_DEPTH,
+      halfW - WALL_THICKNESS / 2, y, 0, story);
   }
 
   // -------- Salas (paredes internas) --------
@@ -258,7 +291,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     loungeX: number;  // borda virada pro lounge
   };
 
-  function buildStoryRooms(rooms: Room[], storyY: number): BlockerHandle[] {
+  function buildStoryRooms(
+    rooms: Room[],
+    storyY: number,
+    storyGroup: THREE.Group,
+  ): BlockerHandle[] {
     const storyBlockers: BlockerHandle[] = [];
     const registerInnerBlocker = (
       localMinX: number, localMaxX: number,
@@ -271,6 +308,18 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         { active: storyY < 0.001 },
       );
       if (handle) storyBlockers.push(handle);
+    };
+    // Helper que cria mesh dentro do storyGroup em vez do group principal
+    const addStoryBox = (
+      w: number, h: number, d: number,
+      x: number, y: number, z: number,
+      mat: THREE.Material,
+    ) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      storyGroup.add(mesh);
     };
 
     const leftRooms = rooms.filter((r) => r.worldX < -LOUNGE_HALF_WIDTH);
@@ -311,7 +360,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // Paredes entre salas adjacentes (perpendiculares ao corredor)
         for (let i = 0; i < list.length - 1; i++) {
           const wallX = (list[i].worldX + list[i + 1].worldX) / 2;
-          addBox(INNER_WALL_THICKNESS, wallH, rowDepth, wallX, storyY + wallH / 2, wallZ, innerMat);
+          addStoryBox(INNER_WALL_THICKNESS, wallH, rowDepth, wallX, storyY + wallH / 2, wallZ, innerMat);
           registerInnerBlocker(
             wallX - t2, wallX + t2,
             wallZ - rowDepth / 2, wallZ + rowDepth / 2,
@@ -319,7 +368,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         }
 
         // Cap wall fechando a ponta da ala virada pro lounge
-        addBox(INNER_WALL_THICKNESS, wallH, rowDepth,
+        addStoryBox(INNER_WALL_THICKNESS, wallH, rowDepth,
           wing.loungeX, storyY + wallH / 2, wallZ, innerMat);
         registerInnerBlocker(
           wing.loungeX - t2, wing.loungeX + t2,
@@ -335,7 +384,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           const rightW = nextX - (r.worldX + roomDoor / 2);
           if (leftW > 0.1) {
             const cx = prevX + leftW / 2;
-            addBox(leftW, wallH, INNER_WALL_THICKNESS,
+            addStoryBox(leftW, wallH, INNER_WALL_THICKNESS,
               cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
             registerInnerBlocker(
               cx - leftW / 2, cx + leftW / 2,
@@ -344,7 +393,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           }
           if (rightW > 0.1) {
             const cx = r.worldX + roomDoor / 2 + rightW / 2;
-            addBox(rightW, wallH, INNER_WALL_THICKNESS,
+            addStoryBox(rightW, wallH, INNER_WALL_THICKNESS,
               cx, storyY + wallH / 2, corridorEdgeZ, innerMat);
             registerInnerBlocker(
               cx - rightW / 2, cx + rightW / 2,
@@ -360,21 +409,44 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       const rowZ = r.row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
       const sprite = makeLabelSprite(r.label.text);
       sprite.position.set(r.worldX, storyY + wallH - 0.6, rowZ);
-      group.add(sprite);
+      storyGroup.add(sprite);
     }
 
     return storyBlockers;
   }
 
-  const terreoBlockers = buildStoryRooms(buildRoomList(terreoPlanta), 0);
-  const superiorBlockers = buildStoryRooms(buildRoomList(superiorPlanta), STORY_HEIGHT);
+  const terreoStoryGroup = new THREE.Group();
+  terreoStoryGroup.name = "blocoTelematica.terreo";
+  group.add(terreoStoryGroup);
+  const superiorStoryGroup = new THREE.Group();
+  superiorStoryGroup.name = "blocoTelematica.superior";
+  group.add(superiorStoryGroup);
+
+  const terreoBlockers = buildStoryRooms(buildRoomList(terreoPlanta), 0, terreoStoryGroup);
+  const superiorBlockers = buildStoryRooms(buildRoomList(superiorPlanta), STORY_HEIGHT, superiorStoryGroup);
 
   // -------- Laje intermediaria + teto --------
-  // Laje cobre tudo menos o vao da escada (na ponta leste)
+  // Laje cobre tudo menos o vao da escada (ponta leste). Fica invisivel
+  // quando o player esta no terreo (pra camera 3rd person nao bater no
+  // teto e pra ver as salas de cima quando subir).
   const slabMainW = BLOCO_WIDTH - STAIR_END_WIDTH;
-  addBox(slabMainW, 0.16, BLOCO_DEPTH + 0.2,
-    -halfW + slabMainW / 2, STORY_HEIGHT, 0, slabMat);
-  addBox(BLOCO_WIDTH + 0.4, 0.6, BLOCO_DEPTH + 0.4, 0, TOTAL_HEIGHT + 0.3, 0, roofMat);
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(slabMainW, 0.16, BLOCO_DEPTH + 0.2),
+    slabMat,
+  );
+  slab.position.set(-halfW + slabMainW / 2, STORY_HEIGHT, 0);
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  group.add(slab);
+
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(BLOCO_WIDTH + 0.4, 0.6, BLOCO_DEPTH + 0.4),
+    roofMat,
+  );
+  roof.position.set(0, TOTAL_HEIGHT + 0.3, 0);
+  roof.castShadow = true;
+  roof.receiveShadow = true;
+  group.add(roof);
 
   // -------- Lounge central (cadeiras + mesa) --------
   // Ocupa o trecho central do corredor e expande pra dentro das fileiras
@@ -467,22 +539,26 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     rail.castShadow = true;
     group.add(rail);
   }
-  // Parede divisoria entre corredor e escada (com vao no corredor pra
-  // chegar nela). So no terreo (no superior eh o desembarque).
-  // Borda oeste da escada (parede x = STAIR_END_MIN_X) — duas tiras (norte e sul)
-  // deixando um vao de 2.5m no centro vertical pra acesso.
+  // Parede divisoria entre corredor e escada (com vao central de 2.5m
+  // pra acesso). Cada andar tem a sua, no respectivo storyGroup.
   const stairWallHN = (BLOCO_DEPTH - 2.5) / 2;
-  // trecho norte
-  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
-    STAIR_END_MIN_X, STORY_HEIGHT / 2, -halfD + stairWallHN / 2, innerMat);
-  // trecho sul
-  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
-    STAIR_END_MIN_X, STORY_HEIGHT / 2, halfD - stairWallHN / 2, innerMat);
-  // No segundo andar tambem ha uma parede igual (mas a escada esta aberta)
-  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
-    STAIR_END_MIN_X, STORY_HEIGHT + STORY_HEIGHT / 2, -halfD + stairWallHN / 2, innerMat);
-  addBox(WALL_THICKNESS, STORY_HEIGHT, stairWallHN,
-    STAIR_END_MIN_X, STORY_HEIGHT + STORY_HEIGHT / 2, halfD - stairWallHN / 2, innerMat);
+  const addStairDivider = (storyY: number, target: THREE.Group) => {
+    const yMid = storyY + STORY_HEIGHT / 2;
+    const mkSegment = (zCenter: number) => {
+      const m = new THREE.Mesh(
+        new THREE.BoxGeometry(WALL_THICKNESS, STORY_HEIGHT, stairWallHN),
+        innerMat,
+      );
+      m.position.set(STAIR_END_MIN_X, yMid, zCenter);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      target.add(m);
+    };
+    mkSegment(-halfD + stairWallHN / 2);
+    mkSegment(halfD - stairWallHN / 2);
+  };
+  addStairDivider(0, terreoStoryGroup);
+  addStairDivider(STORY_HEIGHT, superiorStoryGroup);
 
   // -------- Placa na fachada --------
   const signCanvas = document.createElement("canvas");
@@ -545,8 +621,6 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   if (interactables && getPlayerPosition) {
     const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [
       { mat: outerMat, target: 0.18 },
-      { mat: roofMat, target: 0.08 },
-      { mat: slabMat, target: 0.32 },
     ];
     // Escada agora fica na ponta leste, indo de sul (y=0) pra norte (y=top)
     const STAIR_BOTTOM_Z = halfD - WALL_THICKNESS;     // sul → y=0
@@ -566,9 +640,12 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const p = getPlayerPosition();
         const localX = p.x - centerX;
         const localZ = p.z - centerZ;
+        // Footprint usa as bordas do bloco mesmo (sem desconto da
+        // parede) pra que assim que o player atravessa a porta ja conte
+        // como dentro, escondendo o teto.
         const insideFootprint =
-          Math.abs(localX) < BLOCO_WIDTH / 2 - WALL_THICKNESS &&
-          Math.abs(localZ) < BLOCO_DEPTH / 2 - WALL_THICKNESS;
+          Math.abs(localX) < BLOCO_WIDTH / 2 &&
+          Math.abs(localZ) < BLOCO_DEPTH / 2;
 
         // Atualiza Y do andar conforme o jogador caminha
         const inStairZone =
@@ -594,6 +671,30 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const onSuperior = playerFloorY >= STORY_HEIGHT * 0.5;
         for (const b of terreoBlockers) b.active = !onSuperior;
         for (const b of superiorBlockers) b.active = onSuperior;
+
+        // Visibilidade dos story groups: so o andar do player aparece. Na
+        // escada (entre andares), os dois ficam visiveis pra transicao
+        // suave nao "piscar".
+        const onStair = inStairZone;
+        terreoStoryGroup.visible = onStair || !onSuperior;
+        superiorStoryGroup.visible = onStair || onSuperior;
+
+        // Laje: invisivel quando no terreo (nao "tampar" a camera). Visivel
+        // quando o player esta em cima (vira o piso). Tambem visivel na
+        // escada pra ver pra onde esta subindo.
+        slab.visible = onSuperior || onStair;
+        // Teto: invisivel quando o player esta dentro (deixa a camera
+        // ver pro chao). Aparece de fora.
+        roof.visible = !insideFootprint;
+        // Paredes externas do andar oposto: somem pra nao tampar a
+        // visao de cima. Da pra ver "uma caixinha" so do andar atual.
+        for (const m of outerMeshesSuperior) m.visible = !insideFootprint || onSuperior || onStair;
+        for (const m of outerMeshesTerreo) m.visible = !insideFootprint || !onSuperior || onStair;
+        // O piso de cada andar so aparece se faz sentido visualmente.
+        // O piso do superior visto de baixo seria "teto" — entao some
+        // quando o player esta no terreo dentro do bloco.
+        floorSuperiorMesh.visible = !insideFootprint || onSuperior || onStair;
+        floorTerreoMesh.visible = !insideFootprint || !onSuperior || onStair;
 
         // Transparencia
         const targetFactor = insideFootprint ? 1 : 0;
