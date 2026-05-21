@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { avatarToGameAppearance } from "@/features/avatar/avatarConfig";
+import { createBiribaEvent } from "@/features/game/minigames/biriba";
+import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
 
 export function bootGame(opts = {}) {
   const container = opts.container;
@@ -17,6 +19,9 @@ export function bootGame(opts = {}) {
   const onMediaBoothInteract = typeof opts.onMediaBoothInteract === "function" ? opts.onMediaBoothInteract : () => {};
   const onPvpThrow = typeof opts.onPvpThrow === "function" ? opts.onPvpThrow : () => {};
   const onPvpHit = typeof opts.onPvpHit === "function" ? opts.onPvpHit : () => {};
+  const onBiribaConsumed = typeof opts.onBiribaConsumed === "function" ? opts.onBiribaConsumed : () => {};
+  const onSecretDisconnect =
+    typeof opts.onSecretDisconnect === "function" ? opts.onSecretDisconnect : () => {};
   const shouldIgnoreKeys = typeof opts.shouldIgnoreKeys === "function" ? opts.shouldIgnoreKeys : () => false;
   const getWorldTime = typeof opts.getWorldTime === "function" ? opts.getWorldTime : null;
   const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
@@ -415,6 +420,80 @@ function playBusArrivalSound(strength = 1) {
     disconnectAudioNode(hiss);
     disconnectAudioNode(hissFilter);
     disconnectAudioNode(hissGain);
+  };
+}
+
+function playPoolWaterSound(strength = 0.45) {
+  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
+
+  const now = audioContext.currentTime;
+  const source = audioContext.createBufferSource();
+  source.buffer = createNoiseBuffer(audioContext, 0.42);
+
+  const filter = audioContext.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.frequency.value = 620 + strength * 430;
+  filter.Q.value = 0.62;
+
+  const gain = audioContext.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.006 + strength * 0.012, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioMasterGain);
+  source.start(now);
+  source.stop(now + 0.46);
+  source.onended = () => {
+    disconnectAudioNode(source);
+    disconnectAudioNode(filter);
+    disconnectAudioNode(gain);
+  };
+}
+
+function playSwimStrokeSound(strength = 0.5) {
+  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
+  playPoolWaterSound(0.72 + strength * 0.35);
+}
+
+function playParanormalSound(strength = 0.5) {
+  if (!ambientAudioEnabled || !audioContext || audioContext.state !== "running" || !audioMasterGain) return;
+
+  const now = audioContext.currentTime;
+  const gain = audioContext.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.011 + strength * 0.028, now + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+
+  const low = audioContext.createOscillator();
+  low.type = "sawtooth";
+  low.frequency.setValueAtTime(43 + strength * 12, now);
+  low.frequency.exponentialRampToValueAtTime(31 + strength * 8, now + 1.0);
+
+  const bend = audioContext.createOscillator();
+  bend.type = "sine";
+  bend.frequency.setValueAtTime(212 + Math.random() * 90, now);
+  bend.frequency.exponentialRampToValueAtTime(96 + Math.random() * 32, now + 0.72);
+
+  const filter = audioContext.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.value = 380 + strength * 160;
+  filter.Q.value = 1.6;
+
+  low.connect(filter);
+  bend.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioMasterGain);
+  low.start(now);
+  bend.start(now + 0.03);
+  low.stop(now + 1.25);
+  bend.stop(now + 0.95);
+  low.onended = () => {
+    disconnectAudioNode(low);
+    disconnectAudioNode(bend);
+    disconnectAudioNode(filter);
+    disconnectAudioNode(gain);
   };
 }
 
@@ -1515,8 +1594,8 @@ addBuilding({ x: 0, z: 10, width: 10, depth: 8, height: 4.2, color: 0xe3dad0, ro
 // Quadra de Queimado (PvP Arena)
 const ARENA_CX = 40;
 const ARENA_CZ = 42;
-const ARENA_W = 18;
-const ARENA_D = 12;
+const ARENA_W = 26;
+const ARENA_D = 18;
 /* arena build scope */ {
   const floorMat = new THREE.MeshStandardMaterial({ color: 0x4e7c2e, roughness: 1 });
   const arenaFloor = new THREE.Mesh(new THREE.BoxGeometry(ARENA_W, 0.07, ARENA_D), floorMat);
@@ -2253,6 +2332,8 @@ function disposeSprite(sprite) {
 const remotePlayers = new Map();
 const sharedBikes = new Map();
 let sharedBikeCount = 0;
+let swimmingMinigame = null;
+let biribaEvent = null;
 
 function getFallbackRemoteAppearance(id = "") {
   const palette = hashPalette(id);
@@ -3376,7 +3457,10 @@ function createBike(x, z, rotation = 0) {
         0,
         player.position.z + worldOffset.z
       );
-      if (!isBlockedAt(candidate.x, candidate.z, 0.62)) {
+      if (
+        !isBlockedAt(candidate.x, candidate.z, 0.62) &&
+        !swimmingMinigame?.isNoBikeZone(candidate.x, candidate.z)
+      ) {
         return candidate;
       }
     }
@@ -3385,6 +3469,13 @@ function createBike(x, z, rotation = 0) {
 
   function mountBike() {
     if (playerState.sitting) return;
+    if (
+      swimmingMinigame?.isNoBikeZone(player.position.x, player.position.z) ||
+      swimmingMinigame?.isNoBikeZone(bike.position.x, bike.position.z)
+    ) {
+      speak("Bicicletas ficam fora da area da piscina.", "Piscina");
+      return;
+    }
     if (bikeState.remoteMountedBy) {
       speak("Essa bicicleta ja esta sendo usada por outro player.", "Bicicleta");
       return;
@@ -4365,13 +4456,16 @@ createCampusBanner(-38, 16, Math.PI / 2);
 createBall(-4, 16);
 createBike(24, 4, -Math.PI / 2);
 createCampusBus([
-  { x: -54, z: 38, dwell: 1.7 },
-  { x: -8, z: 44, dwell: 0.8 },
-  { x: 42, z: 42, dwell: 1.0 },
-  { x: 58, z: 10, dwell: 0.9 },
-  { x: 58, z: -42, dwell: 1.4 },
-  { x: -52, z: -42, dwell: 1.2 },
-  { x: -60, z: -6, dwell: 0.8 }
+  { x: -62, z: 62, dwell: 1.4 },
+  { x: -12, z: 62, dwell: 0.8 },
+  { x: 28, z: 62, dwell: 0.7 },
+  { x: 62, z: 56, dwell: 1.0 },
+  { x: 62, z: 8, dwell: 0.8 },
+  { x: 62, z: -44, dwell: 1.2 },
+  { x: 22, z: -66, dwell: 0.9 },
+  { x: -54, z: -66, dwell: 1.1 },
+  { x: -64, z: -10, dwell: 0.8 },
+  { x: -62, z: 38, dwell: 1.0 }
 ]);
 createSnackCart(20, -20, Math.PI / 2);
 createReadingTable(-10, 28, -Math.PI / 4);
@@ -6088,6 +6182,21 @@ const keydownHandler = (event) => {
   if (ambientAudioEnabled) ensureAmbientAudio();
   if (handleDevKeyDown(event)) return;
   if (shouldIgnoreKeys(event)) return;
+  if (event.code === "Space" && swimmingMinigame?.isPlayerControlled()) {
+    event.preventDefault();
+    swimmingMinigame.queueStroke();
+    return;
+  }
+  if (event.code === "KeyE" && swimmingMinigame?.isPlayerControlled()) {
+    event.preventDefault();
+    swimmingMinigame.queueCancel();
+    return;
+  }
+  if (event.code === "KeyQ" && biribaEvent?.isSecretActive()) {
+    event.preventDefault();
+    biribaEvent.queueThrow();
+    return;
+  }
   keys.add(event.code);
   if (event.code === "KeyC" && !event.repeat) {
     event.preventDefault();
@@ -6228,6 +6337,82 @@ const accel = 22;
 const drag = 10;
 const clock = new THREE.Clock();
 
+function forceDismountCurrentBike() {
+  const bike = playerState.ridingBike;
+  if (!bike) return;
+  bike.mounted = false;
+  bike.group.position.set(player.position.x, 0, player.position.z);
+  bike.group.rotation.x = 0;
+  bike.group.rotation.y = player.rotation.y - 0.35;
+  bike.facingYaw = bike.group.rotation.y;
+  bike.wheelieAmount = 0;
+  bike.wheelieTimer = 0;
+  playerState.ridingBike = null;
+  player.rotation.x = 0;
+  playerVelocity.set(0, 0);
+  bike.emitState?.(false);
+}
+
+function removeTreesInArea(bounds, padding = 1.6) {
+  const minX = bounds.minX - padding;
+  const maxX = bounds.maxX + padding;
+  const minZ = bounds.minZ - padding;
+  const maxZ = bounds.maxZ + padding;
+
+  for (let i = weatherTrees.length - 1; i >= 0; i -= 1) {
+    const tree = weatherTrees[i];
+    const { x, z } = tree.position;
+    if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
+    world.remove(tree);
+    disposeObject3D(tree);
+    weatherTrees.splice(i, 1);
+  }
+
+  mapFeatures.trees = mapFeatures.trees.filter(
+    (tree) => tree.x < minX || tree.x > maxX || tree.z < minZ || tree.z > maxZ
+  );
+}
+
+swimmingMinigame = createSwimmingMinigame({
+  world,
+  container,
+  createBlocker,
+  interactables,
+  mapFeatures,
+  player,
+  playerRig,
+  playerVelocity,
+  speak,
+  updatePlayerActivity,
+  resetRigPose,
+  isRidingBike: () => !!playerState.ridingBike,
+  removeTreesInArea,
+  playPoolSound: playPoolWaterSound,
+  playSwimStrokeSound,
+});
+
+biribaEvent = createBiribaEvent({
+  world,
+  scene,
+  container,
+  player,
+  playerVelocity,
+  createCharacter,
+  createNameLabel,
+  disposeObject3D,
+  pushBubble,
+  animateWalk,
+  animateRun,
+  animateGlitch,
+  setRestPose,
+  resetRigPose: () => resetRigPose(playerRig.refs),
+  forceDismount: forceDismountCurrentBike,
+  canStartSecret: () => !pvpActiveMatch && !swimmingMinigame?.isActive(),
+  onConsumed: onBiribaConsumed,
+  onSecretDisconnect,
+  playParanormalSound,
+});
+
 function clampPlayerToWorld(radius = playerRadius) {
   player.position.x = THREE.MathUtils.clamp(player.position.x, -worldLimit + radius, worldLimit - radius);
   player.position.z = THREE.MathUtils.clamp(player.position.z, -worldLimit + radius, worldLimit - radius);
@@ -6287,6 +6472,17 @@ function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0, wheeli
 }
 
 function updatePlayer(dt, time) {
+  if (swimmingMinigame?.isPlayerControlled()) {
+    interactQueued = false;
+    jumpQueued = false;
+    queuedEmoteKind = null;
+    playerState.jumping = false;
+    playerState.jumpY = 0;
+    playerState.jumpVel = 0;
+    swimmingMinigame.updatePlayer(dt, time);
+    return;
+  }
+
   if (playerState.sitting) {
     interactQueued = false;
     playerFootstepDistance = 0;
@@ -6374,11 +6570,20 @@ function updatePlayer(dt, time) {
     }
 
     const collisionRadius = 0.82;
+    const prevBikeX = player.position.x;
+    const prevBikeZ = player.position.z;
     player.position.x += playerVelocity.x * dt;
     resolveCollisions("x", collisionRadius);
     player.position.z += playerVelocity.y * dt;
     resolveCollisions("z", collisionRadius);
     clampPlayerToWorld(collisionRadius);
+    if (swimmingMinigame?.rejectBikeEntry(player.position)) {
+      player.position.x = prevBikeX;
+      player.position.z = prevBikeZ;
+      playerVelocity.set(0, 0);
+      mountedBike.wheelieTimer = 0;
+      mountedBike.wheelieAmount = 0;
+    }
 
     if (facing.lengthSq() > 0.001) {
       const angle = Math.atan2(facing.x, facing.y);
@@ -6546,6 +6751,11 @@ function updatePlayer(dt, time) {
   player.position.z += playerVelocity.y * dt;
   resolveCollisions("z");
   clampPlayerToWorld();
+  if (pvpActiveMatch) {
+    const margin = 0.9;
+    player.position.x = THREE.MathUtils.clamp(player.position.x, ARENA_CX - ARENA_W / 2 + margin, ARENA_CX + ARENA_W / 2 - margin);
+    player.position.z = THREE.MathUtils.clamp(player.position.z, ARENA_CZ - ARENA_D / 2 + margin, ARENA_CZ + ARENA_D / 2 - margin);
+  }
 
   const grounded = !playerState.jumping;
   const surface = getGroundSurfaceAt(player.position.x, player.position.z);
@@ -6602,22 +6812,23 @@ function refreshCameraFrustum() {
   cameraFrustum.setFromProjectionMatrix(cameraMatrix);
 }
 
-function isWithinCamera(entity, radius, maxDistance) {
-  const dx = entity.position.x - player.position.x;
-  const dz = entity.position.z - player.position.z;
+function isWithinCamera(entity, radius, maxDistance, positionOverride = null) {
+  const position = positionOverride || entity.position;
+  const dx = position.x - player.position.x;
+  const dz = position.z - player.position.z;
   if (dx * dx + dz * dz > maxDistance * maxDistance) return false;
 
-  tempSphere.center.set(entity.position.x, entity.position.y ?? 0, entity.position.z);
+  tempSphere.center.set(position.x, position.y ?? 0, position.z);
   tempSphere.radius = radius;
   return cameraFrustum.intersectsSphere(tempSphere);
 }
 
-function updateRenderableVisibility(entity, radius, maxDistance) {
+function updateRenderableVisibility(entity, radius, maxDistance, positionOverride = null) {
   if (devMode) {
     if (entity.visible !== true) entity.visible = true;
     return true;
   }
-  const visible = isWithinCamera(entity, radius, maxDistance);
+  const visible = isWithinCamera(entity, radius, maxDistance, positionOverride);
   if (entity.visible !== visible) entity.visible = visible;
   return visible;
 }
@@ -7265,7 +7476,12 @@ function syncEntityVisibility() {
     updateRenderableVisibility(bus.group, 2.4, ENTITY_CULL_DIST.bus);
   }
   for (const item of interactables) {
-    updateRenderableVisibility(item.root || item.group || item, 2.2, ENTITY_CULL_DIST.interactable);
+    updateRenderableVisibility(
+      item.root || item.group || item,
+      item.cullRadius ?? 2.2,
+      item.cullDistance ?? ENTITY_CULL_DIST.interactable,
+      item.cullPosition || item.position
+    );
   }
   for (const r of remotePlayers.values()) {
     updateRenderableVisibility(r.group, 1.8, ENTITY_CULL_DIST.remote);
@@ -7457,6 +7673,23 @@ function drawMinimap() {
     ctx.stroke();
   }
 
+  const biribaMarker = biribaEvent?.getMapMarker?.();
+  if (biribaMarker) {
+    const mx = worldToMapX(biribaMarker.x);
+    const my = worldToMapY(biribaMarker.z);
+    const blink = 0.45 + 0.55 * ((Math.sin(performance.now() * 0.012) + 1) / 2);
+    ctx.fillStyle = biribaMarker.color || "#000000";
+    ctx.globalAlpha = blink;
+    ctx.beginPath();
+    ctx.arc(mx, my, 3.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.35 + blink * 0.65;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   for (const duck of ducks) {
     const mx = worldToMapX(duck.group.position.x);
     const my = worldToMapY(duck.group.position.z);
@@ -7620,6 +7853,7 @@ function tick() {
   updateRemotes(dt, time);
   updateBubbles(dt);
   updatePvpBalls(dt);
+  biribaEvent?.update(dt, time);
 
   netAccumulator += dt;
   if (netAccumulator >= NET_INTERVAL) {
@@ -7774,8 +8008,9 @@ function pvpShowHit(victimId) {
 }
 
 function pvpTeleportToArena(side) {
+  forceDismountCurrentBike();
   pvpSavedPosition = { x: player.position.x, z: player.position.z };
-  const spawnX = side === "A" ? ARENA_CX - 5 : ARENA_CX + 5;
+  const spawnX = side === "A" ? ARENA_CX - 7.5 : ARENA_CX + 7.5;
   const facingY = side === "A" ? 0 : Math.PI;
   player.position.set(spawnX, 0, ARENA_CZ);
   player.rotation.y = facingY;
@@ -7810,17 +8045,25 @@ function destroy() {
   window.removeEventListener("blur", resetCameraDrag);
   window.removeEventListener("resize", resizeHandler);
   window.removeEventListener("error", errorHandler);
+  swimmingMinigame?.destroy?.();
+  biribaEvent?.destroy?.();
+  swimmingMinigame = null;
+  biribaEvent = null;
   devOverlay.remove();
   scene.remove(devSelectionBox);
   disposeObject3D(devSelectionBox);
   stopAudioNode(audioWindSource);
   stopAudioNode(audioMurmurSource);
+  stopAudioNode(audioRadioSource);
   audioWindSource = null;
   audioWindFilter = null;
   audioWindGain = null;
   audioMurmurSource = null;
   audioMurmurFilter = null;
   audioMurmurGain = null;
+  audioRadioSource = null;
+  audioRadioFilter = null;
+  audioRadioGain = null;
   audioNextBirdAt = 0;
   if (audioContext) {
     audioContext.close?.().catch(() => {});
@@ -7858,6 +8101,8 @@ function destroy() {
     pvpTeleportToArena,
     pvpReturnFromArena,
     queueMobilePvpThrow,
+    biribaSpawn: (payload) => biribaEvent?.spawn(payload),
+    biribaDespawn: () => biribaEvent?.despawn(),
   };
 }
 

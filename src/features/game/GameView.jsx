@@ -32,6 +32,7 @@ export default function GameView() {
   const localIdRef = useRef(null);
   const npcAuthorityIdRef = useRef(null);
   const npcSnapshotRef = useRef([]);
+  const biribaSnapshotRef = useRef(null);
   const joystickRef = useRef(null);
   const joystickPointerRef = useRef(null);
   const mobileRunRef = useRef(false);
@@ -77,6 +78,8 @@ export default function GameView() {
     label: "parado",
     detail: "vagando pelo campus",
   });
+  const [biribaNotice, setBiribaNotice] = useState("");
+  const biribaNoticeTimerRef = useRef(null);
   const chatFocusedRef = useRef(false);
   const mediaFocusedRef = useRef(false);
   const serverNowRef = useRef(null);
@@ -229,6 +232,15 @@ export default function GameView() {
   }, [mediaFocused]);
 
   useEffect(() => {
+    return () => {
+      if (biribaNoticeTimerRef.current) {
+        clearTimeout(biribaNoticeTimerRef.current);
+        biribaNoticeTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setAvatar(readStoredAvatar());
   }, []);
 
@@ -330,6 +342,7 @@ export default function GameView() {
             npcAuthorityIdRef.current =
               typeof event.npcAuthority === "string" ? event.npcAuthority : null;
             npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
+            biribaSnapshotRef.current = event.biriba || null;
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
               serverSyncedAtRef.current = Date.now();
@@ -348,6 +361,9 @@ export default function GameView() {
               for (const entity of event.entities) {
                 game.updateSharedEntity?.(entity);
               }
+            }
+            if (game && event.biriba) {
+              game.biribaSpawn?.(event.biriba);
             }
             if (game) {
               game.setNpcAuthority?.(npcAuthorityIdRef.current === event.you);
@@ -486,6 +502,28 @@ export default function GameView() {
               winnerNick: event.winnerNick,
               forfeit: event.forfeit === true,
             });
+          } else if (event.type === "biriba-spawn") {
+            biribaSnapshotRef.current = event.biriba || null;
+            const notice = {
+              id: "__system__",
+              nick: "sistema",
+              text: "biriba está no campus",
+              ts: Date.now(),
+            };
+            setChatMessages((prev) => {
+              const next = [...prev, decorateMessage(notice)];
+              return next.length > 80 ? next.slice(next.length - 80) : next;
+            });
+            setBiribaNotice("biriba está no campus");
+            if (biribaNoticeTimerRef.current) clearTimeout(biribaNoticeTimerRef.current);
+            biribaNoticeTimerRef.current = setTimeout(() => {
+              setBiribaNotice("");
+              biribaNoticeTimerRef.current = null;
+            }, 4500);
+            if (game && event.biriba) game.biribaSpawn?.(event.biriba);
+          } else if (event.type === "biriba-despawn") {
+            biribaSnapshotRef.current = null;
+            if (game) game.biribaDespawn?.();
           } else if (event.type === "reaction") {
             if (!event.targetId) return;
             if (event.targetKey) {
@@ -541,11 +579,22 @@ export default function GameView() {
         onPvpHit: (matchId, victimId) => {
           multiplayer.sendPvpHit(matchId, victimId);
         },
+        onBiribaConsumed: (seed) => {
+          multiplayer.sendBiribaConsumed?.(seed);
+        },
+        onSecretDisconnect: () => {
+          multiplayerRef.current?.close?.();
+          setConnection("disconnected");
+          router.push("/");
+        },
       });
       game.setNpcAuthority?.(
         !!localIdRef.current && npcAuthorityIdRef.current === localIdRef.current
       );
       game.applyNpcSnapshots?.(npcSnapshotRef.current);
+      if (biribaSnapshotRef.current) {
+        game.biribaSpawn?.(biribaSnapshotRef.current);
+      }
       gameApiRef.current = game;
     }
 
@@ -741,6 +790,12 @@ export default function GameView() {
             </div>
           </div>
         )}
+
+        {biribaNotice ? (
+          <div className="biriba-notice" role="status" aria-live="polite">
+            {biribaNotice}
+          </div>
+        ) : null}
 
         <div className="game-header-area">
           <div className="game-left-stack">

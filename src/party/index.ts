@@ -82,11 +82,21 @@ type PvPMatch = {
   hitsOnB: number;
   status: PvPStatus;
 };
+
+type BiribaEvent = {
+  seed: string;
+  spawnIndex: number;
+  expiresAt: number;
+};
 const MAX_SIGNAL_SDP = 30_000;
 const MAX_SIGNAL_CANDIDATE = 8_000;
 const MAX_ENTITY_ID = 96;
 const MAX_NPC_ID = 96;
 const MAX_NPCS = 32;
+const BIRIBA_SPAWN_POINT_COUNT = 6;
+const BIRIBA_SPAWN_HOUR = 3;
+const BIRIBA_SPAWN_MINUTE = 33;
+const BIRIBA_DESPAWN_HOUR = 4;
 const DEFAULT_AVATAR: AvatarState = {
   shirt: "#2f855a",
   pants: "#24364d",
@@ -236,8 +246,43 @@ export default class GameRoom implements Party.Server {
   clockTimer: ReturnType<typeof setInterval> | null = null;
   pvpMatches = new Map<string, PvPMatch>();
   pvpCounter = 0;
+  biriba: BiribaEvent | null = null;
+  biribaBlockedDayKey: string | null = null;
 
   constructor(readonly room: Party.Room) {}
+
+  maybeUpdateBiriba(now = Date.now()) {
+    const serverDate = new Date(now);
+    const dayKey = `${serverDate.getFullYear()}-${serverDate.getMonth() + 1}-${serverDate.getDate()}`;
+
+    if (this.biriba && this.biriba.expiresAt <= now) {
+      this.biriba = null;
+      this.room.broadcast(JSON.stringify({ type: "biriba-despawn" }));
+    }
+
+    const minutes = serverDate.getHours() * 60 + serverDate.getMinutes();
+    const spawnStartMinutes = BIRIBA_SPAWN_HOUR * 60 + BIRIBA_SPAWN_MINUTE;
+    const despawnMinutes = BIRIBA_DESPAWN_HOUR * 60;
+    const isWindow = minutes >= spawnStartMinutes && minutes < despawnMinutes;
+
+    if (!isWindow) {
+      if (this.biribaBlockedDayKey === dayKey && minutes >= despawnMinutes) {
+        this.biribaBlockedDayKey = null;
+      }
+      return;
+    }
+    if (this.biriba || this.biribaBlockedDayKey === dayKey) return;
+
+    const despawnAt = new Date(serverDate);
+    despawnAt.setHours(BIRIBA_DESPAWN_HOUR, 0, 0, 0);
+
+    this.biriba = {
+      seed: `${now.toString(36)}-${Math.floor(Math.random() * 1_000_000).toString(36)}`,
+      spawnIndex: Math.floor(Math.random() * BIRIBA_SPAWN_POINT_COUNT),
+      expiresAt: despawnAt.getTime(),
+    };
+    this.room.broadcast(JSON.stringify({ type: "biriba-spawn", biriba: this.biriba }));
+  }
 
   onRequest() {
     return Response.json({
@@ -248,6 +293,7 @@ export default class GameRoom implements Party.Server {
   }
 
   onConnect(conn: Party.Connection) {
+    this.maybeUpdateBiriba(Date.now());
     conn.send(
       JSON.stringify({
         type: "init",
@@ -257,15 +303,18 @@ export default class GameRoom implements Party.Server {
         npcAuthority: this.npcAuthority,
         npcs: this.npcStates,
         history: this.history.slice(-30),
+        biriba: this.biriba && this.biriba.expiresAt > Date.now() ? this.biriba : null,
         serverNow: Date.now(),
       })
     );
     if (!this.clockTimer) {
       this.clockTimer = setInterval(() => {
+        const now = Date.now();
+        this.maybeUpdateBiriba(now);
         this.room.broadcast(
           JSON.stringify({
             type: "clock",
-            serverNow: Date.now(),
+            serverNow: now,
           })
         );
       }, 2000);
@@ -589,6 +638,17 @@ export default class GameRoom implements Party.Server {
       if (!match || match.status !== "active") return;
       if (match.playerA !== sender.id && match.playerB !== sender.id) return;
       this._endPvpByForfeit(match, sender.id);
+      return;
+    }
+
+    if (msg.type === "biriba-consumed") {
+      if (!this.players.has(sender.id) || !this.biriba) return;
+      const seed = sanitize(msg.seed, 96);
+      if (!seed || seed !== this.biriba.seed) return;
+      const now = new Date();
+      this.biribaBlockedDayKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+      this.biriba = null;
+      this.room.broadcast(JSON.stringify({ type: "biriba-despawn" }));
       return;
     }
 
