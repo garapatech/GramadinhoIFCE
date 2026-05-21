@@ -6,6 +6,8 @@
     "dev": "next dev",
     "dev:party": "partykit dev",
     "dev:all": "concurrently -n next,party -c blue,magenta \"npm:dev\" \"npm:dev:party\"",
+    "setup:hooks": "git config core.hooksPath .githooks",
+    "changelog:add": "node scripts/add-changelog-entry.mjs",
     "build": "next build",
     "start": "next start",
     "deploy:party": "partykit deploy"
@@ -22,4 +24,3 @@
     "partykit": "^0.0.115"
   }
 }
-

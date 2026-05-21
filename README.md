@@ -15,6 +15,7 @@ Duas (ou mais) pessoas abrindo o mesmo link conseguem se ver andando pelo gramad
 ```bash
 npm install
 cp .env.local.example .env.local
+npm run setup:hooks
 npm run dev:all
 ```
 
@@ -31,6 +32,50 @@ npm run dev         # terminal 2
 ```
 
 Abra dois navegadores (ou janelas anônimas) em `http://localhost:3000` para testar o multiplayer.
+
+## Changelog automatico
+
+O repositorio tem um hook de `pre-commit` versionado em `.githooks/pre-commit`.
+
+Ative uma vez por clone:
+
+```bash
+npm run setup:hooks
+```
+
+A cada commit, o hook atualiza `CHANGELOG.md`.
+
+Para gerar uma entrada semantica e mais verbosa, crie antes da alteracao final:
+
+```bash
+npm run changelog:add -- --title "Adicao de piscina" --description "Criada uma nova area no mapa com piscina, ajuste de navegacao do personagem e atualizacao visual da cena."
+```
+
+Isso grava um rascunho local em `.changelog-next.md`. No proximo commit, o hook converte esse rascunho em entrada no `CHANGELOG.md`.
+
+Se nao houver rascunho manual, ele cai no modo tecnico e registra:
+
+- branch atual
+- resumo de insercoes e remocoes
+- lista de arquivos staged
+
+Exemplo de resultado:
+
+```md
+## Adicao de piscina
+- Data: 20/05/2026, 21:10:00
+- Branch: `main`
+- Summary: 3 arquivo(s), 120 insercao(oes), 18 remocao(oes)
+
+### Descricao
+Criada uma nova area no mapa com piscina, ajuste de navegacao do personagem e atualizacao visual da cena.
+
+### Arquivos
+- `src/features/game/engine.js` (M)
+- `src/features/game/GameView.jsx` (M)
+```
+
+O controle continua no proprio Git e no changelog, sem precisar manter `agents.md`.
 
 ## Deploy
 
