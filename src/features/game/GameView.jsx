@@ -32,7 +32,7 @@ export default function GameView() {
   const localIdRef = useRef(null);
   const npcAuthorityIdRef = useRef(null);
   const npcSnapshotRef = useRef([]);
-  const biribaSnapshotRef = useRef(null);
+  const espectroSnapshotRef = useRef(null);
   const joystickRef = useRef(null);
   const joystickPointerRef = useRef(null);
   const mobileRunRef = useRef(false);
@@ -78,8 +78,8 @@ export default function GameView() {
     label: "parado",
     detail: "vagando pelo campus",
   });
-  const [biribaNotice, setBiribaNotice] = useState("");
-  const biribaNoticeTimerRef = useRef(null);
+  const [espectroNotice, setEspectroNotice] = useState("");
+  const espectroNoticeTimerRef = useRef(null);
   const chatFocusedRef = useRef(false);
   const mediaFocusedRef = useRef(false);
   const serverNowRef = useRef(null);
@@ -233,9 +233,9 @@ export default function GameView() {
 
   useEffect(() => {
     return () => {
-      if (biribaNoticeTimerRef.current) {
-        clearTimeout(biribaNoticeTimerRef.current);
-        biribaNoticeTimerRef.current = null;
+      if (espectroNoticeTimerRef.current) {
+        clearTimeout(espectroNoticeTimerRef.current);
+        espectroNoticeTimerRef.current = null;
       }
     };
   }, []);
@@ -342,7 +342,7 @@ export default function GameView() {
             npcAuthorityIdRef.current =
               typeof event.npcAuthority === "string" ? event.npcAuthority : null;
             npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
-            biribaSnapshotRef.current = event.biriba || null;
+            espectroSnapshotRef.current = event.espectro || null;
             if (typeof event.serverNow === "number") {
               serverNowRef.current = event.serverNow;
               serverSyncedAtRef.current = Date.now();
@@ -362,8 +362,8 @@ export default function GameView() {
                 game.updateSharedEntity?.(entity);
               }
             }
-            if (game && event.biriba) {
-              game.biribaSpawn?.(event.biriba);
+            if (game && event.espectro) {
+              game.espectroSpawn?.(event.espectro);
             }
             if (game) {
               game.setNpcAuthority?.(npcAuthorityIdRef.current === event.you);
@@ -502,28 +502,28 @@ export default function GameView() {
               winnerNick: event.winnerNick,
               forfeit: event.forfeit === true,
             });
-          } else if (event.type === "biriba-spawn") {
-            biribaSnapshotRef.current = event.biriba || null;
+          } else if (event.type === "espectro-spawn") {
+            espectroSnapshotRef.current = event.espectro || null;
             const notice = {
               id: "__system__",
               nick: "sistema",
-              text: "biriba está no campus",
+              text: "espectro está no campus",
               ts: Date.now(),
             };
             setChatMessages((prev) => {
               const next = [...prev, decorateMessage(notice)];
               return next.length > 80 ? next.slice(next.length - 80) : next;
             });
-            setBiribaNotice("biriba está no campus");
-            if (biribaNoticeTimerRef.current) clearTimeout(biribaNoticeTimerRef.current);
-            biribaNoticeTimerRef.current = setTimeout(() => {
-              setBiribaNotice("");
-              biribaNoticeTimerRef.current = null;
+            setEspectroNotice("espectro está no campus");
+            if (espectroNoticeTimerRef.current) clearTimeout(espectroNoticeTimerRef.current);
+            espectroNoticeTimerRef.current = setTimeout(() => {
+              setEspectroNotice("");
+              espectroNoticeTimerRef.current = null;
             }, 4500);
-            if (game && event.biriba) game.biribaSpawn?.(event.biriba);
-          } else if (event.type === "biriba-despawn") {
-            biribaSnapshotRef.current = null;
-            if (game) game.biribaDespawn?.();
+            if (game && event.espectro) game.espectroSpawn?.(event.espectro);
+          } else if (event.type === "espectro-despawn") {
+            espectroSnapshotRef.current = null;
+            if (game) game.espectroDespawn?.();
           } else if (event.type === "reaction") {
             if (!event.targetId) return;
             if (event.targetKey) {
@@ -579,8 +579,8 @@ export default function GameView() {
         onPvpHit: (matchId, victimId) => {
           multiplayer.sendPvpHit(matchId, victimId);
         },
-        onBiribaConsumed: (seed) => {
-          multiplayer.sendBiribaConsumed?.(seed);
+        onEspectroConsumed: (seed) => {
+          multiplayer.sendEspectroConsumed?.(seed);
         },
         onSecretDisconnect: () => {
           multiplayerRef.current?.close?.();
@@ -592,8 +592,8 @@ export default function GameView() {
         !!localIdRef.current && npcAuthorityIdRef.current === localIdRef.current
       );
       game.applyNpcSnapshots?.(npcSnapshotRef.current);
-      if (biribaSnapshotRef.current) {
-        game.biribaSpawn?.(biribaSnapshotRef.current);
+      if (espectroSnapshotRef.current) {
+        game.espectroSpawn?.(espectroSnapshotRef.current);
       }
       gameApiRef.current = game;
     }
@@ -791,9 +791,9 @@ export default function GameView() {
           </div>
         )}
 
-        {biribaNotice ? (
-          <div className="biriba-notice" role="status" aria-live="polite">
-            {biribaNotice}
+        {espectroNotice ? (
+          <div className="espectro-notice" role="status" aria-live="polite">
+            {espectroNotice}
           </div>
         ) : null}
 

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { avatarToGameAppearance } from "@/features/avatar/avatarConfig";
-import { createBiribaEvent } from "@/features/game/minigames/biriba";
+import { createEspectroEvent } from "@/features/game/minigames/espectro";
 import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
 
 export function bootGame(opts = {}) {
@@ -19,7 +19,7 @@ export function bootGame(opts = {}) {
   const onMediaBoothInteract = typeof opts.onMediaBoothInteract === "function" ? opts.onMediaBoothInteract : () => {};
   const onPvpThrow = typeof opts.onPvpThrow === "function" ? opts.onPvpThrow : () => {};
   const onPvpHit = typeof opts.onPvpHit === "function" ? opts.onPvpHit : () => {};
-  const onBiribaConsumed = typeof opts.onBiribaConsumed === "function" ? opts.onBiribaConsumed : () => {};
+  const onEspectroConsumed = typeof opts.onEspectroConsumed === "function" ? opts.onEspectroConsumed : () => {};
   const onSecretDisconnect =
     typeof opts.onSecretDisconnect === "function" ? opts.onSecretDisconnect : () => {};
   const shouldIgnoreKeys = typeof opts.shouldIgnoreKeys === "function" ? opts.shouldIgnoreKeys : () => false;
@@ -1202,7 +1202,7 @@ rainField.frustumCulled = false;
 scene.add(rainField);
 
 const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(140, 140),
+  new THREE.PlaneGeometry(170, 170),
   new THREE.MeshStandardMaterial({
     map: grass,
     roughness: 1,
@@ -1248,6 +1248,14 @@ createPuddle(-27, 9, 1.75, 1.8);
 
 const walkways = new THREE.Group();
 world.add(walkways);
+
+const CAMPUS_ENTRY_X = -34;
+const CAMPUS_ENTRY_Z = -70;
+const CAMPUS_ENTRY_WIDTH = 9;
+const CAMPUS_SPAWN = { x: CAMPUS_ENTRY_X, z: -77 };
+const CAMPUS_WALL_LIMIT = 73;
+const CAMPUS_WALL_HEIGHT = 4.2;
+const CAMPUS_WALL_THICKNESS = 1.2;
 
 function createCloudSprite(x, y, z, scale, drift, phase) {
   const cloud = new THREE.Sprite(
@@ -1297,9 +1305,12 @@ function addPath(width, depth, x, z, rotation = 0, surface = "cement") {
 
 addPath(84, 6, 0, -8);
 addPath(6, 66, -10, 10);
+addPath(6, 60, CAMPUS_ENTRY_X, -28);
 addPath(32, 5, 20, 16, Math.PI / 12);
 addPath(26, 5, -28, 18, -Math.PI / 14);
 addPath(18, 4, 2, 28, 0, "corridor");
+addPath(8, 12, CAMPUS_ENTRY_X, -75, 0, "corridor");
+addPath(8, 8, CAMPUS_ENTRY_X, -67, 0, "corridor");
 
 function createBlocker(minX, maxX, minZ, maxZ, options = {}) {
   const blocker = {
@@ -1312,6 +1323,354 @@ function createBlocker(minX, maxX, minZ, maxZ, options = {}) {
   blockers.push(blocker);
   return blocker;
 }
+
+function addWallSegment(width, depth, x, z, height = CAMPUS_WALL_HEIGHT) {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(width, height, depth),
+    new THREE.MeshStandardMaterial({
+      color: 0xd8d3c5,
+      roughness: 0.94,
+      metalness: 0.02,
+    })
+  );
+  mesh.position.set(x, height / 2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  world.add(mesh);
+  createBlocker(x - width / 2, x + width / 2, z - depth / 2, z + depth / 2);
+  return mesh;
+}
+
+function addCampusPerimeter() {
+  const fullWidth = CAMPUS_WALL_LIMIT * 2;
+  const gateMinX = CAMPUS_ENTRY_X - CAMPUS_ENTRY_WIDTH / 2;
+  const gateMaxX = CAMPUS_ENTRY_X + CAMPUS_ENTRY_WIDTH / 2;
+  const leftWidth = gateMinX - (-CAMPUS_WALL_LIMIT);
+  const rightWidth = CAMPUS_WALL_LIMIT - gateMaxX;
+  addWallSegment(fullWidth, CAMPUS_WALL_THICKNESS, 0, CAMPUS_WALL_LIMIT);
+  addWallSegment(CAMPUS_WALL_THICKNESS, fullWidth, -CAMPUS_WALL_LIMIT, 0);
+  addWallSegment(CAMPUS_WALL_THICKNESS, fullWidth, CAMPUS_WALL_LIMIT, 0);
+  addWallSegment(
+    leftWidth,
+    CAMPUS_WALL_THICKNESS,
+    -CAMPUS_WALL_LIMIT + leftWidth / 2,
+    CAMPUS_ENTRY_Z
+  );
+  addWallSegment(
+    rightWidth,
+    CAMPUS_WALL_THICKNESS,
+    gateMaxX + rightWidth / 2,
+    CAMPUS_ENTRY_Z
+  );
+}
+
+function addGateCheckpoint() {
+  const gateGroup = new THREE.Group();
+  gateGroup.position.set(CAMPUS_ENTRY_X, 0, CAMPUS_ENTRY_Z + 1.4);
+  world.add(gateGroup);
+
+  const gateHud = document.createElement("div");
+  gateHud.className = "gate-hud";
+  gateHud.innerHTML = `
+    <strong data-gate="phase">BLOQUEADO</strong>
+    <span data-gate="hint">interaja com a catraca</span>
+  `;
+  container?.appendChild(gateHud);
+  const gatePhaseEl = gateHud.querySelector('[data-gate="phase"]');
+  const gateHintEl = gateHud.querySelector('[data-gate="hint"]');
+  const gateModal = document.createElement("div");
+  gateModal.className = "gate-modal";
+  gateModal.innerHTML = `
+    <div class="gate-modal-backdrop" data-gate-modal-close="true"></div>
+    <form class="gate-modal-card" data-gate="form">
+      <span class="gate-modal-kicker">Portaria</span>
+      <strong>Liberar catraca</strong>
+      <p>Digite sua matricula para acessar o campus.</p>
+      <input
+        class="gate-modal-input"
+        data-gate="input"
+        type="text"
+        inputmode="numeric"
+        autocomplete="off"
+        maxlength="12"
+        placeholder="Somente numeros"
+      />
+      <div class="gate-modal-error" data-gate="error"></div>
+      <div class="gate-modal-actions">
+        <button type="button" class="gate-modal-button secondary" data-gate="cancel">Cancelar</button>
+        <button type="submit" class="gate-modal-button">Liberar</button>
+      </div>
+    </form>
+  `;
+  container?.appendChild(gateModal);
+  const gateFormEl = gateModal.querySelector('[data-gate="form"]');
+  const gateInputEl = gateModal.querySelector('[data-gate="input"]');
+  const gateErrorEl = gateModal.querySelector('[data-gate="error"]');
+  const gateCancelEl = gateModal.querySelector('[data-gate="cancel"]');
+
+  const metalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x74838b,
+    roughness: 0.42,
+    metalness: 0.88,
+  });
+  const darkMetalMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3c474d,
+    roughness: 0.58,
+    metalness: 0.62,
+  });
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(5.8, 0.14, 4.4),
+    new THREE.MeshStandardMaterial({ color: 0xc9c2b1, roughness: 0.96 })
+  );
+  floor.position.y = 0.07;
+  floor.receiveShadow = true;
+  gateGroup.add(floor);
+
+  const postGeometry = new THREE.BoxGeometry(0.26, 1.3, 0.26);
+  const postMaterial = new THREE.MeshStandardMaterial({ color: 0x55636a, roughness: 0.68, metalness: 0.25 });
+  const armMaterial = metalMaterial;
+  const indicatorMaterial = new THREE.MeshStandardMaterial({ color: 0xc6452f, emissive: 0x4a130d, emissiveIntensity: 0.2 });
+  const posts = [-1.5, 1.5].map((offsetX) => {
+    const post = new THREE.Mesh(postGeometry, postMaterial);
+    post.position.set(offsetX, 0.65, 0);
+    post.castShadow = true;
+    gateGroup.add(post);
+    return post;
+  });
+
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.44, 0.52, 1.05, 24),
+    metalMaterial
+  );
+  body.position.set(0, 0.54, 0.02);
+  body.castShadow = true;
+  gateGroup.add(body);
+
+  const topCap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.48, 0.48, 0.09, 24),
+    darkMetalMaterial
+  );
+  topCap.position.set(0, 1.09, 0.02);
+  topCap.castShadow = true;
+  gateGroup.add(topCap);
+
+  const reader = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.2, 0.16),
+    new THREE.MeshStandardMaterial({ color: 0x161d22, roughness: 0.45, metalness: 0.2 })
+  );
+  reader.position.set(0, 1, -0.46);
+  reader.castShadow = true;
+  gateGroup.add(reader);
+
+  const readerGlow = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.08, 0.03),
+    new THREE.MeshStandardMaterial({
+      color: 0xf2d45c,
+      emissive: 0x7d6200,
+      emissiveIntensity: 0.5,
+      roughness: 0.3,
+      metalness: 0.08,
+    })
+  );
+  readerGlow.position.set(0, 1.01, -0.56);
+  gateGroup.add(readerGlow);
+
+  const armHub = new THREE.Group();
+  armHub.position.set(0, 1.02, 0);
+  gateGroup.add(armHub);
+
+  for (let i = 0; i < 3; i += 1) {
+    const arm = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.08, 1.22),
+      armMaterial
+    );
+    arm.position.z = 0.61;
+    arm.rotation.y = (Math.PI * 2 * i) / 3;
+    arm.castShadow = true;
+    armHub.add(arm);
+  }
+
+  const armCore = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 0.08, 0.26, 18),
+    darkMetalMaterial
+  );
+  armCore.rotation.x = Math.PI / 2;
+  armCore.castShadow = true;
+  armHub.add(armCore);
+
+  const indicator = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.42, 0.42),
+    indicatorMaterial
+  );
+  indicator.position.set(0, 1.52, -0.4);
+  indicator.castShadow = true;
+  gateGroup.add(indicator);
+
+  const sideRailGeometry = new THREE.BoxGeometry(0.12, 0.94, 2.18);
+  [-0.88, 0.88].forEach((offsetX) => {
+    const rail = new THREE.Mesh(sideRailGeometry, darkMetalMaterial);
+    rail.position.set(offsetX, 0.52, 0.2);
+    rail.castShadow = true;
+    gateGroup.add(rail);
+  });
+
+  const header = new THREE.Mesh(
+    new THREE.BoxGeometry(6.2, 0.6, 0.32),
+    new THREE.MeshStandardMaterial({ color: 0x184d34, roughness: 0.82 })
+  );
+  header.position.set(0, 3.3, 0.1);
+  header.castShadow = true;
+  gateGroup.add(header);
+
+  const gateLabel = createNameLabel("PORTARIA", "#f6f5ef", "#f3d24d");
+  gateLabel.scale.set(3.8, 0.92, 1);
+  gateLabel.position.set(0, 3.34, 0.32);
+  gateLabel.renderOrder = 998;
+  gateGroup.add(gateLabel);
+
+  const instructionLabel = createNameLabel("DIGITE SUA MATRICULA", "#fff9dc", "#8ae59e");
+  instructionLabel.scale.set(3.25, 0.72, 1);
+  instructionLabel.position.set(0, 2.36, 0.32);
+  instructionLabel.renderOrder = 998;
+  gateGroup.add(instructionLabel);
+
+  const gateBlocker = createBlocker(
+    CAMPUS_ENTRY_X - 2.1,
+    CAMPUS_ENTRY_X + 2.1,
+    CAMPUS_ENTRY_Z - 0.35,
+    CAMPUS_ENTRY_Z + 2.8
+  );
+
+  let unlocked = false;
+  let armRotation = 0;
+  let lastTyped = "";
+  let modalOpen = false;
+
+  function closeGateModal() {
+    modalOpen = false;
+    gateModal.classList.remove("visible");
+    if (gateInputEl) gateInputEl.blur();
+  }
+
+  function openGateModal() {
+    modalOpen = true;
+    gateModal.classList.add("visible");
+    if (gateInputEl) {
+      gateInputEl.value = lastTyped;
+      requestAnimationFrame(() => gateInputEl.focus());
+      gateInputEl.select?.();
+    }
+    if (gateErrorEl) gateErrorEl.textContent = "";
+  }
+
+  function updateGateHud(visible) {
+    gateHud.classList.toggle("visible", visible);
+    gateHud.classList.toggle("unlocked", unlocked);
+    if (gatePhaseEl) gatePhaseEl.textContent = unlocked ? "LIBERADO" : "BLOQUEADO";
+    if (gateHintEl) gateHintEl.textContent = unlocked ? "" : modalOpen ? "digite sua matricula" : "interaja com a catraca";
+  }
+
+  gateFormEl?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (unlocked) {
+      closeGateModal();
+      return;
+    }
+    const typed = String(gateInputEl?.value || "").trim();
+    if (!/^\d+$/.test(typed)) {
+      lastTyped = typed.slice(0, 12);
+      if (gateErrorEl) gateErrorEl.textContent = "Digite apenas numeros.";
+      speak("Digite apenas numeros para validar sua matricula.", "Portaria");
+      updateGateHud(true);
+      gateInputEl?.focus();
+      gateInputEl?.select?.();
+      return;
+    }
+
+    lastTyped = typed.slice(0, 12);
+    unlocked = true;
+    closeGateModal();
+    gateBlocker.active = false;
+    indicatorMaterial.color.setHex(0x3fbf6b);
+    indicatorMaterial.emissive.setHex(0x123f20);
+    indicatorMaterial.emissiveIntensity = 0.35;
+    readerGlow.material.color.setHex(0x8df5a6);
+    readerGlow.material.emissive.setHex(0x1b6b31);
+    speak("Matricula validada. Catraca liberada, acesso autorizado ao campus.", "Portaria");
+    updateGateHud(true);
+  });
+
+  gateInputEl?.addEventListener("input", () => {
+    const digitsOnly = String(gateInputEl.value || "").replace(/\D+/g, "").slice(0, 12);
+    if (gateInputEl.value !== digitsOnly) gateInputEl.value = digitsOnly;
+    lastTyped = digitsOnly;
+    if (gateErrorEl) gateErrorEl.textContent = "";
+    updateGateHud(true);
+  });
+
+  gateInputEl?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeGateModal();
+      updateGateHud(true);
+    }
+  });
+
+  gateCancelEl?.addEventListener("click", () => {
+    closeGateModal();
+    speak("Sem matricula, sem entrada. Tente novamente na catraca.", "Portaria");
+    updateGateHud(true);
+  });
+
+  gateModal.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.dataset.gateModalClose === "true") {
+      closeGateModal();
+      updateGateHud(true);
+    }
+  });
+
+  interactables.push({
+    kind: "turnstile",
+    label: "Digite sua matricula",
+    radius: 3.2,
+    position: new THREE.Vector3(CAMPUS_ENTRY_X, 0, CAMPUS_ENTRY_Z - 0.8),
+    root: gateGroup,
+    interact() {
+      if (unlocked) {
+        speak("A catraca ja foi liberada. Pode entrar no campus.", "Portaria");
+        return;
+      }
+      openGateModal();
+      updateGateHud(true);
+    },
+    update(dt) {
+      gateBlocker.active = !unlocked;
+      armRotation = THREE.MathUtils.lerp(
+        armRotation,
+        unlocked ? Math.PI * 0.66 : 0,
+        Math.min(1, dt * (unlocked ? 4.5 : 8))
+      );
+      armHub.rotation.y = armRotation;
+      posts[0].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
+      posts[1].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
+      this.label = unlocked ? "Entrada liberada" : "Digite sua matricula";
+      const visible = getDistance2D(player.position, this.position) <= 5.4;
+      updateGateHud(visible);
+    },
+  });
+
+  return {
+    destroy() {
+      gateHud.remove();
+      gateModal.remove();
+    },
+  };
+}
+
+addCampusPerimeter();
+const gateCheckpoint = addGateCheckpoint();
 
 function addBuilding({ x, z, width, depth, height, color, roof, name }) {
   mapFeatures.buildings.push({ x, z, width, depth, color, roof });
@@ -1587,6 +1946,7 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
 addBuilding({ x: 0, z: -28, width: 26, depth: 12, height: 7, color: 0xdbe0dd, roof: 0x8b3d2c, name: "bloco central" });
 addBuilding({ x: -26, z: -16, width: 18, depth: 10, height: 5.5, color: 0xcfd7cc, roof: 0x6c7f56, name: "sala norte" });
 addBuilding({ x: 25, z: -14, width: 17, depth: 10, height: 5.5, color: 0xd6d2c8, roof: 0x8a6b4c, name: "laboratorio" });
+addBuilding({ x: -47, z: -52, width: 11, depth: 8, height: 4.4, color: 0xe4ddd2, roof: 0x375b47, name: "portaria" });
 addBuilding({ x: 18, z: 24, width: 16, depth: 9, height: 5, color: 0xc8d0da, roof: 0x4a6278, name: "biblioteca" });
 addBuilding({ x: -21, z: 26, width: 13, depth: 8, height: 4.5, color: 0xddddcf, roof: 0x64725f, name: "secretaria" });
 addBuilding({ x: 0, z: 10, width: 10, depth: 8, height: 4.2, color: 0xe3dad0, roof: 0x715142, name: "atelier" });
@@ -1674,12 +2034,12 @@ function createTree() {
 for (let i = 0; i < 86; i += 1) {
   const tree = createTree();
   const side = i % 4;
-  let x = rand(-64, 64);
-  let z = rand(-64, 64);
-  if (side === 0) z = rand(-66, -48);
-  if (side === 1) z = rand(48, 66);
-  if (side === 2) x = rand(-66, -48);
-  if (side === 3) x = rand(48, 66);
+  let x = rand(-77, 77);
+  let z = rand(-77, 77);
+  if (side === 0) z = rand(-79, -57);
+  if (side === 1) z = rand(57, 79);
+  if (side === 2) x = rand(-79, -57);
+  if (side === 3) x = rand(57, 79);
   tree.position.set(x, 0, z);
   tree.rotation.y = rand(0, Math.PI * 2);
   tree.userData.windPhase = rand(0, Math.PI * 2);
@@ -2223,7 +2583,7 @@ function animateGlitch(refs, time, intensity = 1, offset = 0) {
 const playerRig = createCharacter(avatarToGameAppearance(opts.avatar));
 const player = playerRig.group;
 world.add(player);
-player.position.set(-40, 0, 38);
+player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 
 function createNameLabel(text, color = "#fff8dc", accent = "#62ff9f") {
   const canvasEl = document.createElement("canvas");
@@ -2333,7 +2693,7 @@ const remotePlayers = new Map();
 const sharedBikes = new Map();
 let sharedBikeCount = 0;
 let swimmingMinigame = null;
-let biribaEvent = null;
+let espectroEvent = null;
 
 function getFallbackRemoteAppearance(id = "") {
   const palette = hashPalette(id);
@@ -2936,12 +3296,12 @@ const spawnBeacon = new THREE.Mesh(
   new THREE.CylinderGeometry(0.22, 0.28, 3.2, 12),
   new THREE.MeshStandardMaterial({ color: 0x31d17c, emissive: 0x1d8b52, emissiveIntensity: 0.35, roughness: 0.5 })
 );
-spawnBeacon.position.set(-40, 1.6, 38);
+spawnBeacon.position.set(CAMPUS_SPAWN.x, 1.6, CAMPUS_SPAWN.z);
 spawnBeacon.castShadow = true;
 world.add(spawnBeacon);
 
 const spawnGlow = new THREE.PointLight(0x62ff9f, 1.2, 10, 2);
-spawnGlow.position.set(-40, 2.2, 38);
+spawnGlow.position.set(CAMPUS_SPAWN.x, 2.2, CAMPUS_SPAWN.z);
 world.add(spawnGlow);
 
 const pvpBalls = [];
@@ -6178,10 +6538,28 @@ const keys = new Set();
 let interactQueued = false;
 let jumpQueued = false;
 let queuedEmoteKind = null;
+
+function isEditableEventTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    target.isContentEditable ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.closest("input, textarea, select, [contenteditable='true']")
+  );
+}
+
+function shouldIgnoreInputEvent(event) {
+  if (event && isEditableEventTarget(event.target)) return true;
+  return shouldIgnoreKeys(event);
+}
+
 const keydownHandler = (event) => {
   if (ambientAudioEnabled) ensureAmbientAudio();
   if (handleDevKeyDown(event)) return;
-  if (shouldIgnoreKeys(event)) return;
+  if (shouldIgnoreInputEvent(event)) return;
   if (event.code === "Space" && swimmingMinigame?.isPlayerControlled()) {
     event.preventDefault();
     swimmingMinigame.queueStroke();
@@ -6192,9 +6570,9 @@ const keydownHandler = (event) => {
     swimmingMinigame.queueCancel();
     return;
   }
-  if (event.code === "KeyQ" && biribaEvent?.isSecretActive()) {
+  if (event.code === "KeyQ" && espectroEvent?.isSecretActive()) {
     event.preventDefault();
-    biribaEvent.queueThrow();
+    espectroEvent.queueThrow();
     return;
   }
   keys.add(event.code);
@@ -6222,20 +6600,23 @@ const keydownHandler = (event) => {
     queuedPvpThrow = true;
   }
 };
-const keyupHandler = (event) => keys.delete(event.code);
+const keyupHandler = (event) => {
+  if (shouldIgnoreInputEvent(event)) return;
+  keys.delete(event.code);
+};
 const mousedownHandler = (event) => {
   if (ambientAudioEnabled) ensureAmbientAudio();
   if (handleDevPointerDown(event)) return;
   if (event.button !== 0 && event.button !== 2) return;
   event.preventDefault();
-  if (cameraMode !== "orbit" || shouldIgnoreKeys()) return;
+  if (cameraMode !== "orbit" || shouldIgnoreInputEvent(event)) return;
   cameraDragActive = true;
   cameraDragX = event.clientX;
   cameraDragY = event.clientY;
 };
 const mousemoveHandler = (event) => {
   if (handleDevPointerMove(event)) return;
-  if (cameraMode !== "orbit" || !cameraDragActive || shouldIgnoreKeys()) return;
+  if (cameraMode !== "orbit" || !cameraDragActive || shouldIgnoreInputEvent(event)) return;
   const dx = event.clientX - cameraDragX;
   const dy = event.clientY - cameraDragY;
   cameraDragX = event.clientX;
@@ -6253,7 +6634,7 @@ const contextmenuHandler = (event) => {
 };
 const wheelHandler = (event) => {
   if (ambientAudioEnabled) ensureAmbientAudio();
-  if (cameraMode !== "orbit" || shouldIgnoreKeys()) return;
+  if (cameraMode !== "orbit" || shouldIgnoreInputEvent(event)) return;
   event.preventDefault();
   cameraOrbitDistance = THREE.MathUtils.clamp(cameraOrbitDistance + event.deltaY * 0.02, 16, 38);
 };
@@ -6331,7 +6712,7 @@ const facing = new THREE.Vector2(0, -1);
 let playerFootstepDistance = 0;
 const playerRadius = 0.55;
 const npcRadius = 0.48;
-const worldLimit = 68;
+const worldLimit = 83;
 const maxSpeed = 7.2;
 const accel = 22;
 const drag = 10;
@@ -6391,7 +6772,7 @@ swimmingMinigame = createSwimmingMinigame({
   playSwimStrokeSound,
 });
 
-biribaEvent = createBiribaEvent({
+espectroEvent = createEspectroEvent({
   world,
   scene,
   container,
@@ -6408,7 +6789,7 @@ biribaEvent = createBiribaEvent({
   resetRigPose: () => resetRigPose(playerRig.refs),
   forceDismount: forceDismountCurrentBike,
   canStartSecret: () => !pvpActiveMatch && !swimmingMinigame?.isActive(),
-  onConsumed: onBiribaConsumed,
+  onConsumed: onEspectroConsumed,
   onSecretDisconnect,
   playParanormalSound,
 });
@@ -7515,7 +7896,7 @@ function handleInteraction() {
   }
 }
 
-const MINIMAP_WORLD = 140;
+const MINIMAP_WORLD = 170;
 const MINIMAP_SIZE = 220;
 const MINIMAP_SCALE = MINIMAP_SIZE / MINIMAP_WORLD;
 
@@ -7673,12 +8054,12 @@ function drawMinimap() {
     ctx.stroke();
   }
 
-  const biribaMarker = biribaEvent?.getMapMarker?.();
-  if (biribaMarker) {
-    const mx = worldToMapX(biribaMarker.x);
-    const my = worldToMapY(biribaMarker.z);
+  const espectroMarker = espectroEvent?.getMapMarker?.();
+  if (espectroMarker) {
+    const mx = worldToMapX(espectroMarker.x);
+    const my = worldToMapY(espectroMarker.z);
     const blink = 0.45 + 0.55 * ((Math.sin(performance.now() * 0.012) + 1) / 2);
-    ctx.fillStyle = biribaMarker.color || "#000000";
+    ctx.fillStyle = espectroMarker.color || "#000000";
     ctx.globalAlpha = blink;
     ctx.beginPath();
     ctx.arc(mx, my, 3.6, 0, Math.PI * 2);
@@ -7853,7 +8234,7 @@ function tick() {
   updateRemotes(dt, time);
   updateBubbles(dt);
   updatePvpBalls(dt);
-  biribaEvent?.update(dt, time);
+  espectroEvent?.update(dt, time);
 
   netAccumulator += dt;
   if (netAccumulator >= NET_INTERVAL) {
@@ -8045,10 +8426,11 @@ function destroy() {
   window.removeEventListener("blur", resetCameraDrag);
   window.removeEventListener("resize", resizeHandler);
   window.removeEventListener("error", errorHandler);
+  gateCheckpoint?.destroy?.();
   swimmingMinigame?.destroy?.();
-  biribaEvent?.destroy?.();
+  espectroEvent?.destroy?.();
   swimmingMinigame = null;
-  biribaEvent = null;
+  espectroEvent = null;
   devOverlay.remove();
   scene.remove(devSelectionBox);
   disposeObject3D(devSelectionBox);
@@ -8101,8 +8483,8 @@ function destroy() {
     pvpTeleportToArena,
     pvpReturnFromArena,
     queueMobilePvpThrow,
-    biribaSpawn: (payload) => biribaEvent?.spawn(payload),
-    biribaDespawn: () => biribaEvent?.despawn(),
+    espectroSpawn: (payload) => espectroEvent?.spawn(payload),
+    espectroDespawn: () => espectroEvent?.despawn(),
   };
 }
 

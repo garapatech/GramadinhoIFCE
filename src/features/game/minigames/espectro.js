@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-export const BIRIBA_SPAWN_POINTS = [
+export const ESPECTRO_SPAWN_POINTS = [
   { x: -56, z: 34 },
   { x: -31, z: 33 },
   { x: -55, z: 57 },
@@ -22,7 +22,7 @@ function clamp01(value) {
 
 function seedToNumber(seed) {
   if (typeof seed === "number" && Number.isFinite(seed)) return seed >>> 0;
-  const raw = String(seed || "biriba");
+  const raw = String(seed || "espectro");
   let h = 2166136261;
   for (let i = 0; i < raw.length; i += 1) {
     h ^= raw.charCodeAt(i);
@@ -158,7 +158,7 @@ function flashTarget(target, color = 0xff183c) {
   requestAnimationFrame(fade);
 }
 
-export function createBiribaEvent({
+export function createEspectroEvent({
   world,
   scene,
   container,
@@ -181,7 +181,7 @@ export function createBiribaEvent({
 }) {
   let secretCourt = null;
   const veil = document.createElement("div");
-  veil.className = "biriba-veil";
+  veil.className = "espectro-veil";
   container?.appendChild(veil);
 
   function randomRgb(rng, min = 0, max = 255) {
@@ -205,7 +205,7 @@ export function createBiribaEvent({
   }
 
   const state = {
-    biriba: null,
+    espectro: null,
     seed: null,
     rng: Math.random,
     nearTimer: 0,
@@ -218,9 +218,9 @@ export function createBiribaEvent({
     appearance: null,
   };
 
-  function makeBiribaRig(appearance = state.appearance || createRandomAppearance(Math.random)) {
+  function makeEspectroRig(appearance = state.appearance || createRandomAppearance(Math.random)) {
     const rig = createCharacter(appearance);
-    const label = createNameLabel("Biriba", "#fff8dc", "#9ca3af");
+    const label = createNameLabel("Espectro", "#fff8dc", "#9ca3af");
     rig.group.add(label);
     return { rig, label };
   }
@@ -232,12 +232,12 @@ export function createBiribaEvent({
     return secretCourt;
   }
 
-  function removeBiriba({ clearPayload = false } = {}) {
+  function removeEspectro({ clearPayload = false } = {}) {
     if (clearPayload) state.activePayload = null;
-    if (!state.biriba) return;
-    world.remove(state.biriba.group);
-    disposeObject3D?.(state.biriba.group);
-    state.biriba = null;
+    if (!state.espectro) return;
+    world.remove(state.espectro.group);
+    disposeObject3D?.(state.espectro.group);
+    state.espectro = null;
     state.nearTimer = 0;
     state.spoken = false;
   }
@@ -253,14 +253,14 @@ export function createBiribaEvent({
     return origin.clone();
   }
 
-  function spawnBiriba(payload = {}) {
-    removeBiriba({ clearPayload: true });
+  function spawnEspectro(payload = {}) {
+    removeEspectro({ clearPayload: true });
     if (!payload || payload.expiresAt < Date.now()) return;
     const seed = seedToNumber(payload.seed);
     const rng = mulberry32(seed);
-    const spawn = BIRIBA_SPAWN_POINTS[Math.abs(payload.spawnIndex || 0) % BIRIBA_SPAWN_POINTS.length];
+    const spawn = ESPECTRO_SPAWN_POINTS[Math.abs(payload.spawnIndex || 0) % ESPECTRO_SPAWN_POINTS.length];
     state.appearance = createRandomAppearance(rng);
-    const { rig } = makeBiribaRig(state.appearance);
+    const { rig } = makeEspectroRig(state.appearance);
     const group = rig.group;
     group.position.set(spawn.x + randomBetween(rng, -0.8, 0.8), 0, spawn.z + randomBetween(rng, -0.8, 0.8));
     group.rotation.y = randomBetween(rng, -Math.PI, Math.PI);
@@ -271,7 +271,7 @@ export function createBiribaEvent({
     state.nearTimer = 0;
     state.spoken = false;
     state.consumed = false;
-    state.biriba = {
+    state.espectro = {
       group,
       rig,
       home: group.position.clone(),
@@ -284,15 +284,15 @@ export function createBiribaEvent({
     };
   }
 
-  function updateBiriba(dt, time) {
-    const biriba = state.biriba;
-    if (!biriba || state.secret?.active) return;
-    if (biriba.expiresAt <= Date.now()) {
-      removeBiriba({ clearPayload: true });
+  function updateEspectro(dt, time) {
+    const espectro = state.espectro;
+    if (!espectro || state.secret?.active) return;
+    if (espectro.expiresAt <= Date.now()) {
+      removeEspectro({ clearPayload: true });
       return;
     }
 
-    const distance = Math.hypot(player.position.x - biriba.group.position.x, player.position.z - biriba.group.position.z);
+    const distance = Math.hypot(player.position.x - espectro.group.position.x, player.position.z - espectro.group.position.z);
     state.veilPower = Math.max(state.veilPower, clamp01(1 - distance / 9) * 0.32);
 
     const canPullPlayer = canStartSecret?.() !== false;
@@ -300,7 +300,7 @@ export function createBiribaEvent({
       state.nearTimer += dt;
       if (!state.spoken) {
         state.spoken = true;
-        pushBubble?.({ group: biriba.group, key: "biriba" }, "Soube não...", 4.8);
+        pushBubble?.({ group: espectro.group, key: "espectro" }, "Soube não...", 4.8);
         playParanormalSound?.(0.72);
       }
     } else {
@@ -312,48 +312,48 @@ export function createBiribaEvent({
       return;
     }
 
-    biriba.turnTimer -= dt;
-    biriba.fakeMoveTimer -= dt;
-    if (biriba.turnTimer <= 0) {
-      biriba.turnTimer = randomBetween(state.rng, 0.5, 1.8);
-      biriba.group.rotation.y += randomBetween(state.rng, -0.95, 0.95);
+    espectro.turnTimer -= dt;
+    espectro.fakeMoveTimer -= dt;
+    if (espectro.turnTimer <= 0) {
+      espectro.turnTimer = randomBetween(state.rng, 0.5, 1.8);
+      espectro.group.rotation.y += randomBetween(state.rng, -0.95, 0.95);
     }
-    if (biriba.fakeMoveTimer <= 0) {
-      biriba.fakeMoveTimer = randomBetween(state.rng, 1.1, 2.8);
-      biriba.pause = randomBetween(state.rng, 0.15, 0.9);
+    if (espectro.fakeMoveTimer <= 0) {
+      espectro.fakeMoveTimer = randomBetween(state.rng, 1.1, 2.8);
+      espectro.pause = randomBetween(state.rng, 0.15, 0.9);
     }
 
-    if (biriba.pause > 0) {
-      biriba.pause -= dt;
-      setRestPose(biriba.rig.refs, time, seedToNumber(state.seed) * 0.001);
+    if (espectro.pause > 0) {
+      espectro.pause -= dt;
+      setRestPose(espectro.rig.refs, time, seedToNumber(state.seed) * 0.001);
       if (state.rng() < 0.025) {
-        biriba.group.position.x += randomBetween(state.rng, -0.025, 0.025);
-        biriba.group.position.z += randomBetween(state.rng, -0.025, 0.025);
+        espectro.group.position.x += randomBetween(state.rng, -0.025, 0.025);
+        espectro.group.position.z += randomBetween(state.rng, -0.025, 0.025);
       }
       return;
     }
 
-    const dx = biriba.target.x - biriba.group.position.x;
-    const dz = biriba.target.z - biriba.group.position.z;
+    const dx = espectro.target.x - espectro.group.position.x;
+    const dz = espectro.target.z - espectro.group.position.z;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.28 || state.rng() < 0.003) {
-      biriba.target = pickWanderTarget(biriba.home, state.rng);
-      biriba.pause = randomBetween(state.rng, 0.12, 0.55);
+      espectro.target = pickWanderTarget(espectro.home, state.rng);
+      espectro.pause = randomBetween(state.rng, 0.12, 0.55);
       return;
     }
-    const step = Math.min(dist, biriba.speed * dt);
+    const step = Math.min(dist, espectro.speed * dt);
     const nx = dx / dist;
     const nz = dz / dist;
-    biriba.group.position.x += nx * step;
-    biriba.group.position.z += nz * step;
-    biriba.group.rotation.y = biriba.group.rotation.y + ((((Math.atan2(nx, nz) - biriba.group.rotation.y) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI) * 0.08;
-    animateWalk(biriba.rig.refs, time * 4.4, 0.45);
-    biriba.group.position.y = Math.sin(time * 7.2) * 0.025;
+    espectro.group.position.x += nx * step;
+    espectro.group.position.z += nz * step;
+    espectro.group.rotation.y = espectro.group.rotation.y + ((((Math.atan2(nx, nz) - espectro.group.rotation.y) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI) * 0.08;
+    animateWalk(espectro.rig.refs, time * 4.4, 0.45);
+    espectro.group.position.y = Math.sin(time * 7.2) * 0.025;
   }
 
   function makeSecretState() {
     ensureSecretCourt();
-    const { rig } = makeBiribaRig(state.appearance || createRandomAppearance(state.rng));
+    const { rig } = makeEspectroRig(state.appearance || createRandomAppearance(state.rng));
     rig.group.position.set(SECRET_ARENA.x + 5.0, 0, SECRET_ARENA.z);
     rig.group.rotation.y = Math.PI;
     world.add(rig.group);
@@ -383,7 +383,7 @@ export function createBiribaEvent({
     forceDismount?.();
     playParanormalSound?.(1.0);
     state.secret = makeSecretState();
-    removeBiriba();
+    removeEspectro();
     playerVelocity.set(0, 0);
     player.position.set(SECRET_ARENA.x - 5.1, 0, SECRET_ARENA.z);
     player.rotation.y = Math.PI / 2;
@@ -420,7 +420,7 @@ export function createBiribaEvent({
     state.secret = null;
     state.veilPower = lost ? 1 : 0;
     if (!lost && state.activePayload && state.activePayload.expiresAt > Date.now()) {
-      spawnBiriba(state.activePayload);
+      spawnEspectro(state.activePayload);
     }
   }
 
@@ -462,7 +462,7 @@ export function createBiribaEvent({
     dx = dx / len + randomBetween(state.rng, -0.08, 0.08);
     dz = dz / len + randomBetween(state.rng, -0.08, 0.08);
     const adjusted = Math.hypot(dx, dz) || 1;
-    spawnSecretBall(ai.group.position.x + (dx / adjusted) * 0.8, ai.group.position.z + (dz / adjusted) * 0.8, dx / adjusted, dz / adjusted, "biriba");
+    spawnSecretBall(ai.group.position.x + (dx / adjusted) * 0.8, ai.group.position.z + (dz / adjusted) * 0.8, dx / adjusted, dz / adjusted, "espectro");
     playParanormalSound?.(0.3);
   }
 
@@ -540,7 +540,7 @@ export function createBiribaEvent({
         continue;
       }
 
-      if (ball.owner === "biriba") {
+      if (ball.owner === "espectro") {
         const d = Math.hypot(ball.x - player.position.x, ball.z - player.position.z);
         if (d < 0.68) {
           ball.hit = true;
@@ -644,7 +644,7 @@ export function createBiribaEvent({
       despawnEvent();
       return;
     }
-    updateBiriba(dt, time);
+    updateEspectro(dt, time);
     if (state.secret?.active) {
       updateSecret(state.secret, dt, time);
     }
@@ -653,26 +653,26 @@ export function createBiribaEvent({
 
   function despawnEvent() {
     state.activePayload = null;
-    removeBiriba({ clearPayload: true });
+    removeEspectro({ clearPayload: true });
     if (state.secret?.active) {
       endSecret({ lost: false });
     }
   }
 
   return {
-    spawn: spawnBiriba,
+    spawn: spawnEspectro,
     despawn: despawnEvent,
     update,
     queueThrow,
     getMapMarker: () => {
-      const group = state.biriba?.group;
+      const group = state.espectro?.group;
       if (!group || state.secret?.active) return null;
       return { x: group.position.x, z: group.position.z, color: "#000000" };
     },
     isSecretActive: () => state.secret?.active === true,
     isPlayerInSecretArena: () => state.secret?.active === true,
     destroy() {
-      removeBiriba({ clearPayload: true });
+      removeEspectro({ clearPayload: true });
       endSecret({ lost: false });
       veil.remove();
     },

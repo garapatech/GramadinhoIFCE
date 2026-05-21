@@ -114,9 +114,9 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }) {
     socket.send(JSON.stringify({ type: "pvp-quit", matchId }));
   }
 
-  function sendBiribaConsumed(seed) {
+  function sendEspectroConsumed(seed) {
     if (socket.readyState !== 1 || seed == null) return;
-    socket.send(JSON.stringify({ type: "biriba-consumed", seed }));
+    socket.send(JSON.stringify({ type: "espectro-consumed", seed }));
   }
 
   function sendVoiceSignal(target, signal) {
@@ -148,7 +148,7 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }) {
     sendPvpThrow,
     sendPvpHit,
     sendPvpQuit,
-    sendBiribaConsumed,
+    sendEspectroConsumed,
     sendVoiceReady,
     sendVoiceSignal,
     close,
