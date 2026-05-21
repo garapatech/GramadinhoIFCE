@@ -22,6 +22,7 @@ import { createNpcSync } from "@/features/game/npcSync";
 import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
+import { buildBlocoTelematica } from "@/game/world/blocoTelematica/buildScene";
 import { createWorldSpatialHelpers, getDistance2D } from "@/game/world/spatial";
 import {
   CAMPUS_ENTRY_X,
@@ -658,6 +659,9 @@ for (const building of campusBuildings) {
   addBuilding(building);
 }
 
+// Bloco Telemática é construido depois que `player` existe (mais abaixo)
+// porque seu update precisa da posicao do jogador para a transparencia.
+
 // Quadra de Queimado (PvP Arena)
 const ARENA_CX = campusArena.x;
 const ARENA_CZ = campusArena.z;
@@ -724,6 +728,24 @@ const player = playerRig.group;
 world.add(player);
 playerPositionTarget = player;
 player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
+
+{
+  const bloco = buildBlocoTelematica({
+    parent: world,
+    createBlocker,
+    interactables,
+    getPlayerPosition: () => player.position,
+  });
+  mapFeatures.buildings.push({
+    x: (bloco.bounds.minX + bloco.bounds.maxX) / 2,
+    z: (bloco.bounds.minZ + bloco.bounds.maxZ) / 2,
+    width: bloco.bounds.maxX - bloco.bounds.minX,
+    depth: bloco.bounds.maxZ - bloco.bounds.minZ,
+    color: 0xdbe0dd,
+    roof: 0x8b3d2c,
+  });
+}
+
 gateCheckpoint = createGateCheckpoint({
   container: container as HTMLElement | null | undefined,
   world,
