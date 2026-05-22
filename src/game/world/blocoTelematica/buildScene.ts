@@ -238,11 +238,14 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   floorTerreoMesh.receiveShadow = true;
   group.add(floorTerreoMesh);
 
+  // Piso do superior fica sobre a laje (laje top = STORY_HEIGHT + 0.08).
+  // Centro do piso a STORY_HEIGHT + 0.08 + 0.04 + epsilon evita z-fighting
+  // com o topo da laje.
   const floorSuperiorMesh = new THREE.Mesh(
     new THREE.BoxGeometry(BLOCO_WIDTH, 0.08, BLOCO_DEPTH),
     floorMat,
   );
-  floorSuperiorMesh.position.set(0, STORY_HEIGHT + 0.04, 0);
+  floorSuperiorMesh.position.set(0, STORY_HEIGHT + 0.125, 0);
   floorSuperiorMesh.receiveShadow = true;
   group.add(floorSuperiorMesh);
 
@@ -839,12 +842,16 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [
       { mat: outerMat, target: 0.18 },
     ];
-    // Escada lateral: x cresce pro leste (base oeste y=0 → topo leste y=STORY_HEIGHT).
+    // Escada lateral: x cresce pro leste (base oeste y=0 → topo leste y=SUPERIOR_VISUAL_Y).
     const STAIR_BOTTOM_X = STAIR_CENTER_X - STAIR_LENGTH / 2;
     const STAIR_TOP_X = STAIR_CENTER_X + STAIR_LENGTH / 2;
     const STAIR_MIN_Z = STAIR_CENTER_Z - STAIR_DEPTH / 2;
     const STAIR_MAX_Z = STAIR_CENTER_Z + STAIR_DEPTH / 2;
-    let playerFloorY = 0; // estado: 0 (terreo) ou STORY_HEIGHT (superior)
+    // Topo visual do piso do superior = STORY_HEIGHT (slab center) + 0.08
+    // (half slab) + 0.085 (half floor + epsilon). Player precisa ser
+    // elevado ate aqui pra nao "afundar" no chao.
+    const SUPERIOR_VISUAL_Y = STORY_HEIGHT + 0.165;
+    let playerFloorY = 0;
 
     interactables.push({
       kind: "bloco-telematica",
@@ -875,10 +882,10 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           localX <= STAIR_TOP_X;
         if (inStairZone) {
           const t = (localX - STAIR_BOTTOM_X) / (STAIR_TOP_X - STAIR_BOTTOM_X);
-          playerFloorY = THREE.MathUtils.clamp(t, 0, 1) * STORY_HEIGHT;
+          playerFloorY = THREE.MathUtils.clamp(t, 0, 1) * SUPERIOR_VISUAL_Y;
         } else if (insideFootprint) {
           // Snap pro andar mais proximo, evita ficar parado entre niveis
-          playerFloorY = playerFloorY < STORY_HEIGHT * 0.5 ? 0 : STORY_HEIGHT;
+          playerFloorY = playerFloorY < SUPERIOR_VISUAL_Y * 0.5 ? 0 : SUPERIOR_VISUAL_Y;
         } else {
           playerFloorY = 0;
         }
@@ -887,7 +894,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         p.y += playerFloorY;
 
         // Alterna os blockers internos conforme andar atual
-        const onSuperior = playerFloorY >= STORY_HEIGHT * 0.5;
+        const onSuperior = playerFloorY >= SUPERIOR_VISUAL_Y * 0.5;
         for (const b of terreoBlockers) b.active = !onSuperior;
         for (const b of superiorBlockers) b.active = onSuperior;
 
