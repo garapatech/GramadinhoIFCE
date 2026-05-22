@@ -38,7 +38,7 @@ const INNER_WALL_THICKNESS = 0.18;
 const WALL_COLOR = 0xdbe0dd;
 const ROOF_COLOR = 0x8b3d2c;
 const FRAME_COLOR = 0xf3f0e7;
-const FLOOR_COLOR = 0xe7decc;
+const FLOOR_COLOR = 0xd4a574; // tom quente, granilite/granito clarinho do IFCE
 const STAIR_COLOR = 0xb7aa8d;
 
 // Mapa cx (pixel da planta) -> world X. As plantas tem cx de ~120 a ~2080
@@ -169,12 +169,28 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     transparent: true,
     opacity: 1,
   });
+  // Paredes internas estilo gesso: tom mais claro, quase branco
   const innerMat = new THREE.MeshStandardMaterial({
-    color: 0xeae2d2,
-    roughness: 0.95,
+    color: 0xf3eee3,
+    roughness: 0.85,
+    metalness: 0,
     transparent: true,
     opacity: 1,
   });
+  // Materiais de mobiliario reutilizados em varias salas
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.8 });
+  const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1c, roughness: 0.85 });
+  const chalkMat = new THREE.MeshStandardMaterial({ color: 0x1f3a2a, roughness: 0.95 });
+  const whiteboardMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.45 });
+  const roomChairMat = new THREE.MeshStandardMaterial({ color: 0x2c4f6e, roughness: 0.85 });
+  const monitorMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4 });
+  const screenMat = new THREE.MeshStandardMaterial({
+    color: 0x2a4858, roughness: 0.3, emissive: 0x16384a, emissiveIntensity: 0.6,
+  });
+  const pcCaseMat = new THREE.MeshStandardMaterial({ color: 0xbcbcbc, roughness: 0.7 });
+  const sofaMat = new THREE.MeshStandardMaterial({ color: 0x6e2f2f, roughness: 0.95 });
+  const shelfMat = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.85 });
+  const toiletMat = new THREE.MeshStandardMaterial({ color: 0xe9e9e9, roughness: 0.55 });
   const roofMat = new THREE.MeshStandardMaterial({
     color: ROOF_COLOR,
     roughness: 1,
@@ -282,6 +298,172 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       -halfW + WALL_THICKNESS / 2, y, 0, story);
     addOuterWall(WALL_THICKNESS, STORY_HEIGHT, BLOCO_DEPTH,
       halfW - WALL_THICKNESS / 2, y, 0, story);
+  }
+
+  // -------- Classificacao + mobiliario por sala --------
+  type RoomType =
+    | "classroom" | "lab" | "office" | "meeting"
+    | "bathroom" | "storage" | "breakroom" | "generic";
+
+  function classifyRoom(text: string): RoomType {
+    const t = text.toLowerCase();
+    if (t.includes("w.c") || t.includes("banheiro")) return "bathroom";
+    if (t.includes("reunio") || t.includes("reuniões") || t.includes("reuniao")) return "meeting";
+    if (t.includes("professor")) return "breakroom";
+    if (t.includes("lab")) return "lab";
+    if (t.includes("descarga") || t.includes("equipament")) return "storage";
+    if (t.includes("gab") || t.includes("coordena")) return "office";
+    if (t.includes("sala de aula") || /sala \d/.test(t) || t.includes("latim")) return "classroom";
+    return "generic";
+  }
+
+  type RoomBounds = { xMin: number; xMax: number; zMin: number; zMax: number };
+
+  function placeFurniture(
+    parent: THREE.Object3D,
+    type: RoomType,
+    b: RoomBounds,
+    storyY: number,
+    rowFacing: Row, // direcao do corredor (norte→sul=rowFacing=='north' significa porta no sul da sala)
+  ) {
+    const cx = (b.xMin + b.xMax) / 2;
+    const cz = (b.zMin + b.zMax) / 2;
+    const roomW = b.xMax - b.xMin;
+    const roomD = b.zMax - b.zMin;
+    // direcao da parede de fundo (oposta ao corredor)
+    const backZ = rowFacing === "north" ? b.zMin + 0.2 : b.zMax - 0.2;
+    const doorZ = rowFacing === "north" ? b.zMax : b.zMin; // perto do corredor
+
+    const addMesh = (geom: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
+      const m = new THREE.Mesh(geom, mat);
+      m.position.set(x, y + storyY, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+    const ry = (m: THREE.Mesh, r: number) => { m.rotation.y = r; return m; };
+
+    if (type === "classroom") {
+      // Lousa na parede de fundo
+      const boardW = Math.min(roomW * 0.7, 3.2);
+      addMesh(new THREE.BoxGeometry(boardW, 1.1, 0.05), chalkMat, cx, 1.35, backZ);
+      // Carteiras + cadeiras em 2-3 fileiras voltadas pra lousa
+      const rows = 3;
+      const cols = Math.max(2, Math.min(4, Math.floor(roomW / 1.5)));
+      const startZ = doorZ + (rowFacing === "north" ? -1.2 : 1.2);
+      const stepZ = rowFacing === "north" ? -1.1 : 1.1;
+      const stepX = roomW / (cols + 1);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const dx = b.xMin + stepX * (c + 1);
+          const dz = startZ + stepZ * r;
+          addMesh(new THREE.BoxGeometry(0.7, 0.04, 0.5), woodMat, dx, 0.7, dz);
+          for (const lx of [-0.3, 0.3]) for (const lz of [-0.2, 0.2]) {
+            addMesh(new THREE.BoxGeometry(0.05, 0.7, 0.05), darkWoodMat, dx + lx, 0.35, dz + lz);
+          }
+          // cadeira atras (em direcao a porta)
+          const chairOffset = rowFacing === "north" ? 0.5 : -0.5;
+          addMesh(new THREE.BoxGeometry(0.5, 0.05, 0.45), roomChairMat, dx, 0.45, dz + chairOffset);
+          addMesh(new THREE.BoxGeometry(0.5, 0.7, 0.05), roomChairMat, dx, 0.8, dz + chairOffset + (rowFacing === "north" ? 0.2 : -0.2));
+          for (const lx of [-0.2, 0.2]) for (const lz of [-0.18, 0.18]) {
+            addMesh(new THREE.BoxGeometry(0.04, 0.45, 0.04), roomChairMat, dx + lx, 0.22, dz + chairOffset + lz);
+          }
+        }
+      }
+    } else if (type === "lab") {
+      // Bancadas em U com computadores
+      const benchH = 0.75;
+      const monitorW = 0.55, monitorH = 0.4, monitorD = 0.06;
+      const placePc = (x: number, z: number, facing: number) => {
+        // bancada
+        addMesh(new THREE.BoxGeometry(0.9, 0.04, 0.6), woodMat, x, benchH, z);
+        for (const lx of [-0.4, 0.4]) for (const lz of [-0.25, 0.25]) {
+          addMesh(new THREE.BoxGeometry(0.06, benchH, 0.06), darkWoodMat, x + lx, benchH / 2, z + lz);
+        }
+        // monitor (caixa preta + tela emissiva)
+        const mz = z - Math.sin(facing) * 0.15;
+        const mx = x - Math.cos(facing) * 0.15;
+        const monBack = addMesh(new THREE.BoxGeometry(monitorW, monitorH, monitorD), monitorMat, mx, benchH + 0.05 + monitorH / 2, mz);
+        ry(monBack, facing);
+        const monScreen = addMesh(new THREE.BoxGeometry(monitorW - 0.06, monitorH - 0.06, 0.01), screenMat, mx, benchH + 0.05 + monitorH / 2, mz);
+        ry(monScreen, facing);
+        monScreen.translateZ(monitorD / 2 + 0.005);
+        // cpu box
+        addMesh(new THREE.BoxGeometry(0.16, 0.36, 0.32), pcCaseMat, x + 0.3, benchH + 0.18, z + 0.1);
+      };
+      // 4-6 PCs em linha contra a parede de fundo
+      const numPcs = Math.max(3, Math.min(6, Math.floor(roomW / 1.2)));
+      const stepX = roomW / (numPcs + 1);
+      const facing = rowFacing === "north" ? Math.PI : 0; // monitor olha pra porta
+      for (let i = 0; i < numPcs; i++) {
+        const px = b.xMin + stepX * (i + 1);
+        placePc(px, backZ + (rowFacing === "north" ? 0.6 : -0.6), facing);
+      }
+    } else if (type === "office") {
+      // Mesa grande no centro
+      addMesh(new THREE.BoxGeometry(1.6, 0.05, 0.8), woodMat, cx, 0.78, cz);
+      for (const lx of [-0.7, 0.7]) for (const lz of [-0.35, 0.35]) {
+        addMesh(new THREE.BoxGeometry(0.07, 0.78, 0.07), darkWoodMat, cx + lx, 0.39, cz + lz);
+      }
+      // Cadeira do prof atras da mesa (lado da parede)
+      const chairZ = rowFacing === "north" ? cz - 0.7 : cz + 0.7;
+      addMesh(new THREE.BoxGeometry(0.55, 0.05, 0.5), roomChairMat, cx, 0.48, chairZ);
+      addMesh(new THREE.BoxGeometry(0.55, 0.6, 0.05), roomChairMat,
+        cx, 0.8, chairZ + (rowFacing === "north" ? -0.22 : 0.22));
+      // Estante na parede lateral
+      const shelfX = b.xMin + 0.25;
+      addMesh(new THREE.BoxGeometry(0.4, 1.6, Math.min(1.6, roomD - 0.6)), shelfMat, shelfX, 0.8, cz);
+      // Pequeno pc no canto
+      const pcDeskZ = backZ + (rowFacing === "north" ? 0.4 : -0.4);
+      addMesh(new THREE.BoxGeometry(0.55, 0.04, 0.5), darkWoodMat, b.xMax - 0.5, 0.78, pcDeskZ);
+      const mon = addMesh(new THREE.BoxGeometry(0.5, 0.35, 0.05), monitorMat, b.xMax - 0.5, 1.02, pcDeskZ);
+      ry(mon, rowFacing === "north" ? Math.PI : 0);
+    } else if (type === "meeting") {
+      // Mesa de reuniao grande
+      addMesh(new THREE.BoxGeometry(roomW * 0.55, 0.06, Math.min(1.4, roomD * 0.4)), woodMat, cx, 0.78, cz);
+      // 6 cadeiras ao redor (2 norte, 2 sul, 1 cada ponta)
+      const halfMW = roomW * 0.55 / 2;
+      const halfMD = Math.min(1.4, roomD * 0.4) / 2;
+      for (const sx of [-halfMW * 0.6, halfMW * 0.6]) {
+        for (const sz of [-halfMD - 0.4, halfMD + 0.4]) {
+          addMesh(new THREE.BoxGeometry(0.5, 0.04, 0.5), roomChairMat, cx + sx, 0.45, cz + sz);
+        }
+      }
+      addMesh(new THREE.BoxGeometry(0.5, 0.04, 0.5), roomChairMat, cx - halfMW - 0.4, 0.45, cz);
+      addMesh(new THREE.BoxGeometry(0.5, 0.04, 0.5), roomChairMat, cx + halfMW + 0.4, 0.45, cz);
+    } else if (type === "breakroom") {
+      // Sofa contra a parede de fundo + mesa de centro
+      addMesh(new THREE.BoxGeometry(Math.min(2.5, roomW - 1), 0.6, 0.7), sofaMat, cx, 0.35, backZ + (rowFacing === "north" ? 0.45 : -0.45));
+      addMesh(new THREE.BoxGeometry(Math.min(2.5, roomW - 1), 0.7, 0.18), sofaMat, cx, 0.85, backZ + (rowFacing === "north" ? 0.15 : -0.15));
+      addMesh(new THREE.BoxGeometry(1.0, 0.05, 0.6), darkWoodMat, cx, 0.32, cz);
+      for (const lx of [-0.4, 0.4]) for (const lz of [-0.25, 0.25]) {
+        addMesh(new THREE.BoxGeometry(0.06, 0.32, 0.06), darkWoodMat, cx + lx, 0.16, cz + lz);
+      }
+    } else if (type === "bathroom") {
+      // Cubas/cabines simples
+      const numStalls = Math.max(2, Math.min(3, Math.floor(roomW / 1.2)));
+      const step = roomW / (numStalls + 1);
+      for (let i = 0; i < numStalls; i++) {
+        const sx = b.xMin + step * (i + 1);
+        addMesh(new THREE.BoxGeometry(0.5, 0.45, 0.6), toiletMat, sx, 0.22, backZ + (rowFacing === "north" ? 0.4 : -0.4));
+        // tampa
+        addMesh(new THREE.BoxGeometry(0.5, 0.06, 0.4), toiletMat, sx, 0.48, backZ + (rowFacing === "north" ? 0.4 : -0.4) - (rowFacing === "north" ? 0.05 : -0.05));
+        // divisorias
+        if (i < numStalls - 1) {
+          addMesh(new THREE.BoxGeometry(0.04, 1.4, 1.2), innerMat, sx + step / 2, 0.7, backZ + (rowFacing === "north" ? 0.3 : -0.3));
+        }
+      }
+    } else if (type === "storage") {
+      // Estantes em duas fileiras
+      const numShelves = Math.max(2, Math.floor(roomW / 1.2));
+      const step = roomW / (numShelves + 1);
+      for (let i = 0; i < numShelves; i++) {
+        const sx = b.xMin + step * (i + 1);
+        addMesh(new THREE.BoxGeometry(0.7, 1.8, 0.45), shelfMat, sx, 0.9, backZ + (rowFacing === "north" ? 0.35 : -0.35));
+      }
+    }
+    // generic: deixa vazio (no caso de salas nao reconhecidas)
   }
 
   // -------- Salas (paredes internas) --------
@@ -406,12 +588,49 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       }
     }
 
-    // Labels das salas (so as que ficaram nas alas)
-    for (const r of [...leftRooms, ...rightRooms]) {
-      const rowZ = r.row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
-      const sprite = makeLabelSprite(r.label.text);
-      sprite.position.set(r.worldX, storyY + wallH - 0.6, rowZ);
-      storyGroup.add(sprite);
+    // Labels + moveis de cada sala
+    for (const wing of wings) {
+      const rowGroups: Record<Row, Room[]> = { north: [], south: [] };
+      for (const r of wing.rooms) rowGroups[r.row].push(r);
+      for (const row of ["north", "south"] as Row[]) {
+        rowGroups[row].sort((a, b) => a.worldX - b.worldX);
+      }
+      const xMin = Math.min(wing.outerX, wing.loungeX);
+      const xMax = Math.max(wing.outerX, wing.loungeX);
+
+      for (const row of ["north", "south"] as Row[]) {
+        const list = rowGroups[row];
+        if (list.length === 0) continue;
+        const rowZCenter = row === "north" ? NORTH_ROW_Z_CENTER : SOUTH_ROW_Z_CENTER;
+        const rowDepth = row === "north" ? NORTH_ROW_DEPTH : SOUTH_ROW_DEPTH;
+        const corridorEdgeZ = row === "north"
+          ? rowZCenter + rowDepth / 2
+          : rowZCenter - rowDepth / 2;
+        const outerEdgeZ = row === "north"
+          ? rowZCenter - rowDepth / 2
+          : rowZCenter + rowDepth / 2;
+
+        for (let i = 0; i < list.length; i++) {
+          const r = list[i];
+          const prevX = i === 0 ? xMin : (list[i - 1].worldX + r.worldX) / 2;
+          const nextX = i === list.length - 1 ? xMax : (r.worldX + list[i + 1].worldX) / 2;
+
+          // Label
+          const sprite = makeLabelSprite(r.label.text);
+          sprite.position.set(r.worldX, storyY + wallH - 0.6, rowZCenter);
+          storyGroup.add(sprite);
+
+          // Mobiliario
+          const type = classifyRoom(r.label.text);
+          const bounds = {
+            xMin: prevX + 0.2,
+            xMax: nextX - 0.2,
+            zMin: Math.min(corridorEdgeZ, outerEdgeZ) + 0.3,
+            zMax: Math.max(corridorEdgeZ, outerEdgeZ) - 0.3,
+          };
+          placeFurniture(storyGroup, type, bounds, storyY, row);
+        }
+      }
     }
 
     return storyBlockers;
@@ -638,12 +857,14 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const p = getPlayerPosition();
         const localX = p.x - centerX;
         const localZ = p.z - centerZ;
-        // Footprint usa as bordas do bloco mesmo (sem desconto da
-        // parede) pra que assim que o player atravessa a porta ja conte
-        // como dentro, escondendo o teto.
+        // Footprint com margem extra: a camera 3rd-person fica atras
+        // do player. Se o player chega no fim do corredor, a camera pode
+        // sair pra fora da parede e os shaders das paredes ficam opacos
+        // novamente. Margem de 2.5m mantem o "modo interior" mesmo quando
+        // a camera esta encostada na parede.
         const insideFootprint =
-          Math.abs(localX) < BLOCO_WIDTH / 2 &&
-          Math.abs(localZ) < BLOCO_DEPTH / 2;
+          Math.abs(localX) < BLOCO_WIDTH / 2 + 2.5 &&
+          Math.abs(localZ) < BLOCO_DEPTH / 2 + 2.5;
 
         // Atualiza Y do andar conforme o jogador caminha
         const inStairZone =
