@@ -161,7 +161,7 @@ export function createCameraController(onCameraModeChange: (state: CameraModeSta
     }
 
     const lookAtTarget = mode === "orbit" && focusTarget ? getOrbitCenter(playerPosition, isRemotePlayerActive) : playerPosition;
-    camera.lookAt(lookAtTarget.x, 1.25, lookAtTarget.z);
+    camera.lookAt(lookAtTarget.x, lookAtTarget.y + 1.25, lookAtTarget.z);
   }
 
   emitCameraModeChange();

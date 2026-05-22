@@ -5,6 +5,7 @@ import { createCameraController } from "@/game/camera";
 import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
 import { createEspectroEvent } from "@/features/game/minigames/espectro";
 import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
+import { createParkourCircuit } from "@/features/game/minigames/parkour";
 import type {
   Blocker,
   BlockerOptions,
@@ -19,6 +20,15 @@ import { createDevTools } from "@/game/devtools";
 import { createGameInputBindings } from "@/features/game/inputBindings";
 import { createSpeechOverlay } from "@/features/game/overlay";
 import { createNpcSync } from "@/features/game/npcSync";
+import {
+  attachElectricAura,
+  clearElectricEffects,
+  initElectricEffects,
+  tickElectricCooldowns,
+  tryNpcElectricMotion,
+  tryNpcElectricStep,
+  updateElectricEffects,
+} from "@/features/game/electricEffects";
 import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
@@ -263,6 +273,7 @@ const campusBannerTexture = createCampusBannerTexture();
 
 const world = new THREE.Group();
 scene.add(world);
+initElectricEffects(world);
 
 const blockers: Blocker[] = [];
 const mapFeatures = {
@@ -890,6 +901,7 @@ const sharedBikes = new Map();
 let sharedBikeCount = 0;
 let swimmingMinigame = null;
 let espectroEvent = null;
+let parkourSystem = null;
 
 function getFallbackRemoteAppearance(id = "") {
   const palette = hashPalette(id);
@@ -4043,6 +4055,51 @@ createNpc({
   }
 });
 
+const elderEletrico = createNpc({
+  name: "Elder Eletrico",
+  start: { x: -6, z: 4 },
+  speed: 2.0,
+  personality: "curious",
+  awarenessRadius: 20,
+  reactionRadius: 7,
+  path: [
+    { x: -6, z: 4 },
+    { x: 4, z: 10 },
+    { x: 12, z: 2 },
+    { x: 0, z: -6 },
+    { x: -10, z: -2 }
+  ],
+  lines: [
+    "Cada passo meu deixa um rastro de energia no gramado.",
+    "Nao chegue muito perto sem isolamento, viu?",
+    "O campus inteiro parece carregar quando eu passo.",
+    "Antigamente eu so ensinava fisica; hoje eu ilumino o caminho.",
+    "Se ouvir estalo no ar, provavelmente fui eu andando."
+  ],
+  interests: {
+    fountain: 1.25,
+    lamp: 1.35,
+    board: 1.1
+  },
+  colors: {
+    shirtColor: 0x4a3f8c,
+    pantsColor: 0x2a2a3a,
+    shoesColor: 0x1a1a22,
+    skinColor: 0xd4b896,
+    hairColor: 0xe8e4dc,
+    backpackColor: 0x3d5a80,
+    backpack: false,
+    glasses: true,
+    scale: 1.06
+  }
+});
+attachElectricAura(elderEletrico);
+if (elderEletrico.marker?.material) {
+  const markerMat = elderEletrico.marker.material as THREE.MeshStandardMaterial;
+  markerMat.emissive.setHex(0x7df9ff);
+  markerMat.emissiveIntensity = 0.55;
+}
+
 function serializeNpcStates() {
   return npcSync.serializeNpcStates(npcs);
 }
@@ -4062,10 +4119,13 @@ function updateNpcFromSnapshot(npc, dt, time) {
   }
 
   const lerp = Math.min(1, dt * 12);
+  const prevX = npc.group.position.x;
+  const prevZ = npc.group.position.z;
   npc.group.position.x += (npc.targetX - npc.group.position.x) * lerp;
   npc.group.position.y += (npc.targetY - npc.group.position.y) * lerp;
   npc.group.position.z += (npc.targetZ - npc.group.position.z) * lerp;
   npc.group.rotation.y = lerpAngle(npc.group.rotation.y, npc.targetRy, lerp);
+  tryNpcElectricMotion(npc, npc.group.position.x - prevX, npc.group.position.z - prevZ, dt);
 
   if (npc.netAnim === "sit") {
     setSittingPose(npc.rig.refs);
@@ -4314,9 +4374,21 @@ espectroEvent = createEspectroEvent({
   playParanormalSound,
 });
 
+parkourSystem = createParkourCircuit({
+  world,
+  player,
+  playerState,
+  playerVelocity,
+  speak: speechOverlay.speak,
+  interactables,
+  container: container as HTMLElement | null,
+  isKeyDown: (code) => keys.has(code),
+});
+
 function clampPlayerToWorld(radius = playerRadius) {
-  player.position.x = THREE.MathUtils.clamp(player.position.x, -worldLimit + radius, worldLimit - radius);
-  player.position.z = THREE.MathUtils.clamp(player.position.z, -worldLimit + radius, worldLimit - radius);
+  const limit = parkourSystem?.isInParkourZone(player.position.x, player.position.z) ? 105 : worldLimit;
+  player.position.x = THREE.MathUtils.clamp(player.position.x, -limit + radius, limit - radius);
+  player.position.z = THREE.MathUtils.clamp(player.position.z, -limit + radius, limit - radius);
 }
 
 function resolveCollisions(axis, radius = playerRadius) {
@@ -4959,6 +5031,8 @@ function moveNpcTowards(npc, target, dt, time, arrivalRadius = 0.3) {
     return "blocked";
   }
 
+  tryNpcElectricStep(npc, true);
+
   npc.group.rotation.y = lerpAngle(npc.group.rotation.y, Math.atan2(dirX, dirZ), 0.18);
 
   if (npc.running) {
@@ -5374,12 +5448,15 @@ function tick() {
 
   speechOverlay.releaseSpeechLock(dt);
   updatePlayer(dt, time);
+  parkourSystem?.postUpdatePlayer(dt);
   handleInteraction();
 
   for (const npc of npcs) {
     if (npcSync.isNpcAuthorityActive()) updateNpc(npc, dt, time);
     else updateNpcFromSnapshot(npc, dt, time);
   }
+  tickElectricCooldowns(npcs, dt);
+  updateElectricEffects(dt);
 
   for (const duck of ducks) {
     updateDuck(duck, dt, time);
@@ -5401,6 +5478,7 @@ function tick() {
   updateBubbles(dt);
   updatePvpBalls(dt);
   espectroEvent?.update(dt, time);
+  parkourSystem?.update(dt, time);
 
   netAccumulator += dt;
   if (netAccumulator >= NET_INTERVAL) {
@@ -5588,6 +5666,7 @@ function destroy() {
   swimmingMinigame?.destroy?.();
   espectroEvent?.destroy?.();
   weatherSystem.destroy();
+  clearElectricEffects();
   swimmingMinigame = null;
   espectroEvent = null;
   devTools.destroy();
