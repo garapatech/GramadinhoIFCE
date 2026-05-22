@@ -29,7 +29,7 @@ const LOUNGE_HALF_WIDTH = 6;
 const STAIR_LENGTH = 4.2; // ao longo de X (direcao de subida)
 const STAIR_DEPTH = 2.6;  // ao longo de Z (largura)
 const STAIR_CENTER_X = 3; // ~metade leste do lounge (LOUNGE_HALF_WIDTH=6)
-const STAIR_CENTER_Z = -BLOCO_DEPTH / 2 + 0.4 + STAIR_DEPTH / 2; // encostado na parede norte
+const STAIR_CENTER_Z = BLOCO_DEPTH / 2 - 0.4 - STAIR_DEPTH / 2; // encostado na parede sul (fundo, longe da porta)
 const STORY_HEIGHT = 3.6;
 const STORIES = 2;
 const TOTAL_HEIGHT = STORY_HEIGHT * STORIES;
@@ -114,6 +114,10 @@ export type BlocoTelematicaOptions = {
   getPlayerPosition?: () => THREE.Vector3;
   onPokerSeatInteract?: (
     seatIndex: number,
+    anchor: { position: THREE.Vector3; rotation: number },
+  ) => void;
+  onChessSeatInteract?: (
+    color: "w" | "b",
     anchor: { position: THREE.Vector3; rotation: number },
   ) => void;
 };
@@ -287,23 +291,24 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   for (let story = 0; story < STORIES; story++) {
     const y = story * STORY_HEIGHT + STORY_HEIGHT / 2;
 
-    // Parede norte (fundo, virada pro centro do campus, longe da camera)
+    // Parede sul (fundo, virada pro muro do campus)
     addOuterWall(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
-      0, y, -halfD + WALL_THICKNESS / 2, story);
+      0, y, halfD - WALL_THICKNESS / 2, story);
 
-    // Parede sul (fachada, virada pro muro/camera) com porta no centro (so terreo)
+    // Parede norte (fachada, virada pro centro do campus) com porta no
+    // centro (so terreo)
     if (story === 0) {
       const sideW = (BLOCO_WIDTH - DOOR_W) / 2;
       addOuterWall(sideW, STORY_HEIGHT, WALL_THICKNESS,
-        -DOOR_W / 2 - sideW / 2, y, halfD - WALL_THICKNESS / 2, story);
+        -DOOR_W / 2 - sideW / 2, y, -halfD + WALL_THICKNESS / 2, story);
       addOuterWall(sideW, STORY_HEIGHT, WALL_THICKNESS,
-        DOOR_W / 2 + sideW / 2, y, halfD - WALL_THICKNESS / 2, story);
+        DOOR_W / 2 + sideW / 2, y, -halfD + WALL_THICKNESS / 2, story);
       const lintelH = STORY_HEIGHT - 2.4;
       addOuterWall(DOOR_W, lintelH, WALL_THICKNESS,
-        0, 2.4 + lintelH / 2, halfD - WALL_THICKNESS / 2, story);
+        0, 2.4 + lintelH / 2, -halfD + WALL_THICKNESS / 2, story);
     } else {
       addOuterWall(BLOCO_WIDTH, STORY_HEIGHT, WALL_THICKNESS,
-        0, y, halfD - WALL_THICKNESS / 2, story);
+        0, y, -halfD + WALL_THICKNESS / 2, story);
     }
 
     // Paredes laterais leste/oeste
@@ -949,6 +954,172 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           });
         }
       }
+
+      // -------- Tabuleiro de xadrez no canto oeste do LATIM --------
+      const chessCx = latimXMin + 0.95;
+      const chessCz = 0;
+      const chessTableTopY = storyY + 0.78;
+      const boardSize = 0.88; // tabuleiro 0.88 x 0.88
+      const cellSize = boardSize / 8;
+
+      const lightSqMat = new THREE.MeshStandardMaterial({ color: 0xe8d3a0, roughness: 0.7 });
+      const darkSqMat = new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.75 });
+      const whitePieceMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.55 });
+      const blackPieceMat = new THREE.MeshStandardMaterial({ color: 0x1f1f24, roughness: 0.55 });
+
+      // Mesa de madeira pequena (base + pés)
+      const chessTableTop = new THREE.Mesh(
+        new THREE.BoxGeometry(1.05, 0.06, 1.05),
+        woodMat,
+      );
+      chessTableTop.position.set(chessCx, chessTableTopY, chessCz);
+      chessTableTop.castShadow = true;
+      storyGroup.add(chessTableTop);
+      for (const lx of [-0.45, 0.45]) for (const lz of [-0.45, 0.45]) {
+        const leg = new THREE.Mesh(
+          new THREE.BoxGeometry(0.07, chessTableTopY - storyY - 0.03, 0.07),
+          darkWoodMat,
+        );
+        leg.position.set(chessCx + lx, (storyY + chessTableTopY - 0.03) / 2, chessCz + lz);
+        storyGroup.add(leg);
+      }
+
+      // Tabuleiro 8x8 sobre a mesa
+      const boardY = chessTableTopY + 0.04;
+      for (let rk = 0; rk < 8; rk++) {
+        for (let fl = 0; fl < 8; fl++) {
+          const isLight = (rk + fl) % 2 === 1;
+          const cell = new THREE.Mesh(
+            new THREE.BoxGeometry(cellSize, 0.012, cellSize),
+            isLight ? lightSqMat : darkSqMat,
+          );
+          cell.position.set(
+            chessCx - boardSize / 2 + cellSize / 2 + fl * cellSize,
+            boardY,
+            chessCz - boardSize / 2 + cellSize / 2 + rk * cellSize,
+          );
+          storyGroup.add(cell);
+        }
+      }
+      // Moldura
+      const frame = new THREE.Mesh(
+        new THREE.BoxGeometry(boardSize + 0.06, 0.02, boardSize + 0.06),
+        darkWoodMat,
+      );
+      frame.position.set(chessCx, boardY - 0.008, chessCz);
+      storyGroup.add(frame);
+
+      // Peças simples (cilindros + esfera no topo): peões/torres/etc só pra
+      // dar visual; o jogo real acontece no HUD 2D.
+      const pieceY = boardY + 0.06;
+      const pieceRadius = cellSize * 0.32;
+      const pieceLayout: Array<{ kind: "P" | "N" | "B" | "R" | "Q" | "K"; height: number }> = [
+        { kind: "P", height: 0.08 },
+        { kind: "N", height: 0.11 },
+        { kind: "B", height: 0.13 },
+        { kind: "R", height: 0.10 },
+        { kind: "Q", height: 0.15 },
+        { kind: "K", height: 0.17 },
+      ];
+      const heightByKind = Object.fromEntries(pieceLayout.map((p) => [p.kind, p.height])) as Record<string, number>;
+      const backRow = ["R", "N", "B", "Q", "K", "B", "N", "R"];
+      const placePiece = (rk: number, fl: number, kind: string, color: "w" | "b") => {
+        const h = heightByKind[kind] ?? 0.09;
+        const piece = new THREE.Mesh(
+          new THREE.CylinderGeometry(pieceRadius * 0.85, pieceRadius, h, 12),
+          color === "w" ? whitePieceMat : blackPieceMat,
+        );
+        piece.position.set(
+          chessCx - boardSize / 2 + cellSize / 2 + fl * cellSize,
+          pieceY + h / 2 - 0.06,
+          chessCz - boardSize / 2 + cellSize / 2 + rk * cellSize,
+        );
+        piece.castShadow = true;
+        storyGroup.add(piece);
+        // Topo: esfera pra diferenciar
+        const cap = new THREE.Mesh(
+          new THREE.SphereGeometry(pieceRadius * 0.7, 8, 6),
+          color === "w" ? whitePieceMat : blackPieceMat,
+        );
+        cap.position.copy(piece.position);
+        cap.position.y += h / 2;
+        storyGroup.add(cap);
+      };
+      for (let fl = 0; fl < 8; fl++) {
+        placePiece(0, fl, backRow[fl], "w");
+        placePiece(1, fl, "P", "w");
+        placePiece(6, fl, "P", "b");
+        placePiece(7, fl, backRow[fl], "b");
+      }
+
+      // Bloqueio fisico na mesa
+      registerInnerBlocker(
+        chessCx - 0.6, chessCx + 0.6,
+        chessCz - 0.6, chessCz + 0.6,
+      );
+
+      // 2 cadeiras (norte = pretas, sul = brancas)
+      const chessSeatOffset = 0.95;
+      const chessSeatDefs: Array<{ color: "w" | "b"; zOff: number }> = [
+        { color: "w", zOff: -chessSeatOffset }, // brancas no lado norte (z negativo)
+        { color: "b", zOff: chessSeatOffset },  // pretas no lado sul (z positivo)
+      ];
+      for (const def of chessSeatDefs) {
+        const sx = chessCx;
+        const sz = chessCz + def.zOff;
+        const facing = Math.atan2(chessCx - sx, chessCz - sz);
+
+        const seatGroup = new THREE.Group();
+        seatGroup.position.set(sx, storyY, sz);
+        seatGroup.rotation.y = facing;
+        storyGroup.add(seatGroup);
+
+        const seat = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.08, 0.55),
+          roomChairMat,
+        );
+        seat.position.set(0, 0.45, 0);
+        seat.castShadow = true;
+        seatGroup.add(seat);
+
+        const back = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.6, 0.08),
+          roomChairMat,
+        );
+        back.position.set(0, 0.79, -0.24);
+        back.castShadow = true;
+        seatGroup.add(back);
+
+        for (const dx of [-0.22, 0.22]) for (const dz of [-0.22, 0.22]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.45, 0.05), darkWoodMat);
+          leg.position.set(dx, 0.225, dz);
+          seatGroup.add(leg);
+        }
+
+        const seatLabel = makeLabelSprite(def.color === "w" ? "♔ Brancas" : "♚ Pretas");
+        seatLabel.position.set(0, 1.45, -0.1);
+        seatLabel.scale.multiplyScalar(0.6);
+        seatGroup.add(seatLabel);
+
+        if (interactables) {
+          const color = def.color;
+          const anchorWorld = new THREE.Vector3(centerX + sx, 0, centerZ + sz);
+          interactables.push({
+            kind: "chess-seat",
+            label: `Sentar no xadrez (${color === "w" ? "brancas" : "pretas"})`,
+            radius: 1.1,
+            position: new THREE.Vector3(centerX + sx, chessTableTopY, centerZ + sz),
+            root: seatGroup,
+            npcDisabled: () => true,
+            interact: () => {
+              options.onChessSeatInteract?.(color, {
+                position: anchorWorld,
+                rotation: facing,
+              });
+            },
+          });
+        }
+      }
     }
 
     // -------- Lab. de Redes Wireless (sala media no leste do superior) --------
@@ -1267,11 +1438,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   // -------- Blockers de colisao (so paredes externas do corpo principal) --------
   if (createBlocker) {
     const t = WALL_THICKNESS;
-    // norte (fundo)
-    createBlocker(bounds.minX, bounds.maxX, centerZ - halfD - t, centerZ - halfD + t);
-    // sul (fachada, com vao da porta)
-    createBlocker(bounds.minX, centerX - DOOR_W / 2, centerZ + halfD - t, centerZ + halfD + t);
-    createBlocker(centerX + DOOR_W / 2, bounds.maxX, centerZ + halfD - t, centerZ + halfD + t);
+    // sul (fundo, virado pro muro)
+    createBlocker(bounds.minX, bounds.maxX, centerZ + halfD - t, centerZ + halfD + t);
+    // norte (fachada, com vao da porta)
+    createBlocker(bounds.minX, centerX - DOOR_W / 2, centerZ - halfD - t, centerZ - halfD + t);
+    createBlocker(centerX + DOOR_W / 2, bounds.maxX, centerZ - halfD - t, centerZ - halfD + t);
     // leste
     createBlocker(bounds.maxX - t, bounds.maxX + t, centerZ - halfD, centerZ + halfD);
     // oeste

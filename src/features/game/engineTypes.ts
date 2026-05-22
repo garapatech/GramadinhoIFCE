@@ -21,6 +21,7 @@ export interface BootGameOptions {
   onEspectroConsumed?: (seed: number) => void;
   onSecretDisconnect?: () => void;
   onPokerSeatInteract?: (seatIndex: number) => void;
+  onChessSeatInteract?: (color: "w" | "b") => void;
   // anchor opcional usado pelo engine pra sentar visualmente
 }
 

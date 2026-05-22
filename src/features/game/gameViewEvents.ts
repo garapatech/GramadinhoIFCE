@@ -10,6 +10,9 @@ type PokerStateMessage = Extract<SocketInboundMessage, { type: "poker-state" }>;
 type PokerHoleMessage = Extract<SocketInboundMessage, { type: "poker-hole" }>;
 type PokerStatePayload = PokerStateMessage["state"];
 type PokerCardPayload = PokerHoleMessage["cards"][number];
+
+type ChessStateMessage = Extract<SocketInboundMessage, { type: "chess-state" }>;
+type ChessStatePayload = ChessStateMessage["state"];
 import type {
   GamePvpState,
   GameChatMessage,
@@ -89,6 +92,8 @@ type GameViewEventContext = {
   setPokerState: (value: PokerStatePayload | null) => void;
   setPokerHole: (value: PokerCardPayload[] | null) => void;
   setPokerError: (value: string | null) => void;
+  setChessState: (value: ChessStatePayload | null) => void;
+  setChessError: (value: string | null) => void;
 };
 
 function createPvpMatchUpdate(matchId: string, opponentId: string | null, side: "A" | "B" | null) {
@@ -372,6 +377,21 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
 
     if (event.type === "poker-error") {
       context.setPokerError(event.message);
+      return;
+    }
+
+    if (event.type === "chess-state") {
+      context.setChessState(event.state);
+      const localId = context.localIdRef.current;
+      const stillSeated = !!localId && event.state.seats.some((s) => s.playerId === localId);
+      if (!stillSeated) {
+        game?.exitSit?.();
+      }
+      return;
+    }
+
+    if (event.type === "chess-error") {
+      context.setChessError(event.message);
       return;
     }
 

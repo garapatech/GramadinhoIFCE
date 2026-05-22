@@ -100,6 +100,7 @@ export function bootGame(opts: BootGameOptions = {}) {
   const onEspectroConsumed = asHandler(opts.onEspectroConsumed);
   const onSecretDisconnect = asHandler(opts.onSecretDisconnect);
   const onPokerSeatInteract = asHandler(opts.onPokerSeatInteract);
+  const onChessSeatInteract = asHandler(opts.onChessSeatInteract);
   const shouldIgnoreKeys = asHandler(opts.shouldIgnoreKeys, () => false);
   const getWorldTime = asFunction(opts.getWorldTime);
   const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
@@ -745,6 +746,16 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
         },
       );
       onPokerSeatInteract(seatIndex);
+    },
+    onChessSeatInteract: (color, anchor) => {
+      enterSitState(
+        { position: anchor.position, rotation: anchor.rotation },
+        {
+          persistent: true,
+          label: `xadrez (${color === "w" ? "brancas" : "pretas"})`,
+        },
+      );
+      onChessSeatInteract(color);
     },
   });
   mapFeatures.buildings.push({
@@ -5230,6 +5241,17 @@ function updateInteractionUI() {
       speechOverlay.showSpeech(
         "Sentar na mesa de pôquer",
         target.label || "Mesa de pôquer",
+        "[E] sentar",
+      );
+    }
+    return;
+  }
+
+  if (target.kind === "chess-seat") {
+    if (speechEl && speechEl.dataset.locked !== "1") {
+      speechOverlay.showSpeech(
+        "Sentar pra jogar xadrez",
+        target.label || "Xadrez",
         "[E] sentar",
       );
     }

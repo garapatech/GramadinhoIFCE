@@ -48,6 +48,13 @@ type MultiplayerConnection = {
     amount?: number
   ) => void;
   sendPokerStart: () => void;
+  sendChessSit: (color: "w" | "b") => void;
+  sendChessStand: () => void;
+  sendChessMove: (
+    from: { file: number; rank: number },
+    to: { file: number; rank: number },
+  ) => void;
+  sendChessReset: () => void;
   close: () => void;
   readonly socket: PartySocket;
   isOpen: () => boolean;
@@ -211,6 +218,25 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendMessage({ type: "poker-start" });
   }
 
+  function sendChessSit(color: "w" | "b") {
+    sendMessage({ type: "chess-sit", color });
+  }
+
+  function sendChessStand() {
+    sendMessage({ type: "chess-stand" });
+  }
+
+  function sendChessMove(
+    from: { file: number; rank: number },
+    to: { file: number; rank: number },
+  ) {
+    sendMessage({ type: "chess-move", from, to });
+  }
+
+  function sendChessReset() {
+    sendMessage({ type: "chess-reset" });
+  }
+
   function close() {
     try {
       socket.close();
@@ -238,6 +264,10 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendPokerStand,
     sendPokerAction,
     sendPokerStart,
+    sendChessSit,
+    sendChessStand,
+    sendChessMove,
+    sendChessReset,
     close,
     get socket() {
       return socket;
