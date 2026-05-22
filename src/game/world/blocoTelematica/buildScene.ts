@@ -104,7 +104,6 @@ type Interactable = {
 export type BlocoTelematicaScene = {
   group: THREE.Group;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
-  getPlayerFloorY(): number;
   dispose(): void;
 };
 
@@ -175,11 +174,6 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   const { parent, createBlocker, interactables, getPlayerPosition } = options;
   const group = new THREE.Group();
   group.name = "blocoTelematica";
-  // playerFloorY: deslocamento Y aplicado ao jogador local enquanto ele esta
-  // dentro do bloco (0 = terreo, ~3.77 = superior). Exposto via
-  // getPlayerFloorY pra que o engine possa enviar pela rede e renderizar
-  // remotes no andar correto.
-  let playerFloorY = 0;
 
   const { centerX, centerZ } = BLOCO_TELEMATICA_PLACEMENT;
 
@@ -1482,6 +1476,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     // (half slab) + 0.085 (half floor + epsilon). Player precisa ser
     // elevado ate aqui pra nao "afundar" no chao.
     const SUPERIOR_VISUAL_Y = STORY_HEIGHT + 0.165;
+    let playerFloorY = 0;
 
     interactables.push({
       kind: "bloco-telematica",
@@ -1569,7 +1564,6 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   return {
     group,
     bounds,
-    getPlayerFloorY: () => playerFloorY,
     dispose() {
       parent.remove(group);
       group.traverse((obj) => {

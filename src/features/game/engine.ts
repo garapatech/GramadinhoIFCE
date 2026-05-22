@@ -742,7 +742,6 @@ world.add(player);
 playerPositionTarget = player;
 player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 
-let blocoRef: ReturnType<typeof buildBlocoTelematica> | null = null;
 {
   const bloco = buildBlocoTelematica({
     parent: world,
@@ -778,7 +777,6 @@ let blocoRef: ReturnType<typeof buildBlocoTelematica> | null = null;
     color: 0xdbe0dd,
     roof: 0x8b3d2c,
   });
-  blocoRef = bloco;
 }
 
 gateCheckpoint = createGateCheckpoint({
@@ -963,7 +961,6 @@ function addRemotePlayer(state) {
     speed: 0,
     activity: state.activity || "idle",
     jumpY: typeof state.jumpY === "number" ? state.jumpY : 0,
-    floorY: typeof state.floorY === "number" ? state.floorY : 0,
     walkPhase: 0,
     ridePhase: 0,
     celebrateTimer: 0,
@@ -985,7 +982,6 @@ function updateRemotePlayer(state) {
   if (typeof state.speed === "number") r.speed = state.speed;
   if (typeof state.activity === "string") r.activity = state.activity;
   if (typeof state.jumpY === "number") r.jumpY = Math.max(0, state.jumpY);
-  if (typeof state.floorY === "number") r.floorY = Math.max(0, state.floorY);
 }
 
 function removeRemotePlayer(id) {
@@ -1231,33 +1227,30 @@ function updateBubbles(dt) {
 function updateRemotes(dt, time) {
   for (const r of remotePlayers.values()) {
     const jumpY = Math.max(0, r.jumpY || 0);
-    // floorBase: offset Y do andar em que o remote esta (0 = terreo, ~3.77 =
-    // superior do bloco 3). Recebido pela rede.
-    const floorBase = Math.max(0, r.floorY || 0);
     if (r.glitchTimer && r.glitchTimer > 0) {
       r.glitchTimer -= dt;
       setRestPose(r.rig.refs, time, r.glitchSeed || 0);
       animateGlitch(r.rig.refs, time, 1, r.glitchSeed || 0);
-      r.group.position.y = floorBase + jumpY + Math.sin(time * 14 + (r.glitchSeed || 0)) * 0.06;
+      r.group.position.y = jumpY + Math.sin(time * 14 + (r.glitchSeed || 0)) * 0.06;
       continue;
     }
     if (r.celebrateTimer && r.celebrateTimer > 0) {
       r.celebrateTimer -= dt;
       animateCelebrate(r.rig.refs, time + (r.celebrateSeed || 0), 1);
-      r.group.position.y = floorBase + jumpY + Math.abs(Math.sin((time + (r.celebrateSeed || 0)) * 9)) * 0.08;
+      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.celebrateSeed || 0)) * 9)) * 0.08;
       continue;
     }
     if (r.sixSevenTimer && r.sixSevenTimer > 0) {
       r.sixSevenTimer -= dt;
       animateSixSeven(r.rig.refs, time, r.sixSevenSeed || 0);
-      r.group.position.y = floorBase + jumpY + Math.abs(Math.sin((time + (r.sixSevenSeed || 0)) * 4.8)) * 0.025;
+      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.sixSevenSeed || 0)) * 4.8)) * 0.025;
       if (r.sixSevenTimer <= 0) resetRigPose(r.rig.refs);
       continue;
     }
     if (r.danceTimer && r.danceTimer > 0) {
       r.danceTimer -= dt;
       animateDance(r.rig.refs, time + (r.phaseOffset || 0));
-      r.group.position.y = floorBase + jumpY + Math.abs(Math.sin((time + (r.phaseOffset || 0)) * 8)) * 0.08;
+      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.phaseOffset || 0)) * 8)) * 0.08;
       continue;
     }
     const lerp = Math.min(1, dt * 12);
@@ -1266,18 +1259,18 @@ function updateRemotes(dt, time) {
     r.group.rotation.y = lerpAngle(r.group.rotation.y, r.targetRy, lerp);
     if (r.activity === "sitting") {
       setSittingPose(r.rig.refs);
-      r.group.position.y = floorBase;
+      r.group.position.y = 0;
       continue;
     }
     if (r.activity === "crouching") {
       setCrouchPose(r.rig.refs, time, 1);
-      r.group.position.y = floorBase - 0.22;
+      r.group.position.y = -0.22;
       continue;
     }
     if (r.activity === "riding") {
       r.ridePhase += Math.max(0.85, r.speed * 0.95) * dt;
       applyBikeRidePose(r.rig.refs, r.ridePhase, Math.min(r.speed / 10, 1), 0);
-      r.group.position.y = floorBase + 0.18 + Math.abs(Math.sin(r.ridePhase)) * 0.02 * Math.min(r.speed / 9, 1);
+      r.group.position.y = 0.18 + Math.abs(Math.sin(r.ridePhase)) * 0.02 * Math.min(r.speed / 9, 1);
       continue;
     }
     const isRun = r.speed > 8;
@@ -1287,10 +1280,10 @@ function updateRemotes(dt, time) {
       r.walkPhase += dt * (isRun ? 9.5 : 5.5 + r.speed * 0.6);
       if (isRun) animateRun(r.rig.refs, r.walkPhase, intensity);
       else animateWalk(r.rig.refs, r.walkPhase, intensity);
-      r.group.position.y = floorBase + jumpY + Math.abs(Math.sin(r.walkPhase)) * 0.05 * intensity;
+      r.group.position.y = jumpY + Math.abs(Math.sin(r.walkPhase)) * 0.05 * intensity;
     } else {
       setRestPose(r.rig.refs, time);
-      r.group.position.y = floorBase + jumpY + Math.sin(time * 1.6) * 0.012;
+      r.group.position.y = jumpY + Math.sin(time * 1.6) * 0.012;
     }
   }
 }
@@ -5497,7 +5490,6 @@ function tick() {
       speed: playerVelocity.length(),
       activity: playerActivitySnapshot.kind,
       jumpY: playerState.jumpY,
-      floorY: blocoRef?.getPlayerFloorY() ?? 0,
     });
     if (npcSync.isNpcAuthorityActive()) {
       onNpcState(serializeNpcStates());

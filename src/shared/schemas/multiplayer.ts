@@ -127,7 +127,6 @@ export const socketOutboundStateSchema = z
     speed: z.number().finite(),
     activity: playerActivitySchema,
     jumpY: z.number().finite(),
-    floorY: z.number().finite().optional(),
   })
   .strict();
 
@@ -467,7 +466,6 @@ const socketStateMessageSchema = z
     speed: z.number().finite(),
     activity: playerActivitySchema,
     jumpY: z.number().finite(),
-    floorY: z.number().finite().optional(),
   })
   .strict();
 

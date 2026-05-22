@@ -13,7 +13,6 @@ type PlayerState = {
   speed: number;
   activity: PlayerActivity;
   jumpY: number;
-  floorY: number;
   voiceEnabled: boolean;
   voiceMuted: boolean;
 };
@@ -417,7 +416,6 @@ export default class GameRoom implements Party.Server {
         speed: 0,
         activity: "idle",
         jumpY: 0,
-        floorY: 0,
         voiceEnabled: false,
         voiceMuted: false,
       };
@@ -466,9 +464,6 @@ export default class GameRoom implements Party.Server {
       if (typeof msg.speed === "number") cur.speed = msg.speed;
       cur.activity = sanitizeActivity(msg.activity);
       cur.jumpY = sanitizeJumpY(msg.jumpY);
-      cur.floorY = typeof msg.floorY === "number" && Number.isFinite(msg.floorY)
-        ? Math.max(0, Math.min(8, msg.floorY))
-        : 0;
       this.room.broadcast(
         JSON.stringify({
           type: "state",
@@ -479,7 +474,6 @@ export default class GameRoom implements Party.Server {
           speed: cur.speed,
           activity: cur.activity,
           jumpY: cur.jumpY,
-          floorY: cur.floorY,
         }),
         [sender.id]
       );
