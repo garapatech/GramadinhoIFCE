@@ -5,6 +5,7 @@ import { createCameraController } from "@/game/camera";
 import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
 import { createEspectroEvent } from "@/features/game/minigames/espectro";
 import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
+import { createParkourCircuit } from "@/features/game/minigames/parkour";
 import type {
   Blocker,
   BlockerOptions,
@@ -846,6 +847,7 @@ const sharedBikes = new Map();
 let sharedBikeCount = 0;
 let swimmingMinigame = null;
 let espectroEvent = null;
+let parkourSystem = null;
 
 function getFallbackRemoteAppearance(id = "") {
   const palette = hashPalette(id);
@@ -4267,9 +4269,21 @@ espectroEvent = createEspectroEvent({
   playParanormalSound,
 });
 
+parkourSystem = createParkourCircuit({
+  world,
+  player,
+  playerState,
+  playerVelocity,
+  speak: speechOverlay.speak,
+  interactables,
+  container: container as HTMLElement | null,
+  isKeyDown: (code) => keys.has(code),
+});
+
 function clampPlayerToWorld(radius = playerRadius) {
-  player.position.x = THREE.MathUtils.clamp(player.position.x, -worldLimit + radius, worldLimit - radius);
-  player.position.z = THREE.MathUtils.clamp(player.position.z, -worldLimit + radius, worldLimit - radius);
+  const limit = parkourSystem?.isInParkourZone(player.position.x, player.position.z) ? 105 : worldLimit;
+  player.position.x = THREE.MathUtils.clamp(player.position.x, -limit + radius, limit - radius);
+  player.position.z = THREE.MathUtils.clamp(player.position.z, -limit + radius, limit - radius);
 }
 
 function resolveCollisions(axis, radius = playerRadius) {
@@ -5283,6 +5297,7 @@ function tick() {
 
   speechOverlay.releaseSpeechLock(dt);
   updatePlayer(dt, time);
+  parkourSystem?.postUpdatePlayer(dt);
   handleInteraction();
 
   for (const npc of npcs) {
@@ -5310,6 +5325,7 @@ function tick() {
   updateBubbles(dt);
   updatePvpBalls(dt);
   espectroEvent?.update(dt, time);
+  parkourSystem?.update(dt, time);
 
   netAccumulator += dt;
   if (netAccumulator >= NET_INTERVAL) {
