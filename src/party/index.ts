@@ -1,5 +1,7 @@
 import type * as Party from "partykit/server";
 import { parseOutboundSocketMessage } from "@/shared/schemas/multiplayer";
+import { PokerTable, type PokerActionKind } from "./poker";
+import { ChessTable, type ChessColor } from "./chess";
 
 type PlayerState = {
   id: string;
@@ -249,8 +251,61 @@ export default class GameRoom implements Party.Server {
   pvpCounter = 0;
   espectro: EspectroEvent | null = null;
   espectroBlockedDayKey: string | null = null;
+  poker = new PokerTable(6);
+  chess = new ChessTable();
 
   constructor(readonly room: Party.Room) {}
+
+  broadcastChessState() {
+    this.room.broadcast(
+      JSON.stringify({ type: "chess-state", state: this.chess.publicState() })
+    );
+  }
+
+  chessSendError(conn: Party.Connection, message: string) {
+    conn.send(JSON.stringify({ type: "chess-error", message }));
+  }
+
+  broadcastPokerState() {
+    this.room.broadcast(
+      JSON.stringify({ type: "poker-state", state: this.poker.publicState() })
+    );
+  }
+
+  sendPokerHole(connId: string) {
+    const conn = this.room.getConnection(connId);
+    if (!conn) return;
+    const cards = this.poker.getHoleCards(connId);
+    if (!cards || cards.length !== 2) return;
+    const seat = this.poker.seats.find((s) => s.playerId === connId);
+    if (!seat) return;
+    conn.send(
+      JSON.stringify({
+        type: "poker-hole",
+        seatIndex: seat.index,
+        cards,
+      })
+    );
+  }
+
+  broadcastAllHoleCards() {
+    for (const seat of this.poker.seats) {
+      if (seat.playerId && seat.holeCards.length === 2) {
+        this.sendPokerHole(seat.playerId);
+      }
+    }
+  }
+
+  pokerSendError(conn: Party.Connection, message: string) {
+    conn.send(JSON.stringify({ type: "poker-error", message }));
+  }
+
+  tryStartPokerHand() {
+    if (this.poker.tryStartHand()) {
+      this.broadcastAllHoleCards();
+      this.broadcastPokerState();
+    }
+  }
 
   maybeUpdateEspectro(now = Date.now()) {
     const serverDate = new Date(now);
@@ -308,6 +363,14 @@ export default class GameRoom implements Party.Server {
         serverNow: Date.now(),
       })
     );
+    // Estado atual da mesa de poker (inclui nada de cartas privadas)
+    conn.send(
+      JSON.stringify({ type: "poker-state", state: this.poker.publicState() })
+    );
+    // Estado atual do xadrez
+    conn.send(
+      JSON.stringify({ type: "chess-state", state: this.chess.publicState() })
+    );
     if (!this.clockTimer) {
       this.clockTimer = setInterval(() => {
         const now = Date.now();
@@ -318,6 +381,15 @@ export default class GameRoom implements Party.Server {
             serverNow: now,
           })
         );
+        // Auto-deal proxima mao de poker quando chegou a hora
+        if (
+          this.poker.phase === "waiting" &&
+          this.poker.nextHandAt !== null &&
+          now >= this.poker.nextHandAt &&
+          this.poker.canStartHand()
+        ) {
+          this.tryStartPokerHand();
+        }
       }, 2000);
     }
   }
@@ -654,6 +726,92 @@ export default class GameRoom implements Party.Server {
       return;
     }
 
+    if (msg.type === "poker-sit") {
+      const player = this.players.get(sender.id);
+      if (!player) return;
+      const res = this.poker.sit(msg.seatIndex, sender.id, player.nick);
+      if (!res.ok) {
+        this.pokerSendError(sender, res.error ?? "Erro");
+        return;
+      }
+      this.broadcastPokerState();
+      if (this.poker.canStartHand() && this.poker.phase === "waiting") {
+        // Pequeno delay pra dar tempo de outros sentarem
+        this.poker.nextHandAt = Date.now() + 3500;
+      }
+      return;
+    }
+
+    if (msg.type === "poker-stand") {
+      const changed = this.poker.stand(sender.id);
+      if (changed) {
+        // Se a mao acabou por nao ter mais jogadores, broadcast hole/state
+        if (this.poker.phase === "waiting" && this.poker.lastWinners.length > 0) {
+          this.broadcastAllHoleCards();
+        }
+        this.broadcastPokerState();
+      }
+      return;
+    }
+
+    if (msg.type === "poker-action") {
+      const res = this.poker.action(
+        sender.id,
+        msg.action as PokerActionKind,
+        msg.amount,
+      );
+      if (res.ok === false) {
+        this.pokerSendError(sender, res.error);
+        return;
+      }
+      // Se mao acabou em showdown ou todos foldaram, hole cards podem ser
+      // reveladas — broadcast pra todos
+      if (res.handEnded) {
+        this.broadcastAllHoleCards();
+      }
+      this.broadcastPokerState();
+      return;
+    }
+
+    if (msg.type === "poker-start") {
+      this.tryStartPokerHand();
+      return;
+    }
+
+    if (msg.type === "chess-sit") {
+      const player = this.players.get(sender.id);
+      if (!player) return;
+      const res = this.chess.sit(msg.color as ChessColor, sender.id, player.nick);
+      if (!res.ok) {
+        this.chessSendError(sender, res.error ?? "Erro");
+        return;
+      }
+      this.broadcastChessState();
+      return;
+    }
+
+    if (msg.type === "chess-stand") {
+      const changed = this.chess.stand(sender.id);
+      if (changed) this.broadcastChessState();
+      return;
+    }
+
+    if (msg.type === "chess-move") {
+      const res = this.chess.move(sender.id, msg.from, msg.to);
+      if (res.ok === false) {
+        this.chessSendError(sender, res.error);
+        return;
+      }
+      this.broadcastChessState();
+      return;
+    }
+
+    if (msg.type === "chess-reset") {
+      this.chess.resetIfFinished();
+      this.broadcastChessState();
+      return;
+    }
+
     if (msg.type === "chat") {
       const player = this.players.get(sender.id);
       const text = sanitize(msg.text, MAX_TEXT);
@@ -701,6 +859,14 @@ export default class GameRoom implements Party.Server {
       } else if (match.status === "active" && (match.playerA === conn.id || match.playerB === conn.id)) {
         this._endPvpByForfeit(match, conn.id);
       }
+    }
+    // Desocupa lugar na mesa de poker, se sentado
+    if (this.poker.stand(conn.id)) {
+      this.broadcastPokerState();
+    }
+    // Desocupa lugar no xadrez, se sentado
+    if (this.chess.stand(conn.id)) {
+      this.broadcastChessState();
     }
     const player = this.players.get(conn.id);
     this.players.delete(conn.id);

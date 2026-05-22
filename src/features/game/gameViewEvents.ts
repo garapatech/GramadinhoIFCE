@@ -5,6 +5,14 @@ import type {
   SharedEntityState,
   SocketInboundMessage,
 } from "@/shared/schemas/multiplayer";
+
+type PokerStateMessage = Extract<SocketInboundMessage, { type: "poker-state" }>;
+type PokerHoleMessage = Extract<SocketInboundMessage, { type: "poker-hole" }>;
+type PokerStatePayload = PokerStateMessage["state"];
+type PokerCardPayload = PokerHoleMessage["cards"][number];
+
+type ChessStateMessage = Extract<SocketInboundMessage, { type: "chess-state" }>;
+type ChessStatePayload = ChessStateMessage["state"];
 import type {
   GamePvpState,
   GameChatMessage,
@@ -48,6 +56,7 @@ type GameApi = {
   applyNpcSnapshots?: (npcs: NpcStateList) => void;
   setNpcAuthority?: (value: boolean) => void;
   pushChatBubble?: (target: string, text: string) => void;
+  exitSit?: () => void;
 };
 
 type VoiceApi = {
@@ -80,6 +89,11 @@ type GameViewEventContext = {
   setChatMessages: (updater: (current: GameChatMessage[]) => GameChatMessage[]) => void;
   setPvpState: (next: GamePvpState | null | ((prev: GamePvpState | null) => GamePvpState | null)) => void;
   setEspectroNotice: (value: string) => void;
+  setPokerState: (value: PokerStatePayload | null) => void;
+  setPokerHole: (value: PokerCardPayload[] | null) => void;
+  setPokerError: (value: string | null) => void;
+  setChessState: (value: ChessStatePayload | null) => void;
+  setChessError: (value: string | null) => void;
 };
 
 function createPvpMatchUpdate(matchId: string, opponentId: string | null, side: "A" | "B" | null) {
@@ -338,6 +352,46 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
     if (event.type === "espectro-despawn") {
       context.espectroSnapshotRef.current = null;
       game?.espectroDespawn?.();
+      return;
+    }
+
+    if (event.type === "poker-state") {
+      context.setPokerState(event.state);
+      const localId = context.localIdRef.current;
+      const mySeat = localId
+        ? event.state.seats.find((s) => s.playerId === localId)
+        : null;
+      // Fallback: server confirmou que sai (nao tem mais assento) -> garante
+      // que o engine tambem saia do sit, mesmo se o botao nao tiver chamado
+      // exitSit por algum motivo (HMR antigo, race, etc.).
+      if (!mySeat) {
+        game?.exitSit?.();
+      }
+      return;
+    }
+
+    if (event.type === "poker-hole") {
+      context.setPokerHole(event.cards);
+      return;
+    }
+
+    if (event.type === "poker-error") {
+      context.setPokerError(event.message);
+      return;
+    }
+
+    if (event.type === "chess-state") {
+      context.setChessState(event.state);
+      const localId = context.localIdRef.current;
+      const stillSeated = !!localId && event.state.seats.some((s) => s.playerId === localId);
+      if (!stillSeated) {
+        game?.exitSit?.();
+      }
+      return;
+    }
+
+    if (event.type === "chess-error") {
+      context.setChessError(event.message);
       return;
     }
 

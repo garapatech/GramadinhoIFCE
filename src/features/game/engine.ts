@@ -32,6 +32,7 @@ import {
 import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
+import { buildBlocoTelematica } from "@/game/world/blocoTelematica/buildScene";
 import { createWorldSpatialHelpers, getDistance2D } from "@/game/world/spatial";
 import {
   CAMPUS_ENTRY_X,
@@ -108,6 +109,8 @@ export function bootGame(opts: BootGameOptions = {}) {
   const onPvpHit = asHandler(opts.onPvpHit);
   const onEspectroConsumed = asHandler(opts.onEspectroConsumed);
   const onSecretDisconnect = asHandler(opts.onSecretDisconnect);
+  const onPokerSeatInteract = asHandler(opts.onPokerSeatInteract);
+  const onChessSeatInteract = asHandler(opts.onChessSeatInteract);
   const shouldIgnoreKeys = asHandler(opts.shouldIgnoreKeys, () => false);
   const getWorldTime = asFunction(opts.getWorldTime);
   const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
@@ -669,6 +672,9 @@ for (const building of campusBuildings) {
   addBuilding(building);
 }
 
+// Bloco Telemática é construido depois que `player` existe (mais abaixo)
+// porque seu update precisa da posicao do jogador para a transparencia.
+
 // Quadra de Queimado (PvP Arena)
 const ARENA_CX = campusArena.x;
 const ARENA_CZ = campusArena.z;
@@ -735,6 +741,44 @@ const player = playerRig.group;
 world.add(player);
 playerPositionTarget = player;
 player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
+
+{
+  const bloco = buildBlocoTelematica({
+    parent: world,
+    createBlocker,
+    interactables,
+    getPlayerPosition: () => player.position,
+    onPokerSeatInteract: (seatIndex, anchor) => {
+      enterSitState(
+        { position: anchor.position, rotation: anchor.rotation },
+        {
+          persistent: true,
+          label: `mesa de pôquer (assento ${seatIndex + 1})`,
+        },
+      );
+      onPokerSeatInteract(seatIndex);
+    },
+    onChessSeatInteract: (color, anchor) => {
+      enterSitState(
+        { position: anchor.position, rotation: anchor.rotation },
+        {
+          persistent: true,
+          label: `xadrez (${color === "w" ? "brancas" : "pretas"})`,
+        },
+      );
+      onChessSeatInteract(color);
+    },
+  });
+  mapFeatures.buildings.push({
+    x: (bloco.bounds.minX + bloco.bounds.maxX) / 2,
+    z: (bloco.bounds.minZ + bloco.bounds.maxZ) / 2,
+    width: bloco.bounds.maxX - bloco.bounds.minX,
+    depth: bloco.bounds.maxZ - bloco.bounds.minZ,
+    color: 0xdbe0dd,
+    roof: 0x8b3d2c,
+  });
+}
+
 gateCheckpoint = createGateCheckpoint({
   container: container as HTMLElement | null | undefined,
   world,
@@ -1485,6 +1529,7 @@ const playerState = {
   sitLabel: "",
   sitEndMessage: "",
   sitEndSpeaker: "Banco",
+  sitPersistent: false,
   ridingBike: null,
   dancing: false,
   danceTimer: 0,
@@ -2882,6 +2927,8 @@ createNoticeBoard(-31, 9, Math.PI / 2);
 createCampusBanner(-38, 16, Math.PI / 2);
 createBall(-4, 16);
 createBike(24, 4, -Math.PI / 2);
+// Bike de cortesia logo apos a catraca, pra player ir mais rapido ate o bloco
+createBike(CAMPUS_ENTRY_X + 6, -60, -Math.PI / 2);
 createCampusBus([
   { x: -62, z: 62, dwell: 1.4 },
   { x: -12, z: 62, dwell: 0.8 },
@@ -4372,6 +4419,18 @@ function enterSitState(target, options: SitOptions = {}) {
   playerState.sitLabel = options.label ?? "banco";
   playerState.sitEndMessage = options.endMessage ?? "Voce se levantou do banco.";
   playerState.sitEndSpeaker = options.endSpeaker ?? "Banco";
+  playerState.sitPersistent = options.persistent === true;
+}
+
+function exitSit() {
+  if (!playerState.sitting) return;
+  playerState.sitting = false;
+  playerState.sitTarget = null;
+  playerState.sitLabel = "";
+  playerState.sitEndMessage = "";
+  playerState.sitEndSpeaker = "Banco";
+  playerState.sitPersistent = false;
+  playerState.sitTimer = 0;
 }
 
 function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0, wheelie = 0) {
@@ -4417,12 +4476,18 @@ function updatePlayer(dt, time) {
       label: "sentado",
       detail: `no ${playerState.sitLabel || "banco"}`
     });
-    playerState.sitTimer -= dt;
+    if (!playerState.sitPersistent) playerState.sitTimer -= dt;
     if (playerState.sitTarget) {
-      player.position.lerp(playerState.sitTarget.position, 0.12);
-      player.rotation.y = lerpAngle(player.rotation.y, playerState.sitTarget.rotation, 0.12);
+      const target = playerState.sitTarget;
+      const t = 0.12;
+      player.position.x += (target.position.x - player.position.x) * t;
+      player.position.z += (target.position.z - player.position.z) * t;
+      // Y eh snapado direto: o bloco superior adiciona playerFloorY depois,
+      // e lerpar o Y junto com X/Z faz o valor divergir no andar superior.
+      player.position.y = target.position.y;
+      player.rotation.y = lerpAngle(player.rotation.y, target.rotation, t);
     }
-    if (playerState.sitTimer <= 0) {
+    if (!playerState.sitPersistent && playerState.sitTimer <= 0) {
       playerState.sitting = false;
       playerState.sitTarget = null;
       speechOverlay.speak(playerState.sitEndMessage || "Voce se levantou.", playerState.sitEndSpeaker || "Banco");
@@ -5210,7 +5275,11 @@ function updateNpc(npc, dt, time) {
 function updateInteractionUI() {
   if (playerState.sitting) {
     const rideLabel = playerState.sitLabel || "banco";
-    speechOverlay.setStatus(`No ${rideLabel} • faltam ${formatSeconds(playerState.sitTimer)} para descer.`);
+    if (playerState.sitPersistent) {
+      speechOverlay.setStatus(`Sentado na ${rideLabel} • clique em "Sair da mesa" pra levantar.`);
+    } else {
+      speechOverlay.setStatus(`No ${rideLabel} • faltam ${formatSeconds(playerState.sitTimer)} para descer.`);
+    }
     speechOverlay.clearSpeech();
     return;
   }
@@ -5237,6 +5306,28 @@ function updateInteractionUI() {
   if (target.lines) {
     if (speechEl && speechEl.dataset.locked !== "1") {
       speechOverlay.showSpeech(target.previewLine, target.name, "[E] falar");
+    }
+    return;
+  }
+
+  if (target.kind === "poker-seat") {
+    if (speechEl && speechEl.dataset.locked !== "1") {
+      speechOverlay.showSpeech(
+        "Sentar na mesa de pôquer",
+        target.label || "Mesa de pôquer",
+        "[E] sentar",
+      );
+    }
+    return;
+  }
+
+  if (target.kind === "chess-seat") {
+    if (speechEl && speechEl.dataset.locked !== "1") {
+      speechOverlay.showSpeech(
+        "Sentar pra jogar xadrez",
+        target.label || "Xadrez",
+        "[E] sentar",
+      );
     }
     return;
   }
@@ -5612,6 +5703,7 @@ function destroy() {
     queueMobilePvpThrow,
     espectroSpawn: (payload) => espectroEvent?.spawn(payload),
     espectroDespawn: () => espectroEvent?.despawn(),
+    exitSit,
   };
 }
 

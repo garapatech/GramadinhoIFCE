@@ -20,6 +20,9 @@ export interface BootGameOptions {
   onPvpHit?: (matchId: string, victimId: string) => void;
   onEspectroConsumed?: (seed: number) => void;
   onSecretDisconnect?: () => void;
+  onPokerSeatInteract?: (seatIndex: number) => void;
+  onChessSeatInteract?: (color: "w" | "b") => void;
+  // anchor opcional usado pelo engine pra sentar visualmente
 }
 
 export interface Blocker {
@@ -56,4 +59,5 @@ export interface SitOptions {
   label?: string;
   endMessage?: string;
   endSpeaker?: string;
+  persistent?: boolean;
 }

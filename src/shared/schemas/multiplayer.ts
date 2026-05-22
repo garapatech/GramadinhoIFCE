@@ -237,6 +237,169 @@ export const socketOutboundVoiceSignalSchema = z
   })
   .strict();
 
+// ---- Pôquer ----
+export const pokerSuitSchema = z.enum(["S", "H", "D", "C"]);
+export const pokerCardSchema = z
+  .object({
+    rank: z.number().int().min(2).max(14),
+    suit: pokerSuitSchema,
+  })
+  .strict();
+
+export const pokerPhaseSchema = z.enum([
+  "waiting",
+  "preflop",
+  "flop",
+  "turn",
+  "river",
+  "showdown",
+]);
+
+export const pokerActionKindSchema = z.enum([
+  "fold",
+  "check",
+  "call",
+  "raise",
+  "allin",
+]);
+
+export const pokerSeatPublicSchema = z
+  .object({
+    index: z.number().int().min(0).max(15),
+    playerId: z.string().min(1).max(128).nullable(),
+    nick: z.string().max(16),
+    chips: z.number().int().nonnegative(),
+    inHand: z.boolean(),
+    folded: z.boolean(),
+    allIn: z.boolean(),
+    betThisRound: z.number().int().nonnegative(),
+    totalBetInHand: z.number().int().nonnegative(),
+    hasActedThisRound: z.boolean(),
+    showCards: z.array(pokerCardSchema).nullable(),
+  })
+  .strict();
+
+export const pokerWinnerSummarySchema = z
+  .object({
+    seatIndex: z.number().int().min(0).max(15),
+    nick: z.string().max(16),
+    amount: z.number().int().nonnegative(),
+    handName: z.string().max(40),
+    cards: z.array(pokerCardSchema),
+  })
+  .strict();
+
+export const pokerPublicStateSchema = z
+  .object({
+    phase: pokerPhaseSchema,
+    seats: z.array(pokerSeatPublicSchema),
+    pot: z.number().int().nonnegative(),
+    community: z.array(pokerCardSchema),
+    currentBet: z.number().int().nonnegative(),
+    minRaise: z.number().int().nonnegative(),
+    toActIndex: z.number().int().min(0).max(15).nullable(),
+    dealerIndex: z.number().int().min(0).max(15).nullable(),
+    smallBlindIndex: z.number().int().min(0).max(15).nullable(),
+    bigBlindIndex: z.number().int().min(0).max(15).nullable(),
+    smallBlind: z.number().int().nonnegative(),
+    bigBlind: z.number().int().nonnegative(),
+    lastWinners: z.array(pokerWinnerSummarySchema),
+    log: z.array(z.string().max(120)),
+  })
+  .strict();
+
+export const socketOutboundPokerSitSchema = z
+  .object({
+    type: z.literal("poker-sit"),
+    seatIndex: z.number().int().min(0).max(15),
+  })
+  .strict();
+
+export const socketOutboundPokerStandSchema = z
+  .object({ type: z.literal("poker-stand") })
+  .strict();
+
+export const socketOutboundPokerActionSchema = z
+  .object({
+    type: z.literal("poker-action"),
+    action: pokerActionKindSchema,
+    amount: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export const socketOutboundPokerStartSchema = z
+  .object({ type: z.literal("poker-start") })
+  .strict();
+
+// ---- Xadrez ----
+export const chessColorSchema = z.enum(["w", "b"]);
+export const chessPieceKindSchema = z.enum(["P", "N", "B", "R", "Q", "K"]);
+export const chessPieceSchema = z
+  .object({ color: chessColorSchema, kind: chessPieceKindSchema })
+  .strict();
+export const chessSquareSchema = z
+  .object({
+    file: z.number().int().min(0).max(7),
+    rank: z.number().int().min(0).max(7),
+  })
+  .strict();
+export const chessPhaseSchema = z.enum(["waiting", "playing", "ended"]);
+export const chessSeatPublicSchema = z
+  .object({
+    color: chessColorSchema,
+    playerId: z.string().min(1).max(128).nullable(),
+    nick: z.string().max(16),
+  })
+  .strict();
+export const chessMoveRecordSchema = z
+  .object({
+    piece: chessPieceKindSchema,
+    from: chessSquareSchema,
+    to: chessSquareSchema,
+    captured: chessPieceKindSchema.nullable(),
+    promoted: chessPieceKindSchema.nullable(),
+    san: z.string().max(20),
+  })
+  .strict();
+export const chessPublicStateSchema = z
+  .object({
+    phase: chessPhaseSchema,
+    seats: z.array(chessSeatPublicSchema).length(2),
+    board: z.array(z.array(chessPieceSchema.nullable()).length(8)).length(8),
+    turn: chessColorSchema,
+    moves: z.array(chessMoveRecordSchema),
+    capturedByWhite: z.array(chessPieceKindSchema),
+    capturedByBlack: z.array(chessPieceKindSchema),
+    inCheck: chessColorSchema.nullable(),
+    result: z.enum(["white", "black", "draw"]).nullable(),
+    resultReason: z.string().max(40).nullable(),
+    log: z.array(z.string().max(120)),
+  })
+  .strict();
+
+export const socketOutboundChessSitSchema = z
+  .object({
+    type: z.literal("chess-sit"),
+    color: chessColorSchema,
+  })
+  .strict();
+
+export const socketOutboundChessStandSchema = z
+  .object({ type: z.literal("chess-stand") })
+  .strict();
+
+export const socketOutboundChessMoveSchema = z
+  .object({
+    type: z.literal("chess-move"),
+    from: chessSquareSchema,
+    to: chessSquareSchema,
+  })
+  .strict();
+
+export const socketOutboundChessResetSchema = z
+  .object({ type: z.literal("chess-reset") })
+  .strict();
+
 export const socketOutboundMessageSchema = z.discriminatedUnion("type", [
   socketOutboundJoinSchema,
   socketOutboundStateSchema,
@@ -253,6 +416,14 @@ export const socketOutboundMessageSchema = z.discriminatedUnion("type", [
   socketOutboundPvpQuitSchema,
   socketOutboundEspectroConsumedSchema,
   socketOutboundVoiceSignalSchema,
+  socketOutboundPokerSitSchema,
+  socketOutboundPokerStandSchema,
+  socketOutboundPokerActionSchema,
+  socketOutboundPokerStartSchema,
+  socketOutboundChessSitSchema,
+  socketOutboundChessStandSchema,
+  socketOutboundChessMoveSchema,
+  socketOutboundChessResetSchema,
 ]);
 
 const socketPlayerStateSchema = playerSnapshotSchema;
@@ -458,6 +629,42 @@ const socketReactionMessageSchema = z
   })
   .strict();
 
+const socketPokerStateMessageSchema = z
+  .object({
+    type: z.literal("poker-state"),
+    state: pokerPublicStateSchema,
+  })
+  .strict();
+
+const socketPokerHoleMessageSchema = z
+  .object({
+    type: z.literal("poker-hole"),
+    seatIndex: z.number().int().min(0).max(15),
+    cards: z.array(pokerCardSchema).length(2),
+  })
+  .strict();
+
+const socketPokerErrorMessageSchema = z
+  .object({
+    type: z.literal("poker-error"),
+    message: z.string().max(160),
+  })
+  .strict();
+
+const socketChessStateMessageSchema = z
+  .object({
+    type: z.literal("chess-state"),
+    state: chessPublicStateSchema,
+  })
+  .strict();
+
+const socketChessErrorMessageSchema = z
+  .object({
+    type: z.literal("chess-error"),
+    message: z.string().max(160),
+  })
+  .strict();
+
 export const socketInboundMessageSchema = z.discriminatedUnion("type", [
   socketInitMessageSchema,
   socketClockMessageSchema,
@@ -481,6 +688,11 @@ export const socketInboundMessageSchema = z.discriminatedUnion("type", [
   socketEspectroSpawnMessageSchema,
   socketEspectroDespawnMessageSchema,
   socketReactionMessageSchema,
+  socketPokerStateMessageSchema,
+  socketPokerHoleMessageSchema,
+  socketPokerErrorMessageSchema,
+  socketChessStateMessageSchema,
+  socketChessErrorMessageSchema,
 ]);
 
 export const socketConnectionEventSchema = z.discriminatedUnion("type", [

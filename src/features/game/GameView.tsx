@@ -8,6 +8,8 @@ import VoiceChat from "@/features/multiplayer/VoiceChat";
 import { readStoredAvatar } from "@/features/avatar/avatarConfig";
 import { bootGame } from "@/features/game/engine";
 import OnlinePlayersPanel from "@/features/game/OnlinePlayersPanel";
+import PokerHud from "@/features/game/PokerHud";
+import ChessHud from "@/features/game/ChessHud";
 import { createPvpCountdownController } from "@/features/game/pvpCountdown";
 import {
   patchOnlinePlayer,
@@ -66,6 +68,13 @@ export default function GameView() {
     detail: "vagando pelo campus",
   });
   const [espectroNotice, setEspectroNotice] = useState("");
+  const [pokerState, setPokerState] = useState(null);
+  const [pokerHole, setPokerHole] = useState(null);
+  const [pokerError, setPokerError] = useState(null);
+  const [pokerHudOpen, setPokerHudOpen] = useState(false);
+  const [chessState, setChessState] = useState(null);
+  const [chessError, setChessError] = useState(null);
+  const [chessHudOpen, setChessHudOpen] = useState(false);
   const espectroNoticeTimerRef = useRef(null);
   const chatFocusedRef = useRef(false);
   const mediaFocusedRef = useRef(false);
@@ -167,6 +176,11 @@ export default function GameView() {
       setChatMessages,
       setPvpState,
       setEspectroNotice,
+      setPokerState,
+      setPokerHole,
+      setPokerError,
+      setChessState,
+      setChessError,
     });
 
     function boot() {
@@ -223,6 +237,14 @@ export default function GameView() {
         },
         onMediaBoothInteract: () => {
           setMediaPanelOpen(true);
+        },
+        onPokerSeatInteract: (seatIndex) => {
+          multiplayer?.sendPokerSit?.(seatIndex);
+          setPokerHudOpen(true);
+        },
+        onChessSeatInteract: (color) => {
+          multiplayer?.sendChessSit?.(color);
+          setChessHudOpen(true);
         },
         onPvpThrow: (matchId, dx, dz, x, z) => {
           multiplayer.sendPvpThrow(matchId, dx, dz, x, z);
@@ -430,6 +452,48 @@ export default function GameView() {
             />
           </div>
         </div>
+
+        {pokerHudOpen && (
+          <PokerHud
+            state={pokerState}
+            holeCards={pokerHole}
+            localId={localIdRef.current}
+            errorMessage={pokerError}
+            onStand={() => {
+              gameApiRef.current?.exitSit?.();
+              multiplayerRef.current?.sendPokerStand?.();
+              setPokerHole(null);
+              setPokerHudOpen(false);
+            }}
+            onAction={(action, amount) => {
+              multiplayerRef.current?.sendPokerAction?.(action, amount);
+            }}
+            onDismissError={() => setPokerError(null)}
+          />
+        )}
+
+        {chessHudOpen && (
+          <ChessHud
+            state={chessState}
+            localId={localIdRef.current}
+            errorMessage={chessError}
+            onSit={(color) => {
+              multiplayerRef.current?.sendChessSit?.(color);
+            }}
+            onStand={() => {
+              gameApiRef.current?.exitSit?.();
+              multiplayerRef.current?.sendChessStand?.();
+              setChessHudOpen(false);
+            }}
+            onMove={(from, to) => {
+              multiplayerRef.current?.sendChessMove?.(from, to);
+            }}
+            onReset={() => {
+              multiplayerRef.current?.sendChessReset?.();
+            }}
+            onDismissError={() => setChessError(null)}
+          />
+        )}
 
         <div className="game-bottom-row">
           <Chat

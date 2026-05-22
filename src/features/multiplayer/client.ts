@@ -41,6 +41,20 @@ type MultiplayerConnection = {
   sendEspectroConsumed: (seed: string | number | null | undefined) => void;
   sendVoiceReady: (enabled: boolean, muted?: boolean) => void;
   sendVoiceSignal: (target: string, signal: VoiceSignal) => void;
+  sendPokerSit: (seatIndex: number) => void;
+  sendPokerStand: () => void;
+  sendPokerAction: (
+    action: "fold" | "check" | "call" | "raise" | "allin",
+    amount?: number
+  ) => void;
+  sendPokerStart: () => void;
+  sendChessSit: (color: "w" | "b") => void;
+  sendChessStand: () => void;
+  sendChessMove: (
+    from: { file: number; rank: number },
+    to: { file: number; rank: number },
+  ) => void;
+  sendChessReset: () => void;
   close: () => void;
   readonly socket: PartySocket;
   isOpen: () => boolean;
@@ -179,6 +193,50 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     });
   }
 
+  function sendPokerSit(seatIndex: number) {
+    if (!Number.isInteger(seatIndex) || seatIndex < 0) return;
+    sendMessage({ type: "poker-sit", seatIndex });
+  }
+
+  function sendPokerStand() {
+    sendMessage({ type: "poker-stand" });
+  }
+
+  function sendPokerAction(
+    action: "fold" | "check" | "call" | "raise" | "allin",
+    amount?: number,
+  ) {
+    if (action === "raise") {
+      if (amount == null || !Number.isFinite(amount) || amount <= 0) return;
+      sendMessage({ type: "poker-action", action, amount: Math.floor(amount) });
+    } else {
+      sendMessage({ type: "poker-action", action });
+    }
+  }
+
+  function sendPokerStart() {
+    sendMessage({ type: "poker-start" });
+  }
+
+  function sendChessSit(color: "w" | "b") {
+    sendMessage({ type: "chess-sit", color });
+  }
+
+  function sendChessStand() {
+    sendMessage({ type: "chess-stand" });
+  }
+
+  function sendChessMove(
+    from: { file: number; rank: number },
+    to: { file: number; rank: number },
+  ) {
+    sendMessage({ type: "chess-move", from, to });
+  }
+
+  function sendChessReset() {
+    sendMessage({ type: "chess-reset" });
+  }
+
   function close() {
     try {
       socket.close();
@@ -202,6 +260,14 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendEspectroConsumed,
     sendVoiceReady,
     sendVoiceSignal,
+    sendPokerSit,
+    sendPokerStand,
+    sendPokerAction,
+    sendPokerStart,
+    sendChessSit,
+    sendChessStand,
+    sendChessMove,
+    sendChessReset,
     close,
     get socket() {
       return socket;
