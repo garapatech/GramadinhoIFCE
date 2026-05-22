@@ -112,6 +112,10 @@ export type BlocoTelematicaOptions = {
   createBlocker?: AddBlocker;
   interactables?: Interactable[];
   getPlayerPosition?: () => THREE.Vector3;
+  onPokerSeatInteract?: (
+    seatIndex: number,
+    anchor: { position: THREE.Vector3; rotation: number },
+  ) => void;
 };
 
 function makeLabelSprite(text: string) {
@@ -777,6 +781,174 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       const board = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.2, 3.4), chalkMat);
       board.position.set(latimXMin + 0.05, storyY + 1.5, latimCz);
       storyGroup.add(board);
+
+      // -------- Mesa de pôquer no centro do LATIM --------
+      const pokerCx = latimCx;
+      const pokerCz = latimCz;
+      const tableRadius = 1.4;
+      const rimRadius = tableRadius + 0.15;
+      const tableTopY = storyY + 0.78;
+      const tableTopThick = 0.06;
+
+      const feltMat = new THREE.MeshStandardMaterial({ color: 0x0d6b3d, roughness: 0.95 });
+      const rimMat = new THREE.MeshStandardMaterial({ color: 0x3a1f10, roughness: 0.75 });
+      const chipRedMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6 });
+      const chipBlueMat = new THREE.MeshStandardMaterial({ color: 0x2a6fb5, roughness: 0.6 });
+      const chipWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.55 });
+      const cardFaceMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.5 });
+      const cardBackMat = new THREE.MeshStandardMaterial({ color: 0x8c1c1c, roughness: 0.5 });
+
+      // Base larga no chão
+      const baseDisc = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.55, 0.6, 0.08, 16),
+        darkWoodMat,
+      );
+      baseDisc.position.set(pokerCx, storyY + 0.04, pokerCz);
+      baseDisc.receiveShadow = true;
+      storyGroup.add(baseDisc);
+
+      // Pedestal
+      const pedestalH = tableTopY - storyY - tableTopThick - 0.08;
+      const pedestal = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.18, 0.32, pedestalH, 12),
+        darkWoodMat,
+      );
+      pedestal.position.set(pokerCx, storyY + 0.08 + pedestalH / 2, pokerCz);
+      pedestal.castShadow = true;
+      storyGroup.add(pedestal);
+
+      // Tampo (feltro verde)
+      const tableTop = new THREE.Mesh(
+        new THREE.CylinderGeometry(tableRadius, tableRadius, tableTopThick, 32),
+        feltMat,
+      );
+      tableTop.position.set(pokerCx, tableTopY, pokerCz);
+      tableTop.castShadow = true;
+      tableTop.receiveShadow = true;
+      storyGroup.add(tableTop);
+
+      // Borda de madeira (anel)
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(tableRadius + 0.07, 0.08, 10, 40),
+        rimMat,
+      );
+      rim.position.set(pokerCx, tableTopY + tableTopThick / 2, pokerCz);
+      rim.rotation.x = Math.PI / 2;
+      rim.castShadow = true;
+      storyGroup.add(rim);
+
+      // Bloqueio físico no tampo (player não atravessa a mesa)
+      registerInnerBlocker(
+        pokerCx - rimRadius, pokerCx + rimRadius,
+        pokerCz - rimRadius, pokerCz + rimRadius,
+      );
+
+      // 5 cartas comunitárias decorativas (algumas viradas)
+      for (let c = 0; c < 5; c++) {
+        const faceUp = c < 3;
+        const card = new THREE.Mesh(
+          new THREE.BoxGeometry(0.16, 0.005, 0.22),
+          faceUp ? cardFaceMat : cardBackMat,
+        );
+        card.position.set(
+          pokerCx - 0.4 + c * 0.2,
+          tableTopY + tableTopThick / 2 + 0.004,
+          pokerCz - 0.15,
+        );
+        storyGroup.add(card);
+      }
+
+      // Pilhas de fichas em 4 pontos
+      const chipMats = [chipRedMat, chipBlueMat, chipWhiteMat];
+      for (let s = 0; s < 4; s++) {
+        const a = (s / 4) * Math.PI * 2 + Math.PI / 4;
+        const stackX = pokerCx + Math.cos(a) * 0.7;
+        const stackZ = pokerCz + Math.sin(a) * 0.7;
+        for (let k = 0; k < 5; k++) {
+          const mat = chipMats[(s + k) % chipMats.length];
+          const chip = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.06, 0.06, 0.018, 12),
+            mat,
+          );
+          chip.position.set(
+            stackX,
+            tableTopY + tableTopThick / 2 + 0.011 + k * 0.019,
+            stackZ,
+          );
+          storyGroup.add(chip);
+        }
+      }
+
+      // Dealer puck
+      const dealer = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.09, 0.09, 0.02, 18),
+        chipWhiteMat,
+      );
+      dealer.position.set(pokerCx + 0.4, tableTopY + tableTopThick / 2 + 0.012, pokerCz + 0.45);
+      storyGroup.add(dealer);
+
+      // 6 cadeiras ao redor + interactables (cada assento dispara onPokerSeatInteract)
+      const seatRadius = rimRadius + 0.95;
+      const seatCount = 6;
+      for (let i = 0; i < seatCount; i++) {
+        const angle = (i / seatCount) * Math.PI * 2 + Math.PI / 6;
+        const sx = pokerCx + Math.cos(angle) * seatRadius;
+        const sz = pokerCz + Math.sin(angle) * seatRadius;
+        // Cadeira olha pra mesa
+        const facing = Math.atan2(pokerCx - sx, pokerCz - sz);
+
+        const seatGroup = new THREE.Group();
+        seatGroup.position.set(sx, storyY, sz);
+        seatGroup.rotation.y = facing;
+        storyGroup.add(seatGroup);
+
+        const seat = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.08, 0.55),
+          roomChairMat,
+        );
+        seat.position.set(0, 0.45, 0);
+        seat.castShadow = true;
+        seatGroup.add(seat);
+
+        const back = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 0.6, 0.08),
+          roomChairMat,
+        );
+        back.position.set(0, 0.79, -0.24);
+        back.castShadow = true;
+        seatGroup.add(back);
+
+        for (const dx of [-0.22, 0.22]) for (const dz of [-0.22, 0.22]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.45, 0.05), darkWoodMat);
+          leg.position.set(dx, 0.225, dz);
+          seatGroup.add(leg);
+        }
+
+        // Placa numérica acima do encosto
+        const seatLabel = makeLabelSprite(`Assento ${i + 1}`);
+        seatLabel.position.set(0, 1.45, -0.1);
+        seatLabel.scale.multiplyScalar(0.6);
+        seatGroup.add(seatLabel);
+
+        if (interactables) {
+          const seatIndex = i;
+          const anchorWorld = new THREE.Vector3(centerX + sx, 0, centerZ + sz);
+          interactables.push({
+            kind: "poker-seat",
+            label: `Sentar na mesa de pôquer (assento ${seatIndex + 1})`,
+            radius: 1.1,
+            position: new THREE.Vector3(centerX + sx, tableTopY, centerZ + sz),
+            root: seatGroup,
+            npcDisabled: () => true,
+            interact: () => {
+              options.onPokerSeatInteract?.(seatIndex, {
+                position: anchorWorld,
+                rotation: facing,
+              });
+            },
+          });
+        }
+      }
     }
 
     // -------- Lab. de Redes Wireless (sala media no leste do superior) --------

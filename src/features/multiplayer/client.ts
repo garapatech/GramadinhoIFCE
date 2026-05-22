@@ -41,6 +41,13 @@ type MultiplayerConnection = {
   sendEspectroConsumed: (seed: string | number | null | undefined) => void;
   sendVoiceReady: (enabled: boolean, muted?: boolean) => void;
   sendVoiceSignal: (target: string, signal: VoiceSignal) => void;
+  sendPokerSit: (seatIndex: number) => void;
+  sendPokerStand: () => void;
+  sendPokerAction: (
+    action: "fold" | "check" | "call" | "raise" | "allin",
+    amount?: number
+  ) => void;
+  sendPokerStart: () => void;
   close: () => void;
   readonly socket: PartySocket;
   isOpen: () => boolean;
@@ -179,6 +186,31 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     });
   }
 
+  function sendPokerSit(seatIndex: number) {
+    if (!Number.isInteger(seatIndex) || seatIndex < 0) return;
+    sendMessage({ type: "poker-sit", seatIndex });
+  }
+
+  function sendPokerStand() {
+    sendMessage({ type: "poker-stand" });
+  }
+
+  function sendPokerAction(
+    action: "fold" | "check" | "call" | "raise" | "allin",
+    amount?: number,
+  ) {
+    if (action === "raise") {
+      if (amount == null || !Number.isFinite(amount) || amount <= 0) return;
+      sendMessage({ type: "poker-action", action, amount: Math.floor(amount) });
+    } else {
+      sendMessage({ type: "poker-action", action });
+    }
+  }
+
+  function sendPokerStart() {
+    sendMessage({ type: "poker-start" });
+  }
+
   function close() {
     try {
       socket.close();
@@ -202,6 +234,10 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendEspectroConsumed,
     sendVoiceReady,
     sendVoiceSignal,
+    sendPokerSit,
+    sendPokerStand,
+    sendPokerAction,
+    sendPokerStart,
     close,
     get socket() {
       return socket;
