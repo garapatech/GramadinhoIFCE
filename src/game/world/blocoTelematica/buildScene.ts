@@ -308,6 +308,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   function classifyRoom(text: string): RoomType {
     const t = text.toLowerCase();
+    // Labs especiais com nomes proprios
+    if (
+      t === "ltap" || t === "lasic" ||
+      t.startsWith("núcleo") || t.startsWith("nucleo")
+    ) return "lab";
     if (t.includes("w.c") || t.includes("banheiro")) return "bathroom";
     if (t.includes("reunio") || t.includes("reuniões") || t.includes("reuniao")) return "meeting";
     if (t.includes("professor")) return "breakroom";
@@ -509,23 +514,33 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       storyGroup.add(mesh);
     };
 
-    // LATIM eh sala gigante so no superior: ocupa todo o extremo oeste do
-    // ala esquerda (do muro externo ate uma parede com porta em x=-29).
-    // Atravessa o corredor — norte+sul viram uma sala so.
+    // No superior, dois labs gigantes ocupam os extremos das alas
+    // (atravessam o corredor — viram uma sala so):
+    //  - LATIM no oeste, com parede divisoria em x=-29
+    //  - Laboratorio de Redes Wireless no leste, parede em x=+38
     const isSuperior = storyY > 0.001;
     const LATIM_EAST_X = -29;
+    const WIRELESS_WEST_X = 38;
     const hasLatim = isSuperior;
-    const latimLeftOuterX = hasLatim ? LATIM_EAST_X : (-halfW + WALL_THICKNESS);
+    const hasWireless = isSuperior;
 
-    // No superior, filtramos rooms cujo worldX < LATIM_EAST_X (LATIM
-    // sozinho fica nessa faixa, sem subdivisoes de fileira).
     const leftRooms = rooms.filter(
       (r) => r.worldX < -LOUNGE_HALF_WIDTH && (!hasLatim || r.worldX > LATIM_EAST_X),
     );
-    const rightRooms = rooms.filter((r) => r.worldX > LOUNGE_HALF_WIDTH);
+    const rightRooms = rooms.filter(
+      (r) => r.worldX > LOUNGE_HALF_WIDTH && (!hasWireless || r.worldX < WIRELESS_WEST_X),
+    );
     const wings: Wing[] = [
-      { rooms: leftRooms, outerX: latimLeftOuterX, loungeX: -LOUNGE_HALF_WIDTH },
-      { rooms: rightRooms, outerX: halfW - WALL_THICKNESS, loungeX: LOUNGE_HALF_WIDTH },
+      {
+        rooms: leftRooms,
+        outerX: hasLatim ? LATIM_EAST_X : (-halfW + WALL_THICKNESS),
+        loungeX: -LOUNGE_HALF_WIDTH,
+      },
+      {
+        rooms: rightRooms,
+        outerX: hasWireless ? WIRELESS_WEST_X : (halfW - WALL_THICKNESS),
+        loungeX: LOUNGE_HALF_WIDTH,
+      },
     ];
 
     const wallH = STORY_HEIGHT;
@@ -738,6 +753,84 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       storyGroup.add(board);
     }
 
+    // -------- Lab. de Redes Wireless (sala media no leste do superior) --------
+    if (hasWireless) {
+      const wXMin = WIRELESS_WEST_X;
+      const wXMax = halfW - WALL_THICKNESS;
+      const wZMin = -halfD + WALL_THICKNESS;
+      const wZMax = halfD - WALL_THICKNESS;
+      const wCx = (wXMin + wXMax) / 2;
+      const wCz = (wZMin + wZMax) / 2;
+      const wWidth = wXMax - wXMin;
+
+      // Parede divisoria oeste com porta de 1.6m centrada em z=0
+      const doorW = 1.6;
+      const northSegDepth = -doorW / 2 - wZMin;
+      const northSegZ = (wZMin + (-doorW / 2)) / 2;
+      const southSegDepth = wZMax - doorW / 2;
+      const southSegZ = (doorW / 2 + wZMax) / 2;
+      addStoryBox(
+        INNER_WALL_THICKNESS, wallH, northSegDepth,
+        wXMin, storyY + wallH / 2, northSegZ, innerMat,
+      );
+      addStoryBox(
+        INNER_WALL_THICKNESS, wallH, southSegDepth,
+        wXMin, storyY + wallH / 2, southSegZ, innerMat,
+      );
+      registerInnerBlocker(wXMin - t2, wXMin + t2, wZMin, -doorW / 2);
+      registerInnerBlocker(wXMin - t2, wXMin + t2, doorW / 2, wZMax);
+
+      // Label da sala
+      const sprite = makeLabelSprite("Laboratório de Redes Wireless");
+      sprite.position.set(wCx, storyY + wallH - 0.6, wCz);
+      sprite.scale.multiplyScalar(1.2);
+      storyGroup.add(sprite);
+
+      // Bancadas com PCs em duas fileiras (norte + sul), sala menor
+      // entao numero menor de PCs
+      const pcsPerRow = Math.max(2, Math.floor(wWidth / 2.2));
+      const pcStepX = wWidth / (pcsPerRow + 1);
+      for (const pcZ of [wZMin + 1.6, wZMax - 1.6]) {
+        const facing = pcZ < 0 ? 0 : Math.PI;
+        for (let i = 0; i < pcsPerRow; i++) {
+          const px = wXMin + pcStepX * (i + 1);
+          const bench = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.04, 0.65), woodMat);
+          bench.position.set(px, storyY + 0.78, pcZ);
+          bench.castShadow = true;
+          storyGroup.add(bench);
+          for (const lx of [-0.42, 0.42]) for (const lz of [-0.27, 0.27]) {
+            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.78, 0.06), darkWoodMat);
+            leg.position.set(px + lx, storyY + 0.39, pcZ + lz);
+            storyGroup.add(leg);
+          }
+          const monBack = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.42, 0.06), monitorMat);
+          monBack.position.set(px - Math.cos(facing) * 0.18, storyY + 1.05, pcZ - Math.sin(facing) * 0.18);
+          monBack.rotation.y = facing;
+          monBack.castShadow = true;
+          storyGroup.add(monBack);
+          const monScreen = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.36, 0.012), screenMat);
+          monScreen.position.copy(monBack.position);
+          monScreen.rotation.y = facing;
+          monScreen.translateZ(0.04);
+          storyGroup.add(monScreen);
+          const cpu = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.4, 0.34), pcCaseMat);
+          cpu.position.set(px + 0.32, storyY + 0.98, pcZ + 0.08);
+          cpu.castShadow = true;
+          storyGroup.add(cpu);
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.05, 0.5), roomChairMat);
+          const chairOffset = pcZ < 0 ? 0.7 : -0.7;
+          seat.position.set(px, storyY + 0.48, pcZ + chairOffset);
+          seat.castShadow = true;
+          storyGroup.add(seat);
+        }
+      }
+
+      // Antenas / roteador decorativo na parede leste
+      const router = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.4, 0.6), monitorMat);
+      router.position.set(wXMax - 0.05, storyY + 2.5, wCz);
+      storyGroup.add(router);
+    }
+
     return storyBlockers;
   }
 
@@ -748,8 +841,44 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   superiorStoryGroup.name = "blocoTelematica.superior";
   group.add(superiorStoryGroup);
 
+  // Atualizacoes recentes no superior: Sala 06 + Sala 07 viraram um lab
+  // unico (LTAP); Coord. de TI virou LASIC; LPA virou Nucleo de Redes
+  // Operacionais. Aplicamos essas trocas na lista de rooms antes de
+  // construir as paredes.
+  const transformSuperior = (rooms: Room[]): Room[] => {
+    let sala06: Room | null = null;
+    let sala07: Room | null = null;
+    const out: Room[] = [];
+    for (const r of rooms) {
+      const t = r.label.text;
+      if (t === "Sala de Aula 06") { sala06 = r; continue; }
+      if (t === "Sala de Aula 07") { sala07 = r; continue; }
+      if (t === "Coordenação de T.i") {
+        out.push({ ...r, label: { ...r.label, text: "LASIC" } });
+        continue;
+      }
+      if (t === "Laboratório de Pesquisas Aplicadas (LPA)") {
+        out.push({ ...r, label: { ...r.label, text: "Núcleo de Redes Operacionais" } });
+        continue;
+      }
+      out.push(r);
+    }
+    if (sala06 || sala07) {
+      const base = (sala06 ?? sala07) as Room;
+      const worldX = sala06 && sala07
+        ? (sala06.worldX + sala07.worldX) / 2
+        : base.worldX;
+      out.push({
+        label: { ...base.label, text: "LTAP" },
+        row: base.row,
+        worldX,
+      });
+    }
+    return out;
+  };
+
   const terreoBlockers = buildStoryRooms(buildRoomList(terreoPlanta), 0, terreoStoryGroup);
-  const superiorBlockers = buildStoryRooms(buildRoomList(superiorPlanta), STORY_HEIGHT, superiorStoryGroup);
+  const superiorBlockers = buildStoryRooms(transformSuperior(buildRoomList(superiorPlanta)), STORY_HEIGHT, superiorStoryGroup);
 
   // -------- Laje intermediaria + teto --------
   // Laje cobre todo o footprint menos o vao da escada (no canto NE).
