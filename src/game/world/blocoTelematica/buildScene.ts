@@ -22,8 +22,14 @@ const CORRIDOR_DEPTH = 4; // corredor central bem mais largo
 // Trecho central reservado para lounge (cadeiras/mesa, sem salas). 12m de
 // largura no centro do corredor.
 const LOUNGE_HALF_WIDTH = 6;
-// Trecho da ponta leste reservado pra escada (sem salas).
-const STAIR_END_WIDTH = 8;
+
+// Escada pequena no canto nordeste do lounge, orientada de lado: os degraus
+// crescem ao longo de X (player sobe caminhando pro leste). Profundidade
+// em Z, comprimento em X.
+const STAIR_LENGTH = 4.2; // ao longo de X (direcao de subida)
+const STAIR_DEPTH = 2.6;  // ao longo de Z (largura)
+const STAIR_CENTER_X = 3; // ~metade leste do lounge (LOUNGE_HALF_WIDTH=6)
+const STAIR_CENTER_Z = -BLOCO_DEPTH / 2 + 0.4 + STAIR_DEPTH / 2; // encostado na parede norte
 const STORY_HEIGHT = 3.6;
 const STORIES = 2;
 const TOTAL_HEIGHT = STORY_HEIGHT * STORIES;
@@ -280,11 +286,9 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   // -------- Salas (paredes internas) --------
   // Layout em T: o bloco eh um retangulo, mas dentro tem duas asas de salas
-  // (oeste e leste do lounge central) e o "pe do T" eh o lounge — ocupa
-  // toda a profundidade no centro do bloco, sem paredes internas. A
-  // escada fica na ponta leste, atras de uma parede divisoria.
-  const STAIR_END_MIN_X = halfW - STAIR_END_WIDTH;
-
+  // (oeste e leste do lounge central) e o "pe do T" eh o lounge.
+  // A escada (pequena) fica agora no centro do lounge, contra a parede
+  // norte; as alas vao ate as paredes externas leste/oeste.
   type Wing = {
     rooms: Room[];
     outerX: number;   // borda virada pro lado de fora do bloco (parede externa)
@@ -323,12 +327,10 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     };
 
     const leftRooms = rooms.filter((r) => r.worldX < -LOUNGE_HALF_WIDTH);
-    const rightRooms = rooms.filter(
-      (r) => r.worldX > LOUNGE_HALF_WIDTH && r.worldX < STAIR_END_MIN_X - 0.5,
-    );
+    const rightRooms = rooms.filter((r) => r.worldX > LOUNGE_HALF_WIDTH);
     const wings: Wing[] = [
       { rooms: leftRooms, outerX: -halfW + WALL_THICKNESS, loungeX: -LOUNGE_HALF_WIDTH },
-      { rooms: rightRooms, outerX: STAIR_END_MIN_X, loungeX: LOUNGE_HALF_WIDTH },
+      { rooms: rightRooms, outerX: halfW - WALL_THICKNESS, loungeX: LOUNGE_HALF_WIDTH },
     ];
 
     const wallH = STORY_HEIGHT;
@@ -426,18 +428,38 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   const superiorBlockers = buildStoryRooms(buildRoomList(superiorPlanta), STORY_HEIGHT, superiorStoryGroup);
 
   // -------- Laje intermediaria + teto --------
-  // Laje cobre tudo menos o vao da escada (ponta leste). Fica invisivel
-  // quando o player esta no terreo (pra camera 3rd person nao bater no
-  // teto e pra ver as salas de cima quando subir).
-  const slabMainW = BLOCO_WIDTH - STAIR_END_WIDTH;
-  const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(slabMainW, 0.16, BLOCO_DEPTH + 0.2),
-    slabMat,
-  );
-  slab.position.set(-halfW + slabMainW / 2, STORY_HEIGHT, 0);
-  slab.castShadow = true;
-  slab.receiveShadow = true;
+  // Laje cobre todo o footprint menos o vao da escada (no canto NE).
+  // Quatro pedacos arranjados em volta do buraco.
+  const stairHoleZMin = STAIR_CENTER_Z - STAIR_DEPTH / 2;
+  const stairHoleZMax = STAIR_CENTER_Z + STAIR_DEPTH / 2;
+  const stairHoleXMin = STAIR_CENTER_X - STAIR_LENGTH / 2;
+  const stairHoleXMax = STAIR_CENTER_X + STAIR_LENGTH / 2;
+
+  const slab = new THREE.Group();
   group.add(slab);
+  const addSlabSlice = (w: number, d: number, x: number, z: number) => {
+    if (w <= 0.01 || d <= 0.01) return;
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(w, 0.16, d),
+      slabMat,
+    );
+    m.position.set(x, STORY_HEIGHT, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    slab.add(m);
+  };
+  // Norte do buraco (entre parede norte e topo do buraco)
+  const slabNorthD = stairHoleZMin - (-halfD - 0.1);
+  addSlabSlice(BLOCO_WIDTH + 0.2, slabNorthD, 0, (stairHoleZMin + (-halfD - 0.1)) / 2);
+  // Sul do buraco (entre base do buraco e parede sul)
+  const slabSouthD = (halfD + 0.1) - stairHoleZMax;
+  addSlabSlice(BLOCO_WIDTH + 0.2, slabSouthD, 0, (stairHoleZMax + (halfD + 0.1)) / 2);
+  // Oeste do buraco
+  const slabWestW = stairHoleXMin - (-halfW - 0.1);
+  addSlabSlice(slabWestW, STAIR_DEPTH, (stairHoleXMin + (-halfW - 0.1)) / 2, STAIR_CENTER_Z);
+  // Leste do buraco
+  const slabEastW = (halfW + 0.1) - stairHoleXMax;
+  addSlabSlice(slabEastW, STAIR_DEPTH, (stairHoleXMax + (halfW + 0.1)) / 2, STAIR_CENTER_Z);
 
   const roof = new THREE.Mesh(
     new THREE.BoxGeometry(BLOCO_WIDTH + 0.4, 0.6, BLOCO_DEPTH + 0.4),
@@ -512,53 +534,29 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     group.add(leaves);
   }
 
-  // -------- Escada na ponta leste --------
-  // Ocupa a faixa x: [halfW - STAIR_END_WIDTH, halfW] em toda a profundidade.
-  // Sobe de sul (y=0) pra norte (y=STORY_HEIGHT), ao longo de Z.
-  const stairXCenter = halfW - STAIR_END_WIDTH / 2;
-  const stairLengthZ = BLOCO_DEPTH - WALL_THICKNESS * 2;
-  const stairZTop = -halfD + WALL_THICKNESS;     // norte → y=STORY_HEIGHT
-  const stairZBottom = halfD - WALL_THICKNESS;   // sul → y=0
-  const stepCount = 16;
-  const stepDepth = stairLengthZ / stepCount;
+  // -------- Escada pequena no canto NE, lateral --------
+  // Degraus crescem em X (player sobe andando pro leste). Cada degrau eh
+  // estreito em X e largo em Z. 12 degraus.
+  const stepCount = 12;
+  const stepRise = STAIR_LENGTH / stepCount; // tamanho do degrau no X
   const stepHeight = STORY_HEIGHT / stepCount;
-  const stairW = STAIR_END_WIDTH - 1.2;
+  const stairXBottom = STAIR_CENTER_X - STAIR_LENGTH / 2; // oeste = base
   for (let i = 0; i < stepCount; i++) {
     const sy = i * stepHeight + stepHeight / 2;
-    // i=0 fica embaixo no sul, i=N-1 fica em cima no norte
-    const sz = stairZBottom - i * stepDepth - stepDepth / 2;
-    addBox(stairW, stepHeight, stepDepth, stairXCenter, sy, sz, stairMat, false);
+    const sx = stairXBottom + i * stepRise + stepRise / 2;
+    addBox(stepRise, stepHeight, STAIR_DEPTH, sx, sy, STAIR_CENTER_Z, stairMat, false);
   }
-  // Corrimaos
-  for (const sx of [stairXCenter - stairW / 2, stairXCenter + stairW / 2]) {
+  // Corrimaos (ao longo de X, nas duas laterais Z)
+  for (const sz of [STAIR_CENTER_Z - STAIR_DEPTH / 2 - 0.04, STAIR_CENTER_Z + STAIR_DEPTH / 2 + 0.04]) {
     const rail = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 1.1, stairLengthZ),
+      new THREE.BoxGeometry(STAIR_LENGTH, 1.1, 0.08),
       stairMat,
     );
-    rail.position.set(sx, STORY_HEIGHT / 2 + 0.55, 0);
+    rail.position.set(STAIR_CENTER_X, STORY_HEIGHT / 2 + 0.55, sz);
     rail.castShadow = true;
     group.add(rail);
   }
-  // Parede divisoria entre corredor e escada (com vao central de 2.5m
-  // pra acesso). Cada andar tem a sua, no respectivo storyGroup.
-  const stairWallHN = (BLOCO_DEPTH - 2.5) / 2;
-  const addStairDivider = (storyY: number, target: THREE.Group) => {
-    const yMid = storyY + STORY_HEIGHT / 2;
-    const mkSegment = (zCenter: number) => {
-      const m = new THREE.Mesh(
-        new THREE.BoxGeometry(WALL_THICKNESS, STORY_HEIGHT, stairWallHN),
-        innerMat,
-      );
-      m.position.set(STAIR_END_MIN_X, yMid, zCenter);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      target.add(m);
-    };
-    mkSegment(-halfD + stairWallHN / 2);
-    mkSegment(halfD - stairWallHN / 2);
-  };
-  addStairDivider(0, terreoStoryGroup);
-  addStairDivider(STORY_HEIGHT, superiorStoryGroup);
+  // (divisoria antiga do leste removida — escada agora eh central)
 
   // -------- Placa na fachada --------
   const signCanvas = document.createElement("canvas");
@@ -622,11 +620,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [
       { mat: outerMat, target: 0.18 },
     ];
-    // Escada agora fica na ponta leste, indo de sul (y=0) pra norte (y=top)
-    const STAIR_BOTTOM_Z = halfD - WALL_THICKNESS;     // sul → y=0
-    const STAIR_TOP_Z = -halfD + WALL_THICKNESS;       // norte → y=STORY_HEIGHT
-    const STAIR_MIN_X = STAIR_END_MIN_X + 0.4;
-    const STAIR_MAX_X = halfW - WALL_THICKNESS;
+    // Escada lateral: x cresce pro leste (base oeste y=0 → topo leste y=STORY_HEIGHT).
+    const STAIR_BOTTOM_X = STAIR_CENTER_X - STAIR_LENGTH / 2;
+    const STAIR_TOP_X = STAIR_CENTER_X + STAIR_LENGTH / 2;
+    const STAIR_MIN_Z = STAIR_CENTER_Z - STAIR_DEPTH / 2;
+    const STAIR_MAX_Z = STAIR_CENTER_Z + STAIR_DEPTH / 2;
     let playerFloorY = 0; // estado: 0 (terreo) ou STORY_HEIGHT (superior)
 
     interactables.push({
@@ -650,12 +648,12 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // Atualiza Y do andar conforme o jogador caminha
         const inStairZone =
           insideFootprint &&
-          localX > STAIR_MIN_X &&
-          localX < STAIR_MAX_X &&
-          localZ <= STAIR_BOTTOM_Z &&
-          localZ >= STAIR_TOP_Z;
+          localZ >= STAIR_MIN_Z &&
+          localZ <= STAIR_MAX_Z &&
+          localX >= STAIR_BOTTOM_X &&
+          localX <= STAIR_TOP_X;
         if (inStairZone) {
-          const t = (localZ - STAIR_BOTTOM_Z) / (STAIR_TOP_Z - STAIR_BOTTOM_Z);
+          const t = (localX - STAIR_BOTTOM_X) / (STAIR_TOP_X - STAIR_BOTTOM_X);
           playerFloorY = THREE.MathUtils.clamp(t, 0, 1) * STORY_HEIGHT;
         } else if (insideFootprint) {
           // Snap pro andar mais proximo, evita ficar parado entre niveis
@@ -679,9 +677,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         terreoStoryGroup.visible = onStair || !onSuperior;
         superiorStoryGroup.visible = onStair || onSuperior;
 
-        // Laje: invisivel quando no terreo (nao "tampar" a camera). Visivel
-        // quando o player esta em cima (vira o piso). Tambem visivel na
-        // escada pra ver pra onde esta subindo.
+        // Laje (Group): invisivel no terreo, visivel no superior/escada.
         slab.visible = onSuperior || onStair;
         // Teto: invisivel quando o player esta dentro (deixa a camera
         // ver pro chao). Aparece de fora.
