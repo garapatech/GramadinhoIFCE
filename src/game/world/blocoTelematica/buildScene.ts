@@ -57,7 +57,15 @@ const NORTH_ROW_Z_CENTER = -CORRIDOR_DEPTH / 2 - NORTH_ROW_DEPTH / 2;
 const SOUTH_ROW_Z_CENTER = CORRIDOR_DEPTH / 2 + SOUTH_ROW_DEPTH / 2;
 
 type Row = "north" | "south";
-type Room = { label: PlantaLabel; row: Row; worldX: number };
+type Room = {
+  label: PlantaLabel;
+  row: Row;
+  worldX: number;
+  // Quando definido, o corredor + cap walls dessa fileira encerram aqui
+  // (em vez de seguirem ate o fim da ala). Util pra fileiras curtas
+  // como os banheiros do superior.
+  closeRowAt?: number;
+};
 
 function classifyRow(label: PlantaLabel): Row {
   return label.px.cy < CY_NORTH_MAX ? "north" : "south";
@@ -590,8 +598,13 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // Parede do corredor (trechos esquerdo e direito da porta de cada sala)
         for (let i = 0; i < list.length; i++) {
           const r = list[i];
+          const isLast = i === list.length - 1;
           const prevX = i === 0 ? xMin : (list[i - 1].worldX + r.worldX) / 2;
-          const nextX = i === list.length - 1 ? xMax : (r.worldX + list[i + 1].worldX) / 2;
+          // closeRowAt encurta a fileira: o ultimo room com esse marcador
+          // termina ali em vez de estender ate o fim da ala.
+          const nextX = isLast
+            ? (r.closeRowAt ?? xMax)
+            : (r.worldX + list[i + 1].worldX) / 2;
           const leftW = r.worldX - roomDoor / 2 - prevX;
           const rightW = nextX - (r.worldX + roomDoor / 2);
           if (leftW > 0.1) {
@@ -610,6 +623,16 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
             registerInnerBlocker(
               cx - rightW / 2, cx + rightW / 2,
               corridorEdgeZ - t2, corridorEdgeZ + t2,
+            );
+          }
+          // Se a fileira fecha aqui, adicionar cap wall perpendicular
+          // ao corredor (sela a fileira a leste).
+          if (isLast && r.closeRowAt != null) {
+            addStoryBox(INNER_WALL_THICKNESS, wallH, rowDepth,
+              r.closeRowAt, storyY + wallH / 2, wallZ, innerMat);
+            registerInnerBlocker(
+              r.closeRowAt - t2, r.closeRowAt + t2,
+              wallZ - rowDepth / 2, wallZ + rowDepth / 2,
             );
           }
         }
@@ -640,8 +663,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
         for (let i = 0; i < list.length; i++) {
           const r = list[i];
+          const isLast = i === list.length - 1;
           const prevX = i === 0 ? xMin : (list[i - 1].worldX + r.worldX) / 2;
-          const nextX = i === list.length - 1 ? xMax : (r.worldX + list[i + 1].worldX) / 2;
+          const nextX = isLast
+            ? (r.closeRowAt ?? xMax)
+            : (r.worldX + list[i + 1].worldX) / 2;
 
           // Label
           const sprite = makeLabelSprite(r.label.text);
@@ -874,6 +900,23 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         worldX,
       });
     }
+
+    // Banheiros do superior: na fileira norte da ala direita, em frente
+    // ao Laboratorio de Informatica 03 (worldX≈9). Tamanhos equilibrados
+    // (~3.5m cada) e a fileira fecha logo depois do Masc (closeRowAt=13)
+    // pra nao "esticar" ate a parede do Wireless.
+    const mkBathroom = (text: string, worldX: number, closeRowAt?: number): Room => ({
+      label: {
+        text,
+        px: { xMin: 0, yMin: 0, xMax: 0, yMax: 0, cx: 0, cy: 0 },
+      },
+      row: "north",
+      worldX,
+      closeRowAt,
+    });
+    out.push(mkBathroom("W.C. Feminino", 7.75));
+    out.push(mkBathroom("W.C. Masculino", 11.25, 13));
+
     return out;
   };
 
