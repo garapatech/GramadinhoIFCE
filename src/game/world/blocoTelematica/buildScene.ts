@@ -85,6 +85,9 @@ type Interactable = {
   radius: number;
   position: THREE.Vector3;
   root: THREE.Object3D;
+  cullRadius?: number;
+  cullDistance?: number;
+  cullPosition?: THREE.Vector3;
   npcDisabled?: () => boolean;
   interact?: () => void;
   update?: (dt: number, time: number) => void;
@@ -160,22 +163,21 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   const windowTexture = createWindowTexture();
 
-  // Materiais com transparencia habilitada para suportar fade-on-enter
+  // Paredes externas: opacas. Usamos .visible nos meshes pra esconder
+  // quando o player esta dentro (evita problemas de sorting de
+  // transparencia que faziam o bloco "sumir" em angulos especificos).
   const outerMat = new THREE.MeshStandardMaterial({
     color: WALL_COLOR,
     map: windowTexture,
     roughness: 0.9,
     metalness: 0.03,
-    transparent: true,
-    opacity: 1,
   });
-  // Paredes internas estilo gesso: tom mais claro, quase branco
+  // Paredes internas estilo gesso: tom mais claro, quase branco. Opacas
+  // — usamos visibility no storyGroup pra esconder andar oposto.
   const innerMat = new THREE.MeshStandardMaterial({
     color: 0xf3eee3,
     roughness: 0.85,
     metalness: 0,
-    transparent: true,
-    opacity: 1,
   });
   // Materiais de mobiliario reutilizados em varias salas
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.8 });
@@ -194,14 +196,10 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   const roofMat = new THREE.MeshStandardMaterial({
     color: ROOF_COLOR,
     roughness: 1,
-    transparent: true,
-    opacity: 1,
   });
   const slabMat = new THREE.MeshStandardMaterial({
     color: FRAME_COLOR,
     roughness: 0.85,
-    transparent: true,
-    opacity: 1,
   });
   const floorMat = new THREE.MeshStandardMaterial({
     color: FLOOR_COLOR,
@@ -511,10 +509,22 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       storyGroup.add(mesh);
     };
 
-    const leftRooms = rooms.filter((r) => r.worldX < -LOUNGE_HALF_WIDTH);
+    // LATIM eh sala gigante so no superior: ocupa todo o extremo oeste do
+    // ala esquerda (do muro externo ate uma parede com porta em x=-29).
+    // Atravessa o corredor — norte+sul viram uma sala so.
+    const isSuperior = storyY > 0.001;
+    const LATIM_EAST_X = -29;
+    const hasLatim = isSuperior;
+    const latimLeftOuterX = hasLatim ? LATIM_EAST_X : (-halfW + WALL_THICKNESS);
+
+    // No superior, filtramos rooms cujo worldX < LATIM_EAST_X (LATIM
+    // sozinho fica nessa faixa, sem subdivisoes de fileira).
+    const leftRooms = rooms.filter(
+      (r) => r.worldX < -LOUNGE_HALF_WIDTH && (!hasLatim || r.worldX > LATIM_EAST_X),
+    );
     const rightRooms = rooms.filter((r) => r.worldX > LOUNGE_HALF_WIDTH);
     const wings: Wing[] = [
-      { rooms: leftRooms, outerX: -halfW + WALL_THICKNESS, loungeX: -LOUNGE_HALF_WIDTH },
+      { rooms: leftRooms, outerX: latimLeftOuterX, loungeX: -LOUNGE_HALF_WIDTH },
       { rooms: rightRooms, outerX: halfW - WALL_THICKNESS, loungeX: LOUNGE_HALF_WIDTH },
     ];
 
@@ -634,6 +644,98 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           placeFurniture(storyGroup, type, bounds, storyY, row);
         }
       }
+    }
+
+    // -------- LATIM (sala gigante no oeste do superior) --------
+    if (hasLatim) {
+      const latimXMin = -halfW + WALL_THICKNESS;
+      const latimXMax = LATIM_EAST_X;
+      const latimZMin = -halfD + WALL_THICKNESS;
+      const latimZMax = halfD - WALL_THICKNESS;
+      const latimCx = (latimXMin + latimXMax) / 2;
+      const latimCz = (latimZMin + latimZMax) / 2;
+      const latimWidth = latimXMax - latimXMin;
+
+      // Parede leste de LATIM com porta de 1.6m centrada em z=0
+      const doorW = 1.6;
+      const northSegDepth = -doorW / 2 - latimZMin;
+      const northSegZ = (latimZMin + (-doorW / 2)) / 2;
+      const southSegDepth = latimZMax - doorW / 2;
+      const southSegZ = (doorW / 2 + latimZMax) / 2;
+      addStoryBox(
+        INNER_WALL_THICKNESS, wallH, northSegDepth,
+        latimXMax, storyY + wallH / 2, northSegZ, innerMat,
+      );
+      addStoryBox(
+        INNER_WALL_THICKNESS, wallH, southSegDepth,
+        latimXMax, storyY + wallH / 2, southSegZ, innerMat,
+      );
+      registerInnerBlocker(
+        latimXMax - t2, latimXMax + t2,
+        latimZMin, -doorW / 2,
+      );
+      registerInnerBlocker(
+        latimXMax - t2, latimXMax + t2,
+        doorW / 2, latimZMax,
+      );
+
+      // Label LATIM grande, no centro da sala
+      const sprite = makeLabelSprite("LATIM — Lab. de Tecnologia em Automacao e Informacao");
+      sprite.position.set(latimCx, storyY + wallH - 0.6, latimCz);
+      sprite.scale.multiplyScalar(1.4); // maior pra sala grande
+      storyGroup.add(sprite);
+
+      // Mobiliario: muitas bancadas com PCs em duas linhas grandes
+      const pcRowZ = [latimZMin + 1.8, latimZMax - 1.8];
+      const pcsPerRow = Math.max(4, Math.floor(latimWidth / 2.2));
+      const pcStepX = latimWidth / (pcsPerRow + 1);
+      for (const pcZ of pcRowZ) {
+        const facing = pcZ < 0 ? 0 : Math.PI; // monitor olha pro centro
+        for (let i = 0; i < pcsPerRow; i++) {
+          const px = latimXMin + pcStepX * (i + 1);
+          // Bancada
+          const bench = new THREE.Mesh(
+            new THREE.BoxGeometry(0.95, 0.04, 0.65),
+            woodMat,
+          );
+          bench.position.set(px, storyY + 0.78, pcZ);
+          bench.castShadow = true;
+          storyGroup.add(bench);
+          // Pernas
+          for (const lx of [-0.42, 0.42]) for (const lz of [-0.27, 0.27]) {
+            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.78, 0.06), darkWoodMat);
+            leg.position.set(px + lx, storyY + 0.39, pcZ + lz);
+            storyGroup.add(leg);
+          }
+          // Monitor + tela
+          const monBack = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.42, 0.06), monitorMat);
+          monBack.position.set(px - Math.cos(facing) * 0.18, storyY + 1.05, pcZ - Math.sin(facing) * 0.18);
+          monBack.rotation.y = facing;
+          monBack.castShadow = true;
+          storyGroup.add(monBack);
+          const monScreen = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.36, 0.012), screenMat);
+          monScreen.position.copy(monBack.position);
+          monScreen.rotation.y = facing;
+          monScreen.translateZ(0.04);
+          storyGroup.add(monScreen);
+          // CPU
+          const cpu = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.4, 0.34), pcCaseMat);
+          cpu.position.set(px + 0.35, storyY + 0.98, pcZ + 0.08);
+          cpu.castShadow = true;
+          storyGroup.add(cpu);
+          // Cadeira simples
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.05, 0.5), roomChairMat);
+          const chairOffset = pcZ < 0 ? 0.7 : -0.7;
+          seat.position.set(px, storyY + 0.48, pcZ + chairOffset);
+          seat.castShadow = true;
+          storyGroup.add(seat);
+        }
+      }
+
+      // Quadro/lousa em uma das paredes laterais (parede oeste)
+      const board = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.2, 3.4), chalkMat);
+      board.position.set(latimXMin + 0.05, storyY + 1.5, latimCz);
+      storyGroup.add(board);
     }
 
     return storyBlockers;
@@ -804,6 +906,13 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   group.position.set(centerX, 0, centerZ);
   parent.add(group);
 
+  // Desativa frustum culling em tudo do bloco. Algumas combinacoes de
+  // posicao da camera + transparencia das paredes faziam o bloco "sumir"
+  // antes do fim do corredor. Forcar render evita esse comportamento.
+  group.traverse((obj: THREE.Object3D) => {
+    obj.frustumCulled = false;
+  });
+
   const bounds = {
     minX: centerX - BLOCO_WIDTH / 2,
     maxX: centerX + BLOCO_WIDTH / 2,
@@ -839,9 +948,8 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   // volume da escada, mantemos o andar em que ele estava (memoria de
   // estado), entao da pra andar livremente pelo andar superior.
   if (interactables && getPlayerPosition) {
-    const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [
-      { mat: outerMat, target: 0.18 },
-    ];
+    // Nao usamos mais fade — paredes externas alternam .visible.
+    const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [];
     // Escada lateral: x cresce pro leste (base oeste y=0 → topo leste y=SUPERIOR_VISUAL_Y).
     const STAIR_BOTTOM_X = STAIR_CENTER_X - STAIR_LENGTH / 2;
     const STAIR_TOP_X = STAIR_CENTER_X + STAIR_LENGTH / 2;
@@ -857,6 +965,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       kind: "bloco-telematica",
       label: "Bloco Telemática",
       radius: 0,
+      // Sphere de culling grande pra cobrir o bloco inteiro (90x16x7m).
+      // Sem isso o engine escondia o grupo quando o centro do bloco
+      // saia do frustum (player no fim do corredor).
+      cullRadius: 60,
+      cullDistance: 600,
       position: new THREE.Vector3(centerX, 0, centerZ),
       root: group,
       npcDisabled: () => true,
@@ -864,14 +977,12 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const p = getPlayerPosition();
         const localX = p.x - centerX;
         const localZ = p.z - centerZ;
-        // Footprint com margem extra: a camera 3rd-person fica atras
-        // do player. Se o player chega no fim do corredor, a camera pode
-        // sair pra fora da parede e os shaders das paredes ficam opacos
-        // novamente. Margem de 2.5m mantem o "modo interior" mesmo quando
-        // a camera esta encostada na parede.
+        // Player conta como "dentro" so quando cruza a parede de fato.
+        // (A culling do engine ja foi resolvida com cullRadius — nao
+        // precisa de margem aqui pra renderizar.)
         const insideFootprint =
-          Math.abs(localX) < BLOCO_WIDTH / 2 + 2.5 &&
-          Math.abs(localZ) < BLOCO_DEPTH / 2 + 2.5;
+          Math.abs(localX) < BLOCO_WIDTH / 2 &&
+          Math.abs(localZ) < BLOCO_DEPTH / 2;
 
         // Atualiza Y do andar conforme o jogador caminha
         const inStairZone =
@@ -910,10 +1021,12 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // Teto: invisivel quando o player esta dentro (deixa a camera
         // ver pro chao). Aparece de fora.
         roof.visible = !insideFootprint;
-        // Paredes externas do andar oposto: somem pra nao tampar a
-        // visao de cima. Da pra ver "uma caixinha" so do andar atual.
-        for (const m of outerMeshesSuperior) m.visible = !insideFootprint || onSuperior || onStair;
-        for (const m of outerMeshesTerreo) m.visible = !insideFootprint || !onSuperior || onStair;
+        // Paredes externas: visiveis so quando o player esta fora do
+        // bloco. Quando entra, somem completamente pra a camera ver o
+        // interior sem precisar transparencia (que gerava sorting bugs).
+        for (const m of outerMeshesTerreo) m.visible = !insideFootprint;
+        for (const m of outerMeshesSuperior) m.visible = !insideFootprint;
+
         // O piso de cada andar so aparece se faz sentido visualmente.
         // O piso do superior visto de baixo seria "teto" — entao some
         // quando o player esta no terreo dentro do bloco.

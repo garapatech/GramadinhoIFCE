@@ -2892,6 +2892,8 @@ createNoticeBoard(-31, 9, Math.PI / 2);
 createCampusBanner(-38, 16, Math.PI / 2);
 createBall(-4, 16);
 createBike(24, 4, -Math.PI / 2);
+// Bike de cortesia logo apos a catraca, pra player ir mais rapido ate o bloco
+createBike(CAMPUS_ENTRY_X + 6, -60, -Math.PI / 2);
 createCampusBus([
   { x: -62, z: 62, dwell: 1.4 },
   { x: -12, z: 62, dwell: 0.8 },
