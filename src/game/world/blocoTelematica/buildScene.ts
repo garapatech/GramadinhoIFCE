@@ -1408,14 +1408,16 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   signCtx.font = "700 110px system-ui, sans-serif";
   signCtx.textAlign = "center";
   signCtx.textBaseline = "middle";
-  signCtx.fillText("BLOCO TELEMÁTICA", 512, 128);
+  signCtx.fillText("BLOCO 3", 512, 128);
   const signTex = new THREE.CanvasTexture(signCanvas);
   signTex.colorSpace = THREE.SRGBColorSpace;
   const sign = new THREE.Mesh(
     new THREE.PlaneGeometry(10, 2.4),
     new THREE.MeshBasicMaterial({ map: signTex, transparent: true }),
   );
-  sign.position.set(0, STORY_HEIGHT + 1.2, halfD + 0.02);
+  // Placa agora fica na fachada norte (porta), virada pro campus.
+  sign.position.set(0, STORY_HEIGHT + 1.2, -halfD - 0.02);
+  sign.rotation.y = Math.PI;
   group.add(sign);
 
   group.position.set(centerX, 0, centerZ);
@@ -1478,7 +1480,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
     interactables.push({
       kind: "bloco-telematica",
-      label: "Bloco Telemática",
+      label: "Bloco 3",
       radius: 0,
       // Sphere de culling grande pra cobrir o bloco inteiro (90x16x7m).
       // Sem isso o engine escondia o grupo quando o centro do bloco

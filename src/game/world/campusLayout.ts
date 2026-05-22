@@ -36,6 +36,8 @@ export const campusPaths = [
   { width: 18, depth: 4, x: 2, z: 28, surface: "corridor" },
   { width: 8, depth: 12, x: CAMPUS_ENTRY_X, z: -75, surface: "corridor" },
   { width: 8, depth: 8, x: CAMPUS_ENTRY_X, z: -67, surface: "corridor" },
+  // Estradinha ligando o corredor central (z~28) ate a porta do Bloco 3 (z~52)
+  { width: 5, depth: 24, x: 0, z: 40 },
 ] satisfies readonly CampusPathDefinition[];
 
 export const campusBuildings = [
