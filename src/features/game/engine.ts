@@ -855,6 +855,9 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 // Mesa de pôquer 3D (LATIM) e estado da câmera quando sentado nela.
 let pokerTable: PokerTableView | null = null;
 let pokerSeatedCam: { center: THREE.Vector3; seat: THREE.Vector3 } | null = null;
+let pokerAvatarsHidden = false;
+// Resolve a altura do andar do Bloco Telemática (eleva remotos no andar certo).
+let blocoResolveFloorY: ((x: number, z: number, prev: number) => number) | null = null;
 
 {
   const bloco = buildBlocoTelematica({
@@ -891,6 +894,7 @@ let pokerSeatedCam: { center: THREE.Vector3; seat: THREE.Vector3 } | null = null
     },
   });
   pokerTable = bloco.poker;
+  blocoResolveFloorY = bloco.resolveFloorY;
   mapFeatures.buildings.push({
     x: (bloco.bounds.minX + bloco.bounds.maxX) / 2,
     z: (bloco.bounds.minZ + bloco.bounds.maxZ) / 2,
@@ -1315,30 +1319,35 @@ function updateBubbles(dt) {
 function updateRemotes(dt, time) {
   for (const r of remotePlayers.values()) {
     const jumpY = Math.max(0, r.jumpY || 0);
+    // Altura do andar (eleva o avatar no andar superior do Bloco Telemática).
+    const floorY = blocoResolveFloorY
+      ? blocoResolveFloorY(r.targetX, r.targetZ, r.floorY ?? 0)
+      : 0;
+    r.floorY = floorY;
     if (r.glitchTimer && r.glitchTimer > 0) {
       r.glitchTimer -= dt;
       setRestPose(r.rig.refs, time, r.glitchSeed || 0);
       animateGlitch(r.rig.refs, time, 1, r.glitchSeed || 0);
-      r.group.position.y = jumpY + Math.sin(time * 14 + (r.glitchSeed || 0)) * 0.06;
+      r.group.position.y = floorY + jumpY + Math.sin(time * 14 + (r.glitchSeed || 0)) * 0.06;
       continue;
     }
     if (r.celebrateTimer && r.celebrateTimer > 0) {
       r.celebrateTimer -= dt;
       animateCelebrate(r.rig.refs, time + (r.celebrateSeed || 0), 1);
-      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.celebrateSeed || 0)) * 9)) * 0.08;
+      r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.celebrateSeed || 0)) * 9)) * 0.08;
       continue;
     }
     if (r.sixSevenTimer && r.sixSevenTimer > 0) {
       r.sixSevenTimer -= dt;
       animateSixSeven(r.rig.refs, time, r.sixSevenSeed || 0);
-      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.sixSevenSeed || 0)) * 4.8)) * 0.025;
+      r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.sixSevenSeed || 0)) * 4.8)) * 0.025;
       if (r.sixSevenTimer <= 0) resetRigPose(r.rig.refs);
       continue;
     }
     if (r.danceTimer && r.danceTimer > 0) {
       r.danceTimer -= dt;
       animateDance(r.rig.refs, time + (r.phaseOffset || 0));
-      r.group.position.y = jumpY + Math.abs(Math.sin((time + (r.phaseOffset || 0)) * 8)) * 0.08;
+      r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.phaseOffset || 0)) * 8)) * 0.08;
       continue;
     }
     const lerp = Math.min(1, dt * 12);
@@ -1347,18 +1356,18 @@ function updateRemotes(dt, time) {
     r.group.rotation.y = lerpAngle(r.group.rotation.y, r.targetRy, lerp);
     if (r.activity === "sitting") {
       setSittingPose(r.rig.refs);
-      r.group.position.y = 0;
+      r.group.position.y = floorY;
       continue;
     }
     if (r.activity === "crouching") {
       setCrouchPose(r.rig.refs, time, 1);
-      r.group.position.y = -0.22;
+      r.group.position.y = floorY - 0.22;
       continue;
     }
     if (r.activity === "riding") {
       r.ridePhase += Math.max(0.85, r.speed * 0.95) * dt;
       applyBikeRidePose(r.rig.refs, r.ridePhase, Math.min(r.speed / 10, 1), 0);
-      r.group.position.y = 0.18 + Math.abs(Math.sin(r.ridePhase)) * 0.02 * Math.min(r.speed / 9, 1);
+      r.group.position.y = floorY + 0.18 + Math.abs(Math.sin(r.ridePhase)) * 0.02 * Math.min(r.speed / 9, 1);
       continue;
     }
     const isRun = r.speed > 8;
@@ -1368,10 +1377,10 @@ function updateRemotes(dt, time) {
       r.walkPhase += dt * (isRun ? 9.5 : 5.5 + r.speed * 0.6);
       if (isRun) animateRun(r.rig.refs, r.walkPhase, intensity);
       else animateWalk(r.rig.refs, r.walkPhase, intensity);
-      r.group.position.y = jumpY + Math.abs(Math.sin(r.walkPhase)) * 0.05 * intensity;
+      r.group.position.y = floorY + jumpY + Math.abs(Math.sin(r.walkPhase)) * 0.05 * intensity;
     } else {
       setRestPose(r.rig.refs, time);
-      r.group.position.y = jumpY + Math.sin(time * 1.6) * 0.012;
+      r.group.position.y = floorY + jumpY + Math.sin(time * 1.6) * 0.012;
     }
   }
 }
@@ -5678,9 +5687,29 @@ function drawMinimap() {
   });
 }
 
+// Sentado no pôquer: esconde o próprio avatar/nick (estava tampando a mesa)
+// e os nicks flutuantes dos outros (os nomes já aparecem nas plaquinhas 3D).
+function applyPokerSeatedHiding() {
+  const hide = !!(pokerSeatedCam && playerState.sitting);
+  if (hide) {
+    player.visible = false;
+    for (const r of remotePlayers.values()) {
+      if (r.label) r.label.visible = false;
+    }
+    pokerAvatarsHidden = true;
+  } else if (pokerAvatarsHidden) {
+    player.visible = true;
+    for (const r of remotePlayers.values()) {
+      if (r.label) r.label.visible = true;
+    }
+    pokerAvatarsHidden = false;
+  }
+}
+
 const _pokerCamPos = new THREE.Vector3();
 const _pokerCamLook = new THREE.Vector3();
 function updateCamera() {
+  applyPokerSeatedHiding();
   // Vista aproximada da mesa quando o player está sentado no pôquer.
   if (pokerSeatedCam && playerState.sitting) {
     const { center, seat } = pokerSeatedCam;
