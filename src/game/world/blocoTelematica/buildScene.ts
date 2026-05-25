@@ -104,6 +104,7 @@ type Interactable = {
 export type BlocoTelematicaScene = {
   group: THREE.Group;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  poker: PokerTableView | null;
   dispose(): void;
 };
 
@@ -170,12 +171,269 @@ function makeLabelSprite(text: string) {
   return sprite;
 }
 
+// ---- Texturas procedurais da mesa de pôquer ----
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number,
+) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Feltro verde com gradiente, granulado, linha de aposta e logo central.
+// Mapeado no topo do cilindro (centro do canvas = centro da mesa).
+function makePokerFeltTexture() {
+  const size = 1024;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const cx = size / 2;
+  const cy = size / 2;
+
+  const grad = ctx.createRadialGradient(cx, cy, size * 0.04, cx, cy, size * 0.5);
+  grad.addColorStop(0, "#13834b");
+  grad.addColorStop(0.62, "#0c6b3b");
+  grad.addColorStop(1, "#074d2a");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  // granulado do feltro
+  for (let i = 0; i < 42000; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const a = Math.random() * 0.06;
+    ctx.fillStyle = Math.random() > 0.5
+      ? `rgba(255,255,255,${a})`
+      : `rgba(0,0,0,${a})`;
+    ctx.fillRect(x, y, 1.5, 1.5);
+  }
+
+  // linha de aposta (betting line)
+  ctx.strokeStyle = "rgba(225,230,212,0.55)";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.345, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(225,230,212,0.18)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size * 0.30, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // naipes em volta do logo
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const suits = ["♠", "♥", "♦", "♣"];
+  ctx.font = "bold 78px serif";
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 - Math.PI / 4;
+    const isRed = suits[i] === "♥" || suits[i] === "♦";
+    ctx.fillStyle = isRed ? "rgba(225,120,120,0.30)" : "rgba(225,235,215,0.26)";
+    ctx.fillText(suits[i], Math.cos(a) * 132, Math.sin(a) * 132);
+  }
+  // logo central
+  ctx.fillStyle = "rgba(238,243,226,0.88)";
+  ctx.font = "bold 86px Georgia, serif";
+  ctx.fillText("GRAMADINHO", 0, -16);
+  ctx.fillStyle = "rgba(238,243,226,0.55)";
+  ctx.font = "bold 34px Georgia, serif";
+  ctx.fillText("♦  POKER ROOM  ♦", 0, 46);
+  ctx.restore();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Face de carta (canto + naipe gigante no centro, espelhado embaixo).
+function makeCardFaceTexture(rank: string, suit: string) {
+  const w = 256;
+  const h = 358;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fbfbf6";
+  roundRectPath(ctx, 5, 5, w - 10, h - 10, 20);
+  ctx.fill();
+  ctx.strokeStyle = "#d8d8d0";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  const red = suit === "♥" || suit === "♦";
+  ctx.fillStyle = red ? "#c0202b" : "#16181c";
+
+  const drawCorner = () => {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.font = "bold 58px Arial, sans-serif";
+    ctx.fillText(rank, 36, 64);
+    ctx.font = "48px Arial, sans-serif";
+    ctx.fillText(suit, 36, 112);
+  };
+  drawCorner();
+  ctx.save();
+  ctx.translate(w, h);
+  ctx.rotate(Math.PI);
+  drawCorner();
+  ctx.restore();
+
+  // naipe central grande
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "180px Arial, sans-serif";
+  ctx.fillText(suit, w / 2, h / 2 + 6);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Verso de carta (padrão losango vermelho com borda).
+function makeCardBackTexture() {
+  const w = 256;
+  const h = 358;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fbfbf6";
+  roundRectPath(ctx, 5, 5, w - 10, h - 10, 20);
+  ctx.fill();
+  ctx.fillStyle = "#9c1822";
+  roundRectPath(ctx, 16, 16, w - 32, h - 32, 14);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  // grade de losangos
+  ctx.strokeStyle = "rgba(255,225,225,0.35)";
+  ctx.lineWidth = 2;
+  ctx.save();
+  roundRectPath(ctx, 16, 16, w - 32, h - 32, 14);
+  ctx.clip();
+  const step = 26;
+  for (let d = -h; d < w + h; d += step) {
+    ctx.beginPath();
+    ctx.moveTo(d, 0);
+    ctx.lineTo(d + h, h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(d + h, 0);
+    ctx.lineTo(d, h);
+    ctx.stroke();
+  }
+  ctx.restore();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// ---- Cartas 3D reutilizáveis (geometria/textura compartilhadas e cacheadas) ----
+const LIVE_CARD_W = 0.18;
+const LIVE_CARD_L = 0.26;
+const cardFaceMatCache = new Map<string, THREE.MeshStandardMaterial>();
+let sharedCardBackMat: THREE.MeshStandardMaterial | null = null;
+let sharedCardEdgeMat: THREE.MeshStandardMaterial | null = null;
+let sharedCardBoxGeo: THREE.BoxGeometry | null = null;
+let sharedCardPlaneGeo: THREE.PlaneGeometry | null = null;
+
+function rankToLabel(rank: number): string {
+  if (rank === 14) return "A";
+  if (rank === 13) return "K";
+  if (rank === 12) return "Q";
+  if (rank === 11) return "J";
+  return String(rank);
+}
+function suitToGlyph(suit: string): string {
+  return suit === "H" ? "♥" : suit === "D" ? "♦" : suit === "S" ? "♠" : "♣";
+}
+function getCardFaceMaterial(rankLabel: string, suitGlyph: string) {
+  const key = rankLabel + suitGlyph;
+  let mat = cardFaceMatCache.get(key);
+  if (!mat) {
+    const tex = makeCardFaceTexture(rankLabel, suitGlyph);
+    mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55 });
+    cardFaceMatCache.set(key, mat);
+  }
+  return mat;
+}
+function getCardBackMaterial() {
+  if (!sharedCardBackMat) {
+    sharedCardBackMat = new THREE.MeshStandardMaterial({ map: makeCardBackTexture(), roughness: 0.55 });
+  }
+  return sharedCardBackMat;
+}
+// Carta deitada (box fina + plano de face). rank/suit nulos => carta virada.
+function buildLiveCard(rank: number | null, suit: string | null): THREE.Group {
+  if (!sharedCardBoxGeo) sharedCardBoxGeo = new THREE.BoxGeometry(LIVE_CARD_W, 0.006, LIVE_CARD_L);
+  if (!sharedCardPlaneGeo) sharedCardPlaneGeo = new THREE.PlaneGeometry(LIVE_CARD_W, LIVE_CARD_L);
+  if (!sharedCardEdgeMat) sharedCardEdgeMat = new THREE.MeshStandardMaterial({ color: 0xf4f4ef, roughness: 0.6 });
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(sharedCardBoxGeo, sharedCardEdgeMat);
+  body.castShadow = true;
+  g.add(body);
+  const faceUp = rank != null && suit != null;
+  const faceMat = faceUp
+    ? getCardFaceMaterial(rankToLabel(rank!), suitToGlyph(suit!))
+    : getCardBackMaterial();
+  const face = new THREE.Mesh(sharedCardPlaneGeo, faceMat);
+  face.rotation.x = -Math.PI / 2;
+  face.position.y = 0.0035;
+  g.add(face);
+  return g;
+}
+
+// Estado público do pôquer recebido pelo cliente (subconjunto que renderizamos).
+export type PokerCardLite = { rank: number; suit: string };
+export type PokerSeatLite = {
+  index: number;
+  playerId: string | null;
+  nick: string;
+  chips: number;
+  inHand: boolean;
+  folded: boolean;
+  allIn: boolean;
+  betThisRound: number;
+  showCards: PokerCardLite[] | null;
+};
+export type PokerStateLite = {
+  phase: string;
+  seats: PokerSeatLite[];
+  pot: number;
+  community: PokerCardLite[];
+  toActIndex: number | null;
+  dealerIndex: number | null;
+  bigBlind: number;
+};
+export type PokerTableView = {
+  center: THREE.Vector3; // posição mundial do centro da mesa
+  setView: (
+    state: PokerStateLite | null,
+    holeCards: PokerCardLite[] | null,
+    localSeatIndex: number | null,
+  ) => void;
+};
+
 export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTelematicaScene {
   const { parent, createBlocker, interactables, getPlayerPosition } = options;
   const group = new THREE.Group();
   group.name = "blocoTelematica";
 
   const { centerX, centerZ } = BLOCO_TELEMATICA_PLACEMENT;
+
+  // Preenchido quando a mesa de pôquer do LATIM é construída.
+  let pokerView: PokerTableView | null = null;
 
   const windowTexture = createWindowTexture();
 
@@ -790,57 +1048,93 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       // -------- Mesa de pôquer no centro do LATIM --------
       const pokerCx = latimCx;
       const pokerCz = latimCz;
-      const tableRadius = 1.4;
-      const rimRadius = tableRadius + 0.15;
+      const feltRadius = 1.5;          // raio do feltro de jogo
+      const railRadius = feltRadius + 0.13; // raio externo do parapeito acolchoado
+      const rimRadius = railRadius + 0.04;
       const tableTopY = storyY + 0.78;
-      const tableTopThick = 0.06;
+      const tableTopThick = 0.07;
+      const feltSurfaceY = tableTopY + tableTopThick / 2; // onde ficam cartas/fichas
 
-      const feltMat = new THREE.MeshStandardMaterial({ color: 0x0d6b3d, roughness: 0.95 });
-      const rimMat = new THREE.MeshStandardMaterial({ color: 0x3a1f10, roughness: 0.75 });
-      const chipRedMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, roughness: 0.6 });
-      const chipBlueMat = new THREE.MeshStandardMaterial({ color: 0x2a6fb5, roughness: 0.6 });
-      const chipWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.55 });
-      const cardFaceMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.5 });
-      const cardBackMat = new THREE.MeshStandardMaterial({ color: 0x8c1c1c, roughness: 0.5 });
+      const feltTex = makePokerFeltTexture();
+      const feltMat = new THREE.MeshStandardMaterial({
+        map: feltTex,
+        color: 0xffffff,
+        roughness: 0.96,
+        metalness: 0,
+      });
+      const feltEdgeMat = new THREE.MeshStandardMaterial({ color: 0x0a5e33, roughness: 0.95 });
+      // parapeito acolchoado (couro escuro com leve brilho)
+      const railMat = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.42, metalness: 0.08 });
+      // anel de madeira polida (racetrack) entre feltro e parapeito
+      const woodRingMat = new THREE.MeshStandardMaterial({ color: 0x5b3014, roughness: 0.35, metalness: 0.12 });
+      const cupMat = new THREE.MeshStandardMaterial({ color: 0xb9bdc2, roughness: 0.3, metalness: 0.7 });
 
-      // Base larga no chão
-      const baseDisc = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.55, 0.6, 0.08, 16),
-        darkWoodMat,
-      );
-      baseDisc.position.set(pokerCx, storyY + 0.04, pokerCz);
-      baseDisc.receiveShadow = true;
-      storyGroup.add(baseDisc);
+      // Base em cruz no chão (pés largos) + coluna central
+      const baseHubGeo = new THREE.CylinderGeometry(0.26, 0.32, 0.1, 16);
+      const baseHub = new THREE.Mesh(baseHubGeo, darkWoodMat);
+      baseHub.position.set(pokerCx, storyY + 0.05, pokerCz);
+      baseHub.receiveShadow = true;
+      storyGroup.add(baseHub);
+      for (let f = 0; f < 4; f++) {
+        const a = (f / 4) * Math.PI * 2 + Math.PI / 4;
+        const foot = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.1, 0.22), darkWoodMat);
+        foot.position.set(
+          pokerCx + Math.cos(a) * 0.42,
+          storyY + 0.05,
+          pokerCz + Math.sin(a) * 0.42,
+        );
+        foot.rotation.y = -a;
+        foot.castShadow = true;
+        foot.receiveShadow = true;
+        storyGroup.add(foot);
+      }
 
-      // Pedestal
-      const pedestalH = tableTopY - storyY - tableTopThick - 0.08;
+      // Pedestal (coluna)
+      const pedestalH = tableTopY - storyY - tableTopThick - 0.1;
       const pedestal = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.18, 0.32, pedestalH, 12),
+        new THREE.CylinderGeometry(0.16, 0.3, pedestalH, 16),
         darkWoodMat,
       );
-      pedestal.position.set(pokerCx, storyY + 0.08 + pedestalH / 2, pokerCz);
+      pedestal.position.set(pokerCx, storyY + 0.1 + pedestalH / 2, pokerCz);
       pedestal.castShadow = true;
       storyGroup.add(pedestal);
 
-      // Tampo (feltro verde)
+      // Tampo (feltro verde com textura)
       const tableTop = new THREE.Mesh(
-        new THREE.CylinderGeometry(tableRadius, tableRadius, tableTopThick, 32),
-        feltMat,
+        new THREE.CylinderGeometry(feltRadius, feltRadius, tableTopThick, 64),
+        [feltEdgeMat, feltMat, feltMat],
       );
       tableTop.position.set(pokerCx, tableTopY, pokerCz);
       tableTop.castShadow = true;
       tableTop.receiveShadow = true;
       storyGroup.add(tableTop);
 
-      // Borda de madeira (anel)
-      const rim = new THREE.Mesh(
-        new THREE.TorusGeometry(tableRadius + 0.07, 0.08, 10, 40),
-        rimMat,
+      // Anel de madeira polida (racetrack) entre feltro e parapeito
+      const woodRing = new THREE.Mesh(
+        new THREE.CylinderGeometry(railRadius, railRadius + 0.02, 0.05, 64, 1, true),
+        woodRingMat,
       );
-      rim.position.set(pokerCx, tableTopY + tableTopThick / 2, pokerCz);
-      rim.rotation.x = Math.PI / 2;
-      rim.castShadow = true;
-      storyGroup.add(rim);
+      woodRing.position.set(pokerCx, feltSurfaceY - 0.02, pokerCz);
+      storyGroup.add(woodRing);
+      const woodRingTop = new THREE.Mesh(
+        new THREE.RingGeometry(feltRadius - 0.01, railRadius, 64),
+        woodRingMat,
+      );
+      woodRingTop.rotation.x = -Math.PI / 2;
+      woodRingTop.position.set(pokerCx, feltSurfaceY + 0.001, pokerCz);
+      woodRingTop.receiveShadow = true;
+      storyGroup.add(woodRingTop);
+
+      // Parapeito acolchoado (armrest) — torus grosso na borda
+      const rail = new THREE.Mesh(
+        new THREE.TorusGeometry(railRadius, 0.11, 16, 80),
+        railMat,
+      );
+      rail.position.set(pokerCx, feltSurfaceY + 0.03, pokerCz);
+      rail.rotation.x = Math.PI / 2;
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      storyGroup.add(rail);
 
       // Bloqueio físico no tampo (player não atravessa a mesa)
       registerInnerBlocker(
@@ -848,52 +1142,286 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         pokerCz - rimRadius, pokerCz + rimRadius,
       );
 
-      // 5 cartas comunitárias decorativas (algumas viradas)
-      for (let c = 0; c < 5; c++) {
-        const faceUp = c < 3;
-        const card = new THREE.Mesh(
-          new THREE.BoxGeometry(0.16, 0.005, 0.22),
-          faceUp ? cardFaceMat : cardBackMat,
-        );
-        card.position.set(
-          pokerCx - 0.4 + c * 0.2,
-          tableTopY + tableTopThick / 2 + 0.004,
-          pokerCz - 0.15,
-        );
-        storyGroup.add(card);
-      }
+      // Anel local para a mesa: raio das cadeiras (igual ao loop de cadeiras)
+      const seatRingRadius = rimRadius + 0.95;
 
-      // Pilhas de fichas em 4 pontos
-      const chipMats = [chipRedMat, chipBlueMat, chipWhiteMat];
-      for (let s = 0; s < 4; s++) {
-        const a = (s / 4) * Math.PI * 2 + Math.PI / 4;
-        const stackX = pokerCx + Math.cos(a) * 0.7;
-        const stackZ = pokerCz + Math.sin(a) * 0.7;
-        for (let k = 0; k < 5; k++) {
-          const mat = chipMats[(s + k) % chipMats.length];
-          const chip = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.06, 0.06, 0.018, 12),
-            mat,
-          );
-          chip.position.set(
-            stackX,
-            tableTopY + tableTopThick / 2 + 0.011 + k * 0.019,
-            stackZ,
-          );
-          storyGroup.add(chip);
-        }
-      }
+      // Decoração ociosa (mesa vazia) x camada ao vivo (jogo em andamento)
+      const pokerIdleGroup = new THREE.Group();
+      const pokerLiveGroup = new THREE.Group();
+      pokerLiveGroup.visible = false;
+      storyGroup.add(pokerIdleGroup);
+      storyGroup.add(pokerLiveGroup);
 
-      // Dealer puck
-      const dealer = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.09, 0.09, 0.02, 18),
-        chipWhiteMat,
+      // Fichas: paleta por denominação (branco/vermelho/verde/preto/azul)
+      const chipColors = [0xf2f2f2, 0xc0392b, 0x1e8449, 0x17202a, 0x2a6fb5];
+      const chipMats = chipColors.map(
+        (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.55 }),
       );
-      dealer.position.set(pokerCx + 0.4, tableTopY + tableTopThick / 2 + 0.012, pokerCz + 0.45);
-      storyGroup.add(dealer);
+      const chipEdgeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+      const chipGeo = new THREE.CylinderGeometry(0.065, 0.065, 0.016, 20);
+      const makeChipStack = (
+        into: THREE.Object3D, sx: number, sz: number, count: number, matIdx: number,
+      ) => {
+        for (let k = 0; k < count; k++) {
+          const useEdge = k % 3 === 2; // listra branca a cada 3 fichas
+          const chip = new THREE.Mesh(chipGeo, useEdge ? chipEdgeMat : chipMats[matIdx]);
+          chip.position.set(sx, feltSurfaceY + 0.009 + k * 0.0165, sz);
+          chip.castShadow = true;
+          into.add(chip);
+        }
+      };
+
+      // Dealer button ("D") — textura/materiais compartilhados (idle + ao vivo)
+      const dealerTex = (() => {
+        const cv = document.createElement("canvas");
+        cv.width = cv.height = 128;
+        const c = cv.getContext("2d")!;
+        c.fillStyle = "#f6f6f2";
+        c.beginPath();
+        c.arc(64, 64, 60, 0, Math.PI * 2);
+        c.fill();
+        c.strokeStyle = "#1f2a44";
+        c.lineWidth = 6;
+        c.stroke();
+        c.fillStyle = "#1f2a44";
+        c.font = "bold 72px Georgia, serif";
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+        c.fillText("D", 64, 68);
+        const t = new THREE.CanvasTexture(cv);
+        t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      })();
+      const dealerGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.022, 24);
+      const dealerSideMat = new THREE.MeshStandardMaterial({ color: 0xf6f6f2, roughness: 0.5 });
+      const dealerFaceMat = new THREE.MeshStandardMaterial({ map: dealerTex, roughness: 0.5 });
+      const dealerMats = [dealerSideMat, dealerFaceMat, dealerFaceMat];
+      const makeDealerButton = () => {
+        const d = new THREE.Mesh(dealerGeo, dealerMats);
+        d.castShadow = true;
+        return d;
+      };
+
+      // ----- Decoração ociosa: cartas, fichas e dealer numa mesa "montada" -----
+      const idleCommunity: [number, string][] = [
+        [14, "S"], [13, "H"], [12, "S"], [10, "D"], [14, "C"],
+      ];
+      idleCommunity.forEach(([rank, suit], c) => {
+        const card = buildLiveCard(rank, suit);
+        card.position.set(pokerCx - 0.55 + c * 0.275, feltSurfaceY + 0.004, pokerCz - 0.12);
+        pokerIdleGroup.add(card);
+      });
+      for (let s = 0; s < 6; s++) {
+        const a = (s / 6) * Math.PI * 2 + Math.PI / 6;
+        makeChipStack(
+          pokerIdleGroup,
+          pokerCx + Math.cos(a) * 0.95,
+          pokerCz + Math.sin(a) * 0.95,
+          4 + (s % 4), s % chipMats.length,
+        );
+      }
+      for (let p = 0; p < 14; p++) {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.random() * 0.22;
+        const chip = new THREE.Mesh(chipGeo, chipMats[p % chipMats.length]);
+        chip.position.set(
+          pokerCx + Math.cos(a) * r,
+          feltSurfaceY + 0.009 + Math.floor(p / 5) * 0.0165,
+          pokerCz + 0.32 + Math.sin(a) * r,
+        );
+        chip.rotation.y = Math.random() * Math.PI;
+        chip.castShadow = true;
+        pokerIdleGroup.add(chip);
+      }
+      const idleDealer = makeDealerButton();
+      idleDealer.position.set(pokerCx + 0.55, feltSurfaceY + 0.013, pokerCz + 0.5);
+      pokerIdleGroup.add(idleDealer);
+
+      // ----- Camada ao vivo: dirigida pelo estado do servidor -----
+      const clearLive = () => {
+        for (let i = pokerLiveGroup.children.length - 1; i >= 0; i--) {
+          const child = pokerLiveGroup.children[i];
+          child.traverse((o) => {
+            if (o instanceof THREE.Sprite) {
+              const m = o.material as THREE.SpriteMaterial;
+              m.map?.dispose();
+              m.dispose();
+            }
+          });
+          pokerLiveGroup.remove(child);
+        }
+      };
+
+      const setPokerView: PokerTableView["setView"] = (state, holeCards, localSeatIndex) => {
+        clearLive();
+        const active =
+          !!state &&
+          (state.phase !== "waiting" || state.seats.some((s) => s.playerId));
+        pokerIdleGroup.visible = !active;
+        pokerLiveGroup.visible = !!active;
+        if (!active || !state) return;
+
+        // Cartas comunitárias, centralizadas
+        const comm = state.community ?? [];
+        comm.forEach((cd, c) => {
+          const card = buildLiveCard(cd.rank, cd.suit);
+          card.position.set(
+            pokerCx - (comm.length - 1) * 0.14 + c * 0.28,
+            feltSurfaceY + 0.005,
+            pokerCz - 0.14,
+          );
+          pokerLiveGroup.add(card);
+        });
+
+        // Placa do pote/fase no centro
+        const phaseTxt = {
+          waiting: "Aguardando", preflop: "Pré-flop", flop: "Flop",
+          turn: "Turn", river: "River", showdown: "Showdown",
+        }[state.phase] ?? state.phase;
+        const potPlate = makeLabelSprite(`${phaseTxt}  •  Pote ${state.pot}`);
+        potPlate.position.set(pokerCx, feltSurfaceY + 0.62, pokerCz + 0.18);
+        potPlate.scale.multiplyScalar(0.62);
+        pokerLiveGroup.add(potPlate);
+
+        // Por assento (apenas 6 cadeiras físicas)
+        for (const seat of state.seats) {
+          if (seat.index >= 6 || !seat.playerId) continue;
+          const angle = (seat.index / 6) * Math.PI * 2 + Math.PI / 6;
+          const sx = pokerCx + Math.cos(angle) * seatRingRadius;
+          const sz = pokerCz + Math.sin(angle) * seatRingRadius;
+          const facing = Math.atan2(pokerCx - sx, pokerCz - sz);
+          const dirX = (sx - pokerCx) / seatRingRadius; // centro -> assento
+          const dirZ = (sz - pokerCz) / seatRingRadius;
+          const isTurn = state.toActIndex === seat.index;
+
+          // Placa de nome + fichas acima da cadeira
+          const tag =
+            (isTurn ? "▶ " : "") +
+            (seat.nick || `Assento ${seat.index + 1}`) +
+            `  ${seat.chips}` +
+            (seat.folded ? "  (fold)" : seat.allIn ? "  (all-in)" : "");
+          const plate = makeLabelSprite(tag);
+          plate.position.set(sx, storyY + 1.95, sz);
+          plate.scale.multiplyScalar(isTurn ? 0.72 : 0.58);
+          pokerLiveGroup.add(plate);
+
+          // Cartas do jogador, na frente do assento
+          let cards: (PokerCardLite | null)[] | null = null;
+          if (localSeatIndex === seat.index && holeCards && holeCards.length) {
+            cards = holeCards;
+          } else if (seat.showCards && seat.showCards.length) {
+            cards = seat.showCards;
+          } else if (seat.inHand && !seat.folded) {
+            cards = [null, null]; // viradas
+          }
+          if (cards) {
+            const cardR = feltRadius - 0.3;
+            const baseX = pokerCx + dirX * cardR;
+            const baseZ = pokerCz + dirZ * cardR;
+            const perpX = -dirZ;
+            const perpZ = dirX;
+            cards.forEach((cd, k) => {
+              const off = (k - (cards!.length - 1) / 2) * 0.13;
+              const card = buildLiveCard(cd ? cd.rank : null, cd ? cd.suit : null);
+              card.position.set(
+                baseX + perpX * off,
+                feltSurfaceY + 0.006,
+                baseZ + perpZ * off,
+              );
+              card.rotation.y = facing;
+              if (seat.folded) card.scale.setScalar(0.85);
+              pokerLiveGroup.add(card);
+            });
+          }
+
+          // Fichas apostadas nesta rodada, entre as cartas e o parapeito
+          if (seat.betThisRound > 0) {
+            const betR = feltRadius * 0.62;
+            const count = Math.max(1, Math.min(10,
+              Math.round(seat.betThisRound / Math.max(1, state.bigBlind))));
+            makeChipStack(
+              pokerLiveGroup,
+              pokerCx + dirX * betR,
+              pokerCz + dirZ * betR,
+              count, seat.index % chipMats.length,
+            );
+            const betLabel = makeLabelSprite(String(seat.betThisRound));
+            betLabel.position.set(
+              pokerCx + dirX * betR,
+              feltSurfaceY + 0.3,
+              pokerCz + dirZ * betR,
+            );
+            betLabel.scale.multiplyScalar(0.42);
+            pokerLiveGroup.add(betLabel);
+          }
+        }
+
+        // Dealer button perto da cadeira do dealer
+        if (state.dealerIndex != null && state.dealerIndex < 6) {
+          const angle = (state.dealerIndex / 6) * Math.PI * 2 + Math.PI / 6;
+          const dx = Math.cos(angle);
+          const dz = Math.sin(angle);
+          const dBtn = makeDealerButton();
+          dBtn.position.set(
+            pokerCx + dx * (feltRadius - 0.5) - dz * 0.18,
+            feltSurfaceY + 0.013,
+            pokerCz + dz * (feltRadius - 0.5) + dx * 0.18,
+          );
+          pokerLiveGroup.add(dBtn);
+        }
+      };
+
+      pokerView = {
+        center: new THREE.Vector3(centerX + pokerCx, feltSurfaceY, centerZ + pokerCz),
+        setView: setPokerView,
+      };
+
+      // Pendente decorativo sobre a mesa (cúpula que ilumina o feltro)
+      const ceilingY = storyY + wallH;
+      const cord = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.015, 0.015, ceilingY - (tableTopY + 1.55), 8),
+        new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }),
+      );
+      cord.position.set(pokerCx, (ceilingY + tableTopY + 1.55) / 2, pokerCz);
+      storyGroup.add(cord);
+      const shade = new THREE.Mesh(
+        new THREE.ConeGeometry(0.55, 0.45, 32, 1, true),
+        new THREE.MeshStandardMaterial({
+          color: 0x2b2b2b,
+          roughness: 0.6,
+          metalness: 0.3,
+          side: THREE.DoubleSide,
+          emissive: 0xffd9a0,
+          emissiveIntensity: 0.35,
+        }),
+      );
+      shade.position.set(pokerCx, tableTopY + 1.55, pokerCz);
+      storyGroup.add(shade);
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 16, 16),
+        new THREE.MeshStandardMaterial({ color: 0xfff2d4, emissive: 0xffe6b0, emissiveIntensity: 1.4 }),
+      );
+      bulb.position.set(pokerCx, tableTopY + 1.42, pokerCz);
+      storyGroup.add(bulb);
+      const pokerLight = new THREE.PointLight(0xffe2b0, 6, 6.5, 2);
+      pokerLight.position.set(pokerCx, tableTopY + 1.35, pokerCz);
+      storyGroup.add(pokerLight);
+
+      // Porta-copos embutidos no parapeito, um por assento
+      const cupGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.06, 16);
+      for (let s = 0; s < 6; s++) {
+        const a = (s / 6) * Math.PI * 2 + Math.PI / 6;
+        const cup = new THREE.Mesh(cupGeo, cupMat);
+        cup.position.set(
+          pokerCx + Math.cos(a) * (railRadius - 0.01),
+          feltSurfaceY + 0.02,
+          pokerCz + Math.sin(a) * (railRadius - 0.01),
+        );
+        storyGroup.add(cup);
+      }
 
       // 6 cadeiras ao redor + interactables (cada assento dispara onPokerSeatInteract)
-      const seatRadius = rimRadius + 0.95;
+      const seatRadius = seatRingRadius;
       const seatCount = 6;
       for (let i = 0; i < seatCount; i++) {
         const angle = (i / seatCount) * Math.PI * 2 + Math.PI / 6;
@@ -1564,6 +2092,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   return {
     group,
     bounds,
+    poker: pokerView,
     dispose() {
       parent.remove(group);
       group.traverse((obj) => {

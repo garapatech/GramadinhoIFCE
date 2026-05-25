@@ -107,6 +107,17 @@ export default function GameView() {
     pvpStateRef.current = pvpState;
   }, [pvpState]);
 
+  // Reflete o estado do pôquer na mesa 3D (cartas, fichas, jogadores, pote).
+  useEffect(() => {
+    const api = gameApiRef.current;
+    if (!api?.updatePoker) return;
+    const localSeat =
+      pokerState?.seats.find(
+        (s) => s.playerId && s.playerId === localIdRef.current,
+      )?.index ?? null;
+    api.updatePoker(pokerState ?? null, pokerHole ?? null, localSeat);
+  }, [pokerState, pokerHole]);
+
   useEffect(() => {
     return () => {
       if (espectroNoticeTimerRef.current) {

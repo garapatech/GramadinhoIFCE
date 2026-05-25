@@ -35,7 +35,12 @@ import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
 import { disposeObject3D } from "@/game/disposeObject3D";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
-import { buildBlocoTelematica } from "@/game/world/blocoTelematica/buildScene";
+import {
+  buildBlocoTelematica,
+  type PokerTableView,
+  type PokerStateLite,
+  type PokerCardLite,
+} from "@/game/world/blocoTelematica/buildScene";
 import { createWorldSpatialHelpers, getDistance2D } from "@/game/world/spatial";
 import {
   CAMPUS_ENTRY_X,
@@ -847,6 +852,10 @@ world.add(player);
 playerPositionTarget = player;
 player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 
+// Mesa de pôquer 3D (LATIM) e estado da câmera quando sentado nela.
+let pokerTable: PokerTableView | null = null;
+let pokerSeatedCam: { center: THREE.Vector3; seat: THREE.Vector3 } | null = null;
+
 {
   const bloco = buildBlocoTelematica({
     parent: world,
@@ -861,6 +870,13 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
           label: `mesa de pôquer (assento ${seatIndex + 1})`,
         },
       );
+      // Aproxima a câmera da mesa: vista por cima do ombro do avatar sentado.
+      if (pokerTable) {
+        pokerSeatedCam = {
+          center: pokerTable.center.clone(),
+          seat: anchor.position.clone(),
+        };
+      }
       onPokerSeatInteract(seatIndex);
     },
     onChessSeatInteract: (color, anchor) => {
@@ -874,6 +890,7 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
       onChessSeatInteract(color);
     },
   });
+  pokerTable = bloco.poker;
   mapFeatures.buildings.push({
     x: (bloco.bounds.minX + bloco.bounds.maxX) / 2,
     z: (bloco.bounds.minZ + bloco.bounds.maxZ) / 2,
@@ -4673,6 +4690,7 @@ function exitSit() {
   playerState.sitEndSpeaker = "Banco";
   playerState.sitPersistent = false;
   playerState.sitTimer = 0;
+  pokerSeatedCam = null;
 }
 
 function applyBikeRidePose(refs, pedalPhase, intensity = 1, steering = 0, wheelie = 0) {
@@ -5660,7 +5678,36 @@ function drawMinimap() {
   });
 }
 
+const _pokerCamPos = new THREE.Vector3();
+const _pokerCamLook = new THREE.Vector3();
 function updateCamera() {
+  // Vista aproximada da mesa quando o player está sentado no pôquer.
+  if (pokerSeatedCam && playerState.sitting) {
+    const { center, seat } = pokerSeatedCam;
+    const dx = seat.x - center.x;
+    const dz = seat.z - center.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const ux = dx / len; // centro -> assento (pra fora)
+    const uz = dz / len;
+    const px = -uz; // perpendicular (lateral) -> sobre o ombro
+    const pz = ux;
+    // Por cima do ombro: deslocada pro lado e mais alta, pra não olhar
+    // direto pra nuca do avatar. Olha pra mesa, levemente inclinada.
+    _pokerCamPos.set(
+      seat.x + ux * 0.55 + px * 1.15,
+      center.y + 2.55,
+      seat.z + uz * 0.55 + pz * 1.15,
+    );
+    // Mira no centro da mesa puxando um pouco pras cartas do jogador.
+    _pokerCamLook.set(
+      center.x + ux * 0.35,
+      center.y - 0.05,
+      center.z + uz * 0.35,
+    );
+    camera.position.lerp(_pokerCamPos, 0.12);
+    camera.lookAt(_pokerCamLook);
+    return;
+  }
   cameraController.updateCamera(camera, player.position, (id) => remotePlayers.has(id));
 }
 
@@ -5950,6 +5997,13 @@ function destroy() {
     espectroSpawn: (payload) => espectroEvent?.spawn(payload),
     espectroDespawn: () => espectroEvent?.despawn(),
     exitSit,
+    updatePoker: (
+      state: PokerStateLite | null,
+      holeCards: PokerCardLite[] | null,
+      localSeatIndex: number | null,
+    ) => {
+      pokerTable?.setView(state, holeCards, localSeatIndex);
+    },
   };
 }
 

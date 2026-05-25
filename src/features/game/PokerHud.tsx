@@ -23,86 +23,20 @@ type Props = {
   onDismissError: () => void;
 };
 
-function rankLabel(rank: number): string {
-  if (rank === 14) return "A";
-  if (rank === 13) return "K";
-  if (rank === 12) return "Q";
-  if (rank === 11) return "J";
-  return String(rank);
-}
-
-function suitGlyph(suit: Card["suit"]): { glyph: string; color: string } {
-  if (suit === "H") return { glyph: "♥", color: "#d4221f" };
-  if (suit === "D") return { glyph: "♦", color: "#d4221f" };
-  if (suit === "S") return { glyph: "♠", color: "#111" };
-  return { glyph: "♣", color: "#111" };
-}
-
-function CardView({ card, hidden }: { card: Card | null; hidden?: boolean }) {
-  if (!card || hidden) {
-    return (
-      <div
-        style={{
-          width: 38,
-          height: 54,
-          borderRadius: 5,
-          background:
-            "repeating-linear-gradient(45deg, #6f1414 0 6px, #8c1c1c 6px 12px)",
-          border: "1px solid #2a0a0a",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-        }}
-      />
-    );
-  }
-  const { glyph, color } = suitGlyph(card.suit);
-  return (
-    <div
-      style={{
-        width: 38,
-        height: 54,
-        borderRadius: 5,
-        background: "#fafafa",
-        border: "1px solid #888",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.4)",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        color,
-        fontWeight: 700,
-        fontFamily: "ui-sans-serif, system-ui",
-      }}
-    >
-      <span style={{ fontSize: 14, lineHeight: 1 }}>{rankLabel(card.rank)}</span>
-      <span style={{ fontSize: 20, lineHeight: 1 }}>{glyph}</span>
-    </div>
-  );
-}
-
-function CardRow({ cards, padTo, hideAll }: { cards: Card[]; padTo?: number; hideAll?: boolean }) {
-  const slots: (Card | null)[] = cards.slice();
-  if (padTo) while (slots.length < padTo) slots.push(null);
-  return (
-    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-      {slots.map((c, i) => (
-        <CardView key={i} card={c} hidden={hideAll === true} />
-      ))}
-    </div>
-  );
-}
-
 const PHASE_LABEL: Record<PokerState["phase"], string> = {
   waiting: "Aguardando jogadores",
-  preflop: "Pre-flop",
+  preflop: "Pré-flop",
   flop: "Flop",
   turn: "Turn",
   river: "River",
   showdown: "Showdown",
 };
 
+// Barra de ação enxuta: a mesa, cartas, fichas e jogadores são renderizados
+// em 3D na própria mesa do LATIM. Aqui ficam só os controles e o status.
 export default function PokerHud({
   state,
-  holeCards,
+  holeCards: _holeCards,
   localId,
   errorMessage,
   onStand,
@@ -134,34 +68,96 @@ export default function PokerHud({
     setRaiseAmount(minRaiseTotal);
   }, [minRaiseTotal]);
 
-  if (!state || !mySeat) return null;
+  const statusText = (() => {
+    if (!state) return "Entrando na mesa…";
+    if (!mySeat) return "Assistindo a mesa";
+    if (isMyTurn) return toCall > 0 ? `Sua vez · pagar ${toCall}` : "Sua vez · mesa livre";
+    if (mySeat.folded) return "Você foldou — aguarde a próxima mão";
+    if (mySeat.allIn) return "Você está all-in — aguardando";
+    if (state.phase === "waiting") {
+      return state.seats.filter((s) => s.playerId).length < 2
+        ? "Aguardando outro jogador sentar…"
+        : "Próxima mão em alguns segundos…";
+    }
+    if (state.toActIndex !== null) {
+      return `Vez de ${state.seats[state.toActIndex]?.nick ?? "…"}`;
+    }
+    return PHASE_LABEL[state.phase];
+  })();
 
-  const otherSeats = state.seats.filter((s) => s.playerId && s.index !== mySeat.index);
+  const winnerText = useMemo(() => {
+    if (!state || state.lastWinners.length === 0) return null;
+    return state.lastWinners
+      .map((w) => `${w.nick} ganhou ${w.amount} com ${w.handName}`)
+      .join(" · ");
+  }, [state]);
 
   return (
     <div
       style={{
         position: "fixed",
-        right: 16,
-        bottom: 16,
-        width: 360,
-        maxHeight: "calc(100vh - 32px)",
-        overflowY: "auto",
-        background: "linear-gradient(180deg, #0d2a1e 0%, #0a1a14 100%)",
-        color: "#f3f3f3",
-        border: "2px solid #1f6b3a",
-        borderRadius: 10,
-        padding: 14,
-        fontFamily: "ui-sans-serif, system-ui",
-        fontSize: 13,
+        left: "50%",
+        bottom: 18,
+        transform: "translateX(-50%)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
         zIndex: 50,
-        boxShadow: "0 6px 24px rgba(0,0,0,0.6)",
-        // O .game-overlay pai tem pointer-events: none — precisamos opt-in.
         pointerEvents: "auto",
+        fontFamily: "ui-sans-serif, system-ui",
+        maxWidth: "min(96vw, 720px)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-        <strong style={{ fontSize: 15 }}>Pôquer • LATIM</strong>
+      {errorMessage && (
+        <div
+          onClick={onDismissError}
+          style={{
+            background: "#5b1c1c",
+            border: "1px solid #a93636",
+            color: "#fff",
+            padding: "6px 12px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 12,
+          }}
+          title="Clique para fechar"
+        >
+          {errorMessage}
+        </div>
+      )}
+
+      {winnerText && state?.phase === "showdown" && (
+        <div
+          style={{
+            background: "linear-gradient(180deg, #14512f, #0c3d22)",
+            border: "1px solid #2f9c5c",
+            color: "#eafff0",
+            padding: "6px 14px",
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.5)",
+          }}
+        >
+          🏆 {winnerText}
+        </div>
+      )}
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          background: "linear-gradient(180deg, rgba(13,42,30,0.96), rgba(8,24,17,0.96))",
+          border: "2px solid #1f6b3a",
+          borderRadius: 12,
+          padding: "10px 14px",
+          boxShadow: "0 8px 28px rgba(0,0,0,0.6)",
+          flexWrap: "wrap",
+          justifyContent: "center",
+        }}
+      >
         <button
           type="button"
           onClick={onStand}
@@ -170,128 +166,40 @@ export default function PokerHud({
             background: "#a72424",
             color: "#fff",
             border: "1px solid #d24a4a",
-            padding: "6px 12px",
-            borderRadius: 6,
+            padding: "8px 12px",
+            borderRadius: 8,
             cursor: "pointer",
             fontSize: 13,
             fontWeight: 700,
-            boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
           }}
         >
-          🚪 Sair da mesa
+          🚪 Sair
         </button>
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          opacity: 0.75,
-          marginBottom: 10,
-          textAlign: "right",
-        }}
-      >
-        clique em <strong>Sair da mesa</strong> a qualquer momento pra levantar
-      </div>
 
-      {errorMessage && (
         <div
-          onClick={onDismissError}
           style={{
-            background: "#5b1c1c", border: "1px solid #a93636",
-            padding: "6px 8px", borderRadius: 4, marginBottom: 8, cursor: "pointer",
+            color: "#e9f5ee",
+            fontSize: 13,
+            fontWeight: 600,
+            minWidth: 120,
+            textAlign: "center",
           }}
-          title="Clique para fechar"
         >
-          {errorMessage}
-        </div>
-      )}
-
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
-        <span>{PHASE_LABEL[state.phase]}</span>
-        <span>Pote: <strong>{state.pot}</strong></span>
-        <span>Aposta: {state.currentBet}</span>
-      </div>
-
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>Mesa</div>
-        <CardRow cards={state.community} padTo={5} />
-      </div>
-
-      <div style={{ marginBottom: 10, paddingTop: 8, borderTop: "1px solid #1f4a32" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-          <span style={{ fontWeight: 600 }}>
-            Você (assento {mySeat.index + 1})
-            {state.dealerIndex === mySeat.index ? " 🎯" : ""}
-          </span>
-          <span>Fichas: <strong>{mySeat.chips}</strong></span>
-        </div>
-        <CardRow cards={holeCards ?? mySeat.showCards ?? []} padTo={2} />
-        <div style={{ fontSize: 11, opacity: 0.85, marginTop: 4 }}>
-          Aposta nesta rodada: {mySeat.betThisRound}
-          {mySeat.folded ? " — foldou" : ""}
-          {mySeat.allIn ? " — all-in" : ""}
-        </div>
-      </div>
-
-      {otherSeats.length > 0 && (
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>Outros jogadores</div>
-          {otherSeats.map((s) => (
-            <div
-              key={s.index}
-              style={{
-                display: "flex", justifyContent: "space-between",
-                padding: "4px 6px", borderRadius: 4,
-                background: state.toActIndex === s.index ? "#1f4a32" : "transparent",
-                marginBottom: 2, fontSize: 12,
-              }}
-            >
-              <span>
-                {s.nick || `Assento ${s.index + 1}`}
-                {state.dealerIndex === s.index ? " 🎯" : ""}
-                {s.folded ? " · fold" : s.allIn ? " · all-in" : ""}
-              </span>
-              <span>
-                {s.chips}f
-                {s.betThisRound > 0 ? ` (+${s.betThisRound})` : ""}
-              </span>
-              {s.showCards && s.showCards.length > 0 ? (
-                <CardRow cards={s.showCards} padTo={2} />
-              ) : null}
+          <div>{statusText}</div>
+          {state && mySeat && (
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>
+              Pote {state.pot} · suas fichas {mySeat.chips}
             </div>
-          ))}
+          )}
         </div>
-      )}
 
-      {state.lastWinners.length > 0 && (
-        <div style={{ background: "#13402a", padding: "6px 8px", borderRadius: 4, marginBottom: 10, fontSize: 12 }}>
-          <strong>Resultado:</strong>
-          {state.lastWinners.map((w, i) => (
-            <div key={i}>
-              {w.nick} ganhou {w.amount} com {w.handName}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {isMyTurn ? (
-        <div style={{ paddingTop: 8, borderTop: "1px solid #1f4a32" }}>
-          <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
-            Sua vez {toCall > 0 ? `· pagar ${toCall} pra continuar` : "· mesa livre"}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => onAction("fold")}
-              style={btnStyle("#6b2020")}
-            >
+        {isMyTurn && mySeat && state ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => onAction("fold")} style={btnStyle("#6b2020")}>
               Fold
             </button>
             {toCall === 0 ? (
-              <button
-                type="button"
-                onClick={() => onAction("check")}
-                style={btnStyle("#1f6b3a")}
-              >
+              <button type="button" onClick={() => onAction("check")} style={btnStyle("#1f6b3a")}>
                 Mesa
               </button>
             ) : (
@@ -304,16 +212,6 @@ export default function PokerHud({
                 Pagar {Math.min(toCall, mySeat.chips)}
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => onAction("allin")}
-              disabled={mySeat.chips === 0}
-              style={btnStyle("#a06318")}
-            >
-              All-in
-            </button>
-          </div>
-          <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center" }}>
             <input
               type="number"
               value={raiseAmount}
@@ -325,8 +223,13 @@ export default function PokerHud({
                 setRaiseAmount(Number.isFinite(v) ? v : 0);
               }}
               style={{
-                width: 80, padding: "4px 6px", borderRadius: 4,
-                border: "1px solid #1f6b3a", background: "#0a1a14", color: "#fff",
+                width: 72,
+                padding: "7px 6px",
+                borderRadius: 6,
+                border: "1px solid #1f6b3a",
+                background: "#0a1a14",
+                color: "#fff",
+                fontSize: 13,
               }}
             />
             <button
@@ -338,39 +241,19 @@ export default function PokerHud({
               }
               style={btnStyle("#2459a8")}
             >
-              Aumentar para {raiseAmount}
+              Aumentar
+            </button>
+            <button
+              type="button"
+              onClick={() => onAction("allin")}
+              disabled={mySeat.chips === 0}
+              style={btnStyle("#a06318")}
+            >
+              All-in
             </button>
           </div>
-          <div style={{ fontSize: 10, opacity: 0.6, marginTop: 4 }}>
-            Mínimo: {minRaiseTotal} · Máximo: {mySeat.chips + mySeat.betThisRound}
-          </div>
-        </div>
-      ) : (
-        <div style={{ fontSize: 11, opacity: 0.7, paddingTop: 6 }}>
-          {mySeat.folded
-            ? "Você foldou — aguarde a próxima mão."
-            : mySeat.allIn
-              ? "Você está all-in — aguardando."
-              : state.phase === "waiting"
-                ? state.seats.filter((s) => s.playerId).length < 2
-                  ? "Aguardando outro jogador sentar..."
-                  : "Próxima mão em alguns segundos..."
-                : state.toActIndex !== null
-                  ? `Vez de ${state.seats[state.toActIndex]?.nick ?? "..."}`
-                  : "Aguardando ação..."}
-        </div>
-      )}
-
-      {state.log.length > 0 && (
-        <details style={{ marginTop: 10, fontSize: 11, opacity: 0.85 }}>
-          <summary style={{ cursor: "pointer" }}>Histórico</summary>
-          <div style={{ maxHeight: 120, overflowY: "auto", marginTop: 4 }}>
-            {state.log.slice(-12).map((entry, i) => (
-              <div key={i}>· {entry}</div>
-            ))}
-          </div>
-        </details>
-      )}
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -380,10 +263,10 @@ function btnStyle(bg: string): React.CSSProperties {
     background: bg,
     color: "#fff",
     border: "none",
-    padding: "6px 10px",
-    borderRadius: 5,
+    padding: "8px 12px",
+    borderRadius: 6,
     cursor: "pointer",
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: 600,
   };
 }
