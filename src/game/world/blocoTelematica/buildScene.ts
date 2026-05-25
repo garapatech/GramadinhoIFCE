@@ -105,6 +105,9 @@ export type BlocoTelematicaScene = {
   group: THREE.Group;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   poker: PokerTableView | null;
+  // Altura do andar (Y) numa posição mundial — usado pra elevar avatares
+  // remotos no andar correto. prevFloorY dá snap estável entre níveis.
+  resolveFloorY(worldX: number, worldZ: number, prevFloorY: number): number;
   dispose(): void;
 };
 
@@ -434,6 +437,33 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   // Preenchido quando a mesa de pôquer do LATIM é construída.
   let pokerView: PokerTableView | null = null;
+
+  // Resolve a altura do andar (Y) para uma posição mundial, com memória do
+  // andar anterior pra dar snap estável entre térreo e superior. Usado tanto
+  // pro player local quanto pra elevar os avatares remotos no andar certo.
+  const STAIR_BOTTOM_X = STAIR_CENTER_X - STAIR_LENGTH / 2;
+  const STAIR_TOP_X = STAIR_CENTER_X + STAIR_LENGTH / 2;
+  const STAIR_MIN_Z = STAIR_CENTER_Z - STAIR_DEPTH / 2;
+  const STAIR_MAX_Z = STAIR_CENTER_Z + STAIR_DEPTH / 2;
+  const SUPERIOR_VISUAL_Y = STORY_HEIGHT + 0.165;
+  function resolveBlocoFloorY(worldX: number, worldZ: number, prevFloorY: number): number {
+    const localX = worldX - centerX;
+    const localZ = worldZ - centerZ;
+    const insideFootprint =
+      Math.abs(localX) < BLOCO_WIDTH / 2 && Math.abs(localZ) < BLOCO_DEPTH / 2;
+    const inStairZone =
+      insideFootprint &&
+      localZ >= STAIR_MIN_Z && localZ <= STAIR_MAX_Z &&
+      localX >= STAIR_BOTTOM_X && localX <= STAIR_TOP_X;
+    if (inStairZone) {
+      const t = (localX - STAIR_BOTTOM_X) / (STAIR_TOP_X - STAIR_BOTTOM_X);
+      return THREE.MathUtils.clamp(t, 0, 1) * SUPERIOR_VISUAL_Y;
+    }
+    if (insideFootprint) {
+      return prevFloorY < SUPERIOR_VISUAL_Y * 0.5 ? 0 : SUPERIOR_VISUAL_Y;
+    }
+    return 0;
+  }
 
   const windowTexture = createWindowTexture();
 
@@ -1995,15 +2025,6 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   if (interactables && getPlayerPosition) {
     // Nao usamos mais fade — paredes externas alternam .visible.
     const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [];
-    // Escada lateral: x cresce pro leste (base oeste y=0 → topo leste y=SUPERIOR_VISUAL_Y).
-    const STAIR_BOTTOM_X = STAIR_CENTER_X - STAIR_LENGTH / 2;
-    const STAIR_TOP_X = STAIR_CENTER_X + STAIR_LENGTH / 2;
-    const STAIR_MIN_Z = STAIR_CENTER_Z - STAIR_DEPTH / 2;
-    const STAIR_MAX_Z = STAIR_CENTER_Z + STAIR_DEPTH / 2;
-    // Topo visual do piso do superior = STORY_HEIGHT (slab center) + 0.08
-    // (half slab) + 0.085 (half floor + epsilon). Player precisa ser
-    // elevado ate aqui pra nao "afundar" no chao.
-    const SUPERIOR_VISUAL_Y = STORY_HEIGHT + 0.165;
     let playerFloorY = 0;
 
     interactables.push({
@@ -2029,22 +2050,14 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           Math.abs(localX) < BLOCO_WIDTH / 2 &&
           Math.abs(localZ) < BLOCO_DEPTH / 2;
 
-        // Atualiza Y do andar conforme o jogador caminha
+        // Atualiza Y do andar conforme o jogador caminha (escada = rampa).
+        playerFloorY = resolveBlocoFloorY(p.x, p.z, playerFloorY);
         const inStairZone =
           insideFootprint &&
           localZ >= STAIR_MIN_Z &&
           localZ <= STAIR_MAX_Z &&
           localX >= STAIR_BOTTOM_X &&
           localX <= STAIR_TOP_X;
-        if (inStairZone) {
-          const t = (localX - STAIR_BOTTOM_X) / (STAIR_TOP_X - STAIR_BOTTOM_X);
-          playerFloorY = THREE.MathUtils.clamp(t, 0, 1) * SUPERIOR_VISUAL_Y;
-        } else if (insideFootprint) {
-          // Snap pro andar mais proximo, evita ficar parado entre niveis
-          playerFloorY = playerFloorY < SUPERIOR_VISUAL_Y * 0.5 ? 0 : SUPERIOR_VISUAL_Y;
-        } else {
-          playerFloorY = 0;
-        }
 
         // Adiciona offset Y ao player (engine ja setou y base + jumpY)
         p.y += playerFloorY;
@@ -2093,6 +2106,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     group,
     bounds,
     poker: pokerView,
+    resolveFloorY: resolveBlocoFloorY,
     dispose() {
       parent.remove(group);
       group.traverse((obj) => {
