@@ -23,6 +23,12 @@ type GameInputBindingsContext = {
   onQueueEmote: (kind: EmoteKind) => void;
   onQueuePvpThrow: () => void;
   clearKeys: () => void;
+  // Câmera da mesa de pôquer: arraste/zoom giram a vista em volta da mesa.
+  isPokerSeated?: () => boolean;
+  onPokerCameraDragStart?: (clientX: number, clientY: number) => void;
+  onPokerCameraDragMove?: (clientX: number, clientY: number) => void;
+  onPokerCameraDragEnd?: () => void;
+  onPokerCameraZoom?: (deltaY: number) => void;
 };
 
 export type GameInputBindings = {
@@ -65,6 +71,11 @@ export function createGameInputBindings({
   onQueueEmote,
   onQueuePvpThrow,
   clearKeys,
+  isPokerSeated,
+  onPokerCameraDragStart,
+  onPokerCameraDragMove,
+  onPokerCameraDragEnd,
+  onPokerCameraZoom,
 }: GameInputBindingsContext): GameInputBindings {
   const keydownHandler = (event: KeyboardEvent) => {
     if (isAmbientAudioEnabled()) ensureAmbientAudio();
@@ -121,12 +132,21 @@ export function createGameInputBindings({
     if (devTools.handlePointerDown(event)) return;
     if (event.button !== 0 && event.button !== 2) return;
     event.preventDefault();
+    // Sentado na mesa de pôquer: arrastar gira a câmera ao redor da mesa.
+    if (isPokerSeated?.()) {
+      onPokerCameraDragStart?.(event.clientX, event.clientY);
+      return;
+    }
     if (cameraController.mode !== "orbit" || shouldIgnoreInputEvent(event, shouldIgnoreKeys)) return;
     cameraController.beginDrag(event.clientX, event.clientY);
   };
 
   const mousemoveHandler = (event: MouseEvent) => {
     if (devTools.handlePointerMove(event)) return;
+    if (isPokerSeated?.()) {
+      onPokerCameraDragMove?.(event.clientX, event.clientY);
+      return;
+    }
     if (cameraController.mode !== "orbit" || !cameraController.dragActive || shouldIgnoreInputEvent(event, shouldIgnoreKeys))
       return;
     cameraController.dragTo(event.clientX, event.clientY);
@@ -134,16 +154,23 @@ export function createGameInputBindings({
 
   const mouseupHandler = (event: MouseEvent) => {
     if (devTools.handlePointerUp(event)) return;
+    onPokerCameraDragEnd?.();
     cameraController.endDrag();
   };
 
   const contextmenuHandler = (event: MouseEvent) => {
     event.preventDefault();
+    onPokerCameraDragEnd?.();
     cameraController.endDrag();
   };
 
   const wheelHandler = (event: WheelEvent) => {
     if (isAmbientAudioEnabled()) ensureAmbientAudio();
+    if (isPokerSeated?.()) {
+      event.preventDefault();
+      onPokerCameraZoom?.(event.deltaY);
+      return;
+    }
     if (cameraController.mode !== "orbit" || shouldIgnoreInputEvent(event, shouldIgnoreKeys)) return;
     event.preventDefault();
     cameraController.zoomBy(event.deltaY);
@@ -151,6 +178,7 @@ export function createGameInputBindings({
 
   const blurHandler = () => {
     clearKeys();
+    onPokerCameraDragEnd?.();
     cameraController.endDrag();
   };
 

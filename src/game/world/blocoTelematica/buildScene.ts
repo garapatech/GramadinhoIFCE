@@ -174,6 +174,42 @@ function makeLabelSprite(text: string) {
   return sprite;
 }
 
+// Texto deitado no feltro (decalque horizontal) — mais legível do que sprite
+// flutuante. Retorna um Group; gire pelo .rotation.y pra orientar a leitura.
+function makeFeltLabel(text: string, opts?: { scale?: number; highlight?: boolean }): THREE.Group {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 160;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, 512, 160);
+  ctx.font = "700 62px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const tw = Math.min(ctx.measureText(text).width, 452);
+  const bw = tw + 52;
+  const bh = 104;
+  const bx = (512 - bw) / 2;
+  const by = (160 - bh) / 2;
+  ctx.fillStyle = opts?.highlight ? "rgba(214,172,42,0.94)" : "rgba(6,18,12,0.62)";
+  roundRectPath(ctx, bx, by, bw, bh, 28);
+  ctx.fill();
+  ctx.fillStyle = opts?.highlight ? "#17110a" : "#f1f6ea";
+  ctx.fillText(text, 256, 82);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  const h = (opts?.scale ?? 1) * 0.17;
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(h * (512 / 160), h), mat);
+  plane.rotation.x = -Math.PI / 2;
+  plane.renderOrder = 5;
+  plane.userData.disposable = true;
+  const g = new THREE.Group();
+  g.add(plane);
+  return g;
+}
+
 // ---- Texturas procedurais da mesa de pôquer ----
 function roundRectPath(
   ctx: CanvasRenderingContext2D,
@@ -1272,8 +1308,15 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         for (let i = pokerLiveGroup.children.length - 1; i >= 0; i--) {
           const child = pokerLiveGroup.children[i];
           child.traverse((o) => {
+            // Sprites e decalques de texto têm textura/material únicos por
+            // atualização — descarta pra não vazar memória. Cartas/fichas
+            // usam recursos compartilhados (não descartar).
             if (o instanceof THREE.Sprite) {
               const m = o.material as THREE.SpriteMaterial;
+              m.map?.dispose();
+              m.dispose();
+            } else if (o instanceof THREE.Mesh && o.userData.disposable) {
+              const m = o.material as THREE.MeshBasicMaterial;
               m.map?.dispose();
               m.dispose();
             }
@@ -1303,14 +1346,24 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           pokerLiveGroup.add(card);
         });
 
-        // Placa do pote/fase no centro
+        // Placa do pote/fase, deitada no centro do feltro (orientada pro
+        // jogador local quando ele está sentado).
         const phaseTxt = {
           waiting: "Aguardando", preflop: "Pré-flop", flop: "Flop",
           turn: "Turn", river: "River", showdown: "Showdown",
         }[state.phase] ?? state.phase;
-        const potPlate = makeLabelSprite(`${phaseTxt}  •  Pote ${state.pot}`);
-        potPlate.position.set(pokerCx, feltSurfaceY + 0.62, pokerCz + 0.18);
-        potPlate.scale.multiplyScalar(0.62);
+        const centerFacing =
+          localSeatIndex != null && localSeatIndex < 6
+            ? (() => {
+                const a = (localSeatIndex / 6) * Math.PI * 2 + Math.PI / 6;
+                const lx = pokerCx + Math.cos(a) * seatRingRadius;
+                const lz = pokerCz + Math.sin(a) * seatRingRadius;
+                return Math.atan2(pokerCx - lx, pokerCz - lz);
+              })()
+            : 0;
+        const potPlate = makeFeltLabel(`${phaseTxt}  •  Pote ${state.pot}`, { scale: 1.05 });
+        potPlate.position.set(pokerCx, feltSurfaceY + 0.004, pokerCz + 0.42);
+        potPlate.rotation.y = centerFacing;
         pokerLiveGroup.add(potPlate);
 
         // Por assento (apenas 6 cadeiras físicas)
@@ -1324,15 +1377,19 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
           const dirZ = (sz - pokerCz) / seatRingRadius;
           const isTurn = state.toActIndex === seat.index;
 
-          // Placa de nome + fichas acima da cadeira
+          // Placa de nome + fichas deitada no feltro, na borda em frente ao
+          // assento (orientada pra leitura de quem está sentado ali).
           const tag =
-            (isTurn ? "▶ " : "") +
             (seat.nick || `Assento ${seat.index + 1}`) +
             `  ${seat.chips}` +
-            (seat.folded ? "  (fold)" : seat.allIn ? "  (all-in)" : "");
-          const plate = makeLabelSprite(tag);
-          plate.position.set(sx, storyY + 1.95, sz);
-          plate.scale.multiplyScalar(isTurn ? 0.72 : 0.58);
+            (seat.folded ? " · fold" : seat.allIn ? " · all-in" : "");
+          const plate = makeFeltLabel(tag, { scale: isTurn ? 1.0 : 0.85, highlight: isTurn });
+          plate.position.set(
+            pokerCx + dirX * (feltRadius - 0.02),
+            feltSurfaceY + 0.004,
+            pokerCz + dirZ * (feltRadius - 0.02),
+          );
+          plate.rotation.y = facing;
           pokerLiveGroup.add(plate);
 
           // Cartas do jogador, na frente do assento
@@ -1375,13 +1432,13 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
               pokerCz + dirZ * betR,
               count, seat.index % chipMats.length,
             );
-            const betLabel = makeLabelSprite(String(seat.betThisRound));
+            const betLabel = makeFeltLabel(String(seat.betThisRound), { scale: 0.6 });
             betLabel.position.set(
-              pokerCx + dirX * betR,
-              feltSurfaceY + 0.3,
-              pokerCz + dirZ * betR,
+              pokerCx + dirX * (betR - 0.18),
+              feltSurfaceY + 0.004,
+              pokerCz + dirZ * (betR - 0.18),
             );
-            betLabel.scale.multiplyScalar(0.42);
+            betLabel.rotation.y = facing;
             pokerLiveGroup.add(betLabel);
           }
         }

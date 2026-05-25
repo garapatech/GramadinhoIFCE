@@ -94,6 +94,12 @@ export default function PokerHud({
 
   return (
     <div
+      // Impede que cliques/scroll na barra cheguem ao window (a engine dá
+      // preventDefault no mousedown, o que roubava o foco do campo de aumento
+      // e disparava o giro de câmera da mesa).
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
       style={{
         position: "fixed",
         left: "50%",

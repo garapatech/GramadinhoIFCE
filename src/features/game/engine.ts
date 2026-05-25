@@ -856,6 +856,13 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 let pokerTable: PokerTableView | null = null;
 let pokerSeatedCam: { center: THREE.Vector3; seat: THREE.Vector3 } | null = null;
 let pokerAvatarsHidden = false;
+// Órbita da câmera sentada (girável por arraste do mouse).
+let pokerCamYaw = 0;       // deslocamento horizontal por arraste
+let pokerCamPitch = 0.52;  // ângulo vertical
+let pokerCamDist = 2.7;    // distância ao centro da mesa
+let pokerCamDragActive = false;
+let pokerCamDragX = 0;
+let pokerCamDragY = 0;
 // Resolve a altura do andar do Bloco Telemática (eleva remotos no andar certo).
 let blocoResolveFloorY: ((x: number, z: number, prev: number) => number) | null = null;
 
@@ -873,12 +880,16 @@ let blocoResolveFloorY: ((x: number, z: number, prev: number) => number) | null 
           label: `mesa de pôquer (assento ${seatIndex + 1})`,
         },
       );
-      // Aproxima a câmera da mesa: vista por cima do ombro do avatar sentado.
+      // Aproxima a câmera da mesa: órbita atrás do assento (girável por arraste).
       if (pokerTable) {
         pokerSeatedCam = {
           center: pokerTable.center.clone(),
           seat: anchor.position.clone(),
         };
+        pokerCamYaw = 0;
+        pokerCamPitch = 0.52;
+        pokerCamDist = 2.7;
+        pokerCamDragActive = false;
       }
       onPokerSeatInteract(seatIndex);
     },
@@ -4551,6 +4562,11 @@ const inputBindings = createGameInputBindings({
     if (pvpActiveMatch) queuedPvpThrow = true;
   },
   clearKeys: () => keys.clear(),
+  isPokerSeated: () => !!pokerSeatedCam && playerState.sitting,
+  onPokerCameraDragStart: pokerCamDragStart,
+  onPokerCameraDragMove: pokerCamDragMove,
+  onPokerCameraDragEnd: pokerCamDragEnd,
+  onPokerCameraZoom: pokerCamZoom,
 });
 
 function syncInteractionProximityState() {
@@ -5706,34 +5722,47 @@ function applyPokerSeatedHiding() {
   }
 }
 
+// Handlers de arraste/zoom da câmera sentada (chamados pelo inputBindings).
+function pokerCamDragStart(clientX: number, clientY: number) {
+  if (!pokerSeatedCam) return;
+  pokerCamDragActive = true;
+  pokerCamDragX = clientX;
+  pokerCamDragY = clientY;
+}
+function pokerCamDragMove(clientX: number, clientY: number) {
+  if (!pokerCamDragActive) return;
+  pokerCamYaw -= (clientX - pokerCamDragX) * 0.006;
+  pokerCamPitch = THREE.MathUtils.clamp(pokerCamPitch - (clientY - pokerCamDragY) * 0.005, 0.1, 1.28);
+  pokerCamDragX = clientX;
+  pokerCamDragY = clientY;
+}
+function pokerCamDragEnd() {
+  pokerCamDragActive = false;
+}
+function pokerCamZoom(deltaY: number) {
+  if (!pokerSeatedCam) return;
+  pokerCamDist = THREE.MathUtils.clamp(pokerCamDist + deltaY * 0.0025, 1.7, 4.6);
+}
+
 const _pokerCamPos = new THREE.Vector3();
 const _pokerCamLook = new THREE.Vector3();
 function updateCamera() {
   applyPokerSeatedHiding();
-  // Vista aproximada da mesa quando o player está sentado no pôquer.
+  // Câmera orbitando a mesa quando o player está sentado no pôquer.
+  // Padrão: atrás do assento, levemente de cima. Arraste gira; scroll zoom.
   if (pokerSeatedCam && playerState.sitting) {
     const { center, seat } = pokerSeatedCam;
-    const dx = seat.x - center.x;
-    const dz = seat.z - center.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const ux = dx / len; // centro -> assento (pra fora)
-    const uz = dz / len;
-    const px = -uz; // perpendicular (lateral) -> sobre o ombro
-    const pz = ux;
-    // Por cima do ombro: deslocada pro lado e mais alta, pra não olhar
-    // direto pra nuca do avatar. Olha pra mesa, levemente inclinada.
+    // Ângulo base = direção do centro pro assento (vista atrás do jogador).
+    const baseAngle = Math.atan2(seat.z - center.z, seat.x - center.x);
+    const yaw = baseAngle + pokerCamYaw;
+    const cosP = Math.cos(pokerCamPitch);
     _pokerCamPos.set(
-      seat.x + ux * 0.55 + px * 1.15,
-      center.y + 2.55,
-      seat.z + uz * 0.55 + pz * 1.15,
+      center.x + Math.cos(yaw) * cosP * pokerCamDist,
+      center.y + Math.sin(pokerCamPitch) * pokerCamDist + 0.35,
+      center.z + Math.sin(yaw) * cosP * pokerCamDist,
     );
-    // Mira no centro da mesa puxando um pouco pras cartas do jogador.
-    _pokerCamLook.set(
-      center.x + ux * 0.35,
-      center.y - 0.05,
-      center.z + uz * 0.35,
-    );
-    camera.position.lerp(_pokerCamPos, 0.12);
+    _pokerCamLook.set(center.x, center.y - 0.05, center.z);
+    camera.position.lerp(_pokerCamPos, 0.15);
     camera.lookAt(_pokerCamLook);
     return;
   }

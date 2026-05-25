@@ -132,10 +132,10 @@ function handleEspectroSpawn(context: GameViewEventContext, event: SpectroSpawnM
   appendChatMessage(context.setChatMessages, {
     id: "__system__",
     nick: "sistema",
-    text: "espectro está no campus",
+    text: "biriba está no campus",
     ts: Date.now(),
   });
-  context.setEspectroNotice("espectro está no campus");
+  context.setEspectroNotice("biriba está no campus");
   if (context.espectroNoticeTimerRef.current) clearTimeout(context.espectroNoticeTimerRef.current);
   context.espectroNoticeTimerRef.current = setTimeout(() => {
     context.setEspectroNotice("");

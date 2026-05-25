@@ -226,7 +226,7 @@ export function createEspectroEvent({
 
   function makeEspectroRig(appearance = state.appearance || createRandomAppearance(Math.random)) {
     const rig = createCharacter(appearance);
-    const label = createNameLabel("Espectro", "#fff8dc", "#9ca3af");
+    const label = createNameLabel("biriba", "#fff8dc", "#9ca3af");
     rig.group.add(label);
     return { rig, label };
   }
