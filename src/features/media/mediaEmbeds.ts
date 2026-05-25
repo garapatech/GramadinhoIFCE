@@ -176,8 +176,5 @@ export function resolveMediaEmbed(input: unknown): MediaEmbedResult {
     };
   }
 
-  return {
-    ok: true,
-    ...result,
-  };
+  return result;
 }

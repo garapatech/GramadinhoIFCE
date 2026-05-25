@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { nickSchema } from "@/shared/schemas/nick";
 
 export const GAME_ROUTE_DEFAULT_NICK = "Visitante";
 export const gameRouteQuerySchema = z
   .object({
-    nick: z.string().trim().min(1).max(16).optional(),
+    nick: nickSchema.optional(),
   })
   .strict();
 

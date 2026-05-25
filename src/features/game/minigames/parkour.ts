@@ -16,13 +16,34 @@ type PlatformRuntime = PlatformDef & {
   currentX: number; currentZ: number; currentY: number;
 };
 
+type ParkourInteractable = {
+  kind: string;
+  label: string;
+  radius: number;
+  position: THREE.Vector3;
+  root: THREE.Object3D;
+  cullPosition?: THREE.Vector3;
+  cullRadius?: number;
+  cullDistance?: number;
+  npcDisabled?: () => boolean;
+  isDisabledForPlayer?: () => boolean;
+  interact: () => void;
+  update?: (dt: number, time: number) => void;
+};
+
+type ParkourFlagState = {
+  group: THREE.Group;
+  cloth: THREE.Mesh;
+  basePositions: Float32Array;
+};
+
 export type ParkourOptions = {
   world: THREE.Group;
   player: THREE.Group & { position: THREE.Vector3; rotation: { y: number } };
   playerState: { jumping: boolean; jumpY: number; jumpVel: number };
   playerVelocity: THREE.Vector2;
   speak: (text: string, speaker: string) => void;
-  interactables: any[];
+  interactables: ParkourInteractable[];
   container?: HTMLElement | null;
   isKeyDown?: (code: string) => boolean;
 };
@@ -196,7 +217,7 @@ function platformColor(def: PlatformDef): number {
 
 // ── Flag builder ──────────────────────────────────────────────────────────────
 
-function buildParkourFlag(world: THREE.Group): THREE.Group {
+function buildParkourFlag(world: THREE.Group): ParkourFlagState {
   const group = new THREE.Group();
 
   // Mastro
@@ -264,13 +285,11 @@ function buildParkourFlag(world: THREE.Group): THREE.Group {
   // Guardar posições base para animar
   const clothPositions  = cloth.geometry.attributes.position;
   const basePositions   = new Float32Array(clothPositions.array);
-  (group as any)._clothMesh = cloth;
-  (group as any)._basePos   = basePositions;
 
   group.position.set(-24, 0, -80);
   world.add(group);
 
-  return group;
+  return { group, cloth, basePositions };
 }
 
 // ── Airplane builder ──────────────────────────────────────────────────────────
@@ -465,8 +484,8 @@ export function createParkourCircuit(opts: ParkourOptions) {
       metalness: 0.04,
     });
     if (def.isCheckpoint) {
-      (mat as any).emissive    = new THREE.Color(0x906000);
-      (mat as any).emissiveIntensity = 0.25;
+      mat.emissive = new THREE.Color(0x906000);
+      mat.emissiveIntensity = 0.25;
     }
 
     // Plataformas estáticas: coluna sólida do chão até a superfície (evita flutuar)
@@ -498,7 +517,7 @@ export function createParkourCircuit(opts: ParkourOptions) {
   });
 
   // Bandeira na entrada
-  const flagGroup = buildParkourFlag(world);
+  const flag = buildParkourFlag(world);
 
   // Avião no topo
   const AIRPLANE_X = -77;
@@ -747,7 +766,7 @@ export function createParkourCircuit(opts: ParkourOptions) {
     speak("Você pousou o aviãozinho. Que voo!", "Aviãozinho do IFCE");
   }
 
-  const airplaneInteractable: any = {
+  const airplaneInteractable: ParkourInteractable = {
     kind: "airplane",
     label: "Aviãozinho do IFCE",
     radius: 5.5,
@@ -814,17 +833,16 @@ export function createParkourCircuit(opts: ParkourOptions) {
     }
 
     // Animar bandeira
-    const cloth     = (flagGroup as any)._clothMesh as THREE.Mesh | undefined;
-    const basePos   = (flagGroup as any)._basePos   as Float32Array | undefined;
-    if (cloth && basePos) {
+    const { cloth, basePositions } = flag;
+    if (cloth && basePositions) {
       const pos = cloth.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         const idx  = i * 3;
-        const bx   = basePos[idx];
+        const bx   = basePositions[idx];
         const xRatio = bx / 3.2;
         const wave = Math.sin(time * 4.5 + xRatio * 9) * 0.08 * xRatio;
-        (pos.array as Float32Array)[idx + 2] = basePos[idx + 2] + wave;
-        (pos.array as Float32Array)[idx + 1] = basePos[idx + 1] + Math.sin(time * 2.0 + xRatio * 4) * 0.02 * xRatio;
+        (pos.array as Float32Array)[idx + 2] = basePositions[idx + 2] + wave;
+        (pos.array as Float32Array)[idx + 1] = basePositions[idx + 1] + Math.sin(time * 2.0 + xRatio * 4) * 0.02 * xRatio;
       }
       pos.needsUpdate = true;
     }
@@ -1081,7 +1099,7 @@ export function createParkourCircuit(opts: ParkourOptions) {
     timerEl.remove();
     for (const p of parkourPigeons) world.remove(p.group);
     world.remove(rampMesh);
-    world.remove(flagGroup);
+    world.remove(flag.group);
     world.remove(airplaneGroup);
     for (const p of platforms) {
       world.remove(p.mesh);

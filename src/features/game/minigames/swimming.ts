@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { CharacterRigRefs } from "@/game/characterRig";
+import { disposeObject3D } from "@/game/disposeObject3D";
 
 export const SWIMMING_POOL_CONFIG = {
   centerX: 0,
@@ -760,6 +761,8 @@ export function createSwimmingMinigame({
     update: updateEnvironment,
     destroy() {
       hud.remove();
+      world.remove(group);
+      disposeObject3D(group);
     },
   };
 }

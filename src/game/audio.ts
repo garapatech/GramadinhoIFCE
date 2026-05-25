@@ -1,17 +1,27 @@
 import type { CampusSurface } from "@/game/world/campusLayout";
+import {
+  ambientAudioStateSchema,
+  defaultAmbientAudioState,
+  type AmbientAudioState,
+} from "@/shared/schemas/gameUi";
+import type { AtmosphereState, AtmosphereWeatherState } from "@/shared/schemas/atmosphere";
 
-let ambientAudioEnabled = true;
-let audioContext = null;
-let audioMasterGain = null;
-let audioWindSource = null;
-let audioWindFilter = null;
-let audioWindGain = null;
-let audioMurmurSource = null;
-let audioMurmurFilter = null;
-let audioMurmurGain = null;
-let audioRadioSource = null;
-let audioRadioFilter = null;
-let audioRadioGain = null;
+type WebKitAudioContextWindow = Window & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
+let ambientAudioEnabled = defaultAmbientAudioState.enabled;
+let audioContext: AudioContext | null = null;
+let audioMasterGain: GainNode | null = null;
+let audioWindSource: AudioBufferSourceNode | null = null;
+let audioWindFilter: BiquadFilterNode | null = null;
+let audioWindGain: GainNode | null = null;
+let audioMurmurSource: AudioBufferSourceNode | null = null;
+let audioMurmurFilter: BiquadFilterNode | null = null;
+let audioMurmurGain: GainNode | null = null;
+let audioRadioSource: AudioBufferSourceNode | null = null;
+let audioRadioFilter: BiquadFilterNode | null = null;
+let audioRadioGain: GainNode | null = null;
 let audioNextBirdAt = 0;
 let audioNextRadioAt = 0;
 let audioFootstepSide = 1;
@@ -21,33 +31,33 @@ const rand = (min, max) => min + Math.random() * (max - min);
 const isAudioRunning = () => !!audioContext && audioContext.state === "running" && !!audioMasterGain;
 
 export function resetGameAudio() {
-  ambientAudioEnabled = true;
+  ambientAudioEnabled = defaultAmbientAudioState.enabled;
   audioNextBirdAt = 0;
   audioNextRadioAt = 0;
   audioFootstepSide = 1;
 }
 
-export function readAmbientAudioState() {
-  return {
+export function readAmbientAudioState(): AmbientAudioState {
+  return ambientAudioStateSchema.parse({
     enabled: ambientAudioEnabled,
     label: ambientAudioEnabled ? "ativo" : "desligado",
-  };
+  });
 }
 
-function disconnectAudioNode(node) {
+function disconnectAudioNode(node: AudioNode | null) {
   if (!node) return;
   try {
     node.disconnect?.();
   } catch {}
 }
 
-function disconnectAudioNodes(...nodes) {
+function disconnectAudioNodes(...nodes: Array<AudioNode | null>) {
   for (const node of nodes) {
     disconnectAudioNode(node);
   }
 }
 
-function stopAudioNode(node) {
+function stopAudioNode(node: AudioScheduledSourceNode | null) {
   if (!node) return;
   try {
     node.stop?.();
@@ -55,7 +65,7 @@ function stopAudioNode(node) {
   disconnectAudioNode(node);
 }
 
-function createNoiseBuffer(context, durationSeconds = 2) {
+function createNoiseBuffer(context: AudioContext, durationSeconds = 2) {
   const length = Math.max(1, Math.floor(context.sampleRate * durationSeconds));
   const buffer = context.createBuffer(1, length, context.sampleRate);
   const data = buffer.getChannelData(0);
@@ -65,7 +75,15 @@ function createNoiseBuffer(context, durationSeconds = 2) {
   return buffer;
 }
 
-function createAmbientLayer(context, filterType, frequency, q, baseGain) {
+function createAmbientLayer(
+  context: AudioContext,
+  filterType: BiquadFilterType,
+  frequency: number,
+  q: number,
+  baseGain: number
+) {
+  const masterGain = audioMasterGain;
+  if (!masterGain) throw new Error("Ambient audio master gain is not initialized");
   const source = context.createBufferSource();
   source.buffer = createNoiseBuffer(context, 2.5);
   source.loop = true;
@@ -80,7 +98,7 @@ function createAmbientLayer(context, filterType, frequency, q, baseGain) {
 
   source.connect(filter);
   filter.connect(gain);
-  gain.connect(audioMasterGain);
+  gain.connect(masterGain);
   source.start();
 
   return { source, filter, gain };
@@ -89,7 +107,7 @@ function createAmbientLayer(context, filterType, frequency, q, baseGain) {
 export function ensureAmbientAudio() {
   if (!ambientAudioEnabled) return false;
   if (!audioContext) {
-    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    const AudioContextCtor = window.AudioContext || (window as WebKitAudioContextWindow).webkitAudioContext;
     if (!AudioContextCtor) return false;
     try {
       audioContext = new AudioContextCtor();
@@ -126,7 +144,9 @@ export function ensureAmbientAudio() {
     audioContext.resume().catch(() => {});
   }
 
-  audioMasterGain.gain.setTargetAtTime(0.42, audioContext.currentTime, 0.08);
+  const masterGain = audioMasterGain;
+  if (!masterGain) return false;
+  masterGain.gain.setTargetAtTime(0.42, audioContext.currentTime, 0.08);
   if (audioNextBirdAt <= 0) {
     audioNextBirdAt = audioContext.currentTime + 1.5;
   }
@@ -162,7 +182,16 @@ function chirpBird(now, strength) {
   };
 }
 
-function getFootstepSoundConfig(surface: CampusSurface) {
+function getFootstepSoundConfig(surface: CampusSurface): {
+  filterType: BiquadFilterType;
+  frequency: number;
+  q: number;
+  duration: number;
+  noiseGain: number;
+  thumpGain: number;
+  thumpFrequency: number;
+  highpass: number;
+} {
   if (surface === "corridor") {
     return { filterType: "bandpass", frequency: 920, q: 1.15, duration: 0.16, noiseGain: 0.013, thumpGain: 0.01, thumpFrequency: 124, highpass: 240 };
   }
@@ -177,34 +206,37 @@ function getFootstepSoundConfig(surface: CampusSurface) {
 export function playFootstepSound(surface: CampusSurface, running = false) {
   if (!ambientAudioEnabled || !isAudioRunning()) return;
 
-  const now = audioContext.currentTime;
+  const context = audioContext;
+  const masterGain = audioMasterGain;
+  if (!context || !masterGain) return;
+  const now = context.currentTime;
   const config = getFootstepSoundConfig(surface);
 
-  const stepSource = audioContext.createBufferSource();
-  stepSource.buffer = createNoiseBuffer(audioContext, config.duration);
+  const stepSource = context.createBufferSource();
+  stepSource.buffer = createNoiseBuffer(context, config.duration);
 
-  const stepFilter = audioContext.createBiquadFilter();
+  const stepFilter = context.createBiquadFilter();
   stepFilter.type = config.filterType;
   stepFilter.frequency.value = config.frequency;
   stepFilter.Q.value = config.q;
 
-  const stepGain = audioContext.createGain();
+  const stepGain = context.createGain();
   const peak = config.noiseGain * (running ? 1.28 : 1.0);
   stepGain.gain.setValueAtTime(0.0001, now);
   stepGain.gain.exponentialRampToValueAtTime(peak, now + 0.015);
   stepGain.gain.exponentialRampToValueAtTime(0.0001, now + config.duration);
 
-  const thump = audioContext.createOscillator();
+  const thump = context.createOscillator();
   thump.type = "sine";
   thump.frequency.setValueAtTime(config.thumpFrequency + (running ? 12 : 0), now);
   thump.frequency.exponentialRampToValueAtTime(Math.max(40, config.thumpFrequency * 0.72), now + 0.06);
 
-  const thumpGain = audioContext.createGain();
+  const thumpGain = context.createGain();
   thumpGain.gain.setValueAtTime(0.0001, now);
   thumpGain.gain.exponentialRampToValueAtTime(config.thumpGain * (running ? 1.1 : 1), now + 0.01);
   thumpGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.085);
 
-  const pan = audioContext.createStereoPanner?.();
+  const pan = context.createStereoPanner?.();
   if (pan) {
     audioFootstepSide *= -1;
     pan.pan.value = audioFootstepSide * (running ? 0.18 : 0.12);
@@ -213,12 +245,14 @@ export function playFootstepSound(surface: CampusSurface, running = false) {
   const stepOutput = pan || stepGain;
   stepSource.connect(stepFilter);
   stepFilter.connect(stepGain);
-  stepGain.connect(stepOutput === stepGain ? audioMasterGain : stepOutput);
   if (pan) {
-    pan.connect(audioMasterGain);
+    stepGain.connect(pan);
+    pan.connect(masterGain);
+  } else {
+    stepGain.connect(masterGain);
   }
   thump.connect(thumpGain);
-  thumpGain.connect(audioMasterGain);
+  thumpGain.connect(masterGain);
 
   stepSource.start(now);
   stepSource.stop(now + config.duration + 0.02);
@@ -237,51 +271,56 @@ export function playFootstepSound(surface: CampusSurface, running = false) {
 export function playBusArrivalSound(strength = 1) {
   if (!ambientAudioEnabled || !isAudioRunning()) return;
 
-  const now = audioContext.currentTime;
-  const busGain = audioContext.createGain();
+  const context = audioContext;
+  const masterGain = audioMasterGain;
+  if (!context || !masterGain) return;
+
+  const now = context.currentTime;
+  const busGain = context.createGain();
   busGain.gain.setValueAtTime(0.0001, now);
   busGain.gain.exponentialRampToValueAtTime(0.018 + strength * 0.014, now + 0.04);
   busGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.65);
 
-  const rumble = audioContext.createOscillator();
+  const rumble = context.createOscillator();
   rumble.type = "sawtooth";
   rumble.frequency.setValueAtTime(58 + strength * 6, now);
   rumble.frequency.exponentialRampToValueAtTime(34 + strength * 3, now + 0.5);
 
-  const rumbleFilter = audioContext.createBiquadFilter();
+  const rumbleFilter = context.createBiquadFilter();
   rumbleFilter.type = "lowpass";
   rumbleFilter.frequency.value = 170;
   rumbleFilter.Q.value = 0.8;
 
-  const hiss = audioContext.createBufferSource();
-  hiss.buffer = createNoiseBuffer(audioContext, 0.45);
+  const hiss = context.createBufferSource();
+  hiss.buffer = createNoiseBuffer(context, 0.45);
 
-  const hissFilter = audioContext.createBiquadFilter();
+  const hissFilter = context.createBiquadFilter();
   hissFilter.type = "bandpass";
   hissFilter.frequency.value = 1380;
   hissFilter.Q.value = 0.95;
 
-  const hissGain = audioContext.createGain();
+  const hissGain = context.createGain();
   hissGain.gain.setValueAtTime(0.0001, now);
   hissGain.gain.exponentialRampToValueAtTime(0.009 + strength * 0.007, now + 0.03);
   hissGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
 
-  const pan = audioContext.createStereoPanner?.();
+  const pan = context.createStereoPanner?.();
   if (pan) {
     pan.pan.value = Math.max(-0.2, Math.min(0.2, (Math.random() * 0.4 - 0.2) * strength));
   }
 
-  const output = pan || busGain;
   rumble.connect(rumbleFilter);
   rumbleFilter.connect(busGain);
-  busGain.connect(output === busGain ? audioMasterGain : output);
   if (pan) {
-    pan.connect(audioMasterGain);
+    busGain.connect(pan);
+    pan.connect(masterGain);
+  } else {
+    busGain.connect(masterGain);
   }
 
   hiss.connect(hissFilter);
   hissFilter.connect(hissGain);
-  hissGain.connect(audioMasterGain);
+  hissGain.connect(masterGain);
 
   rumble.start(now);
   rumble.stop(now + 0.7);
@@ -300,23 +339,27 @@ export function playBusArrivalSound(strength = 1) {
 export function playPoolWaterSound(strength = 0.45) {
   if (!ambientAudioEnabled || !isAudioRunning()) return;
 
-  const now = audioContext.currentTime;
-  const source = audioContext.createBufferSource();
-  source.buffer = createNoiseBuffer(audioContext, 0.42);
+  const context = audioContext;
+  const masterGain = audioMasterGain;
+  if (!context || !masterGain) return;
 
-  const filter = audioContext.createBiquadFilter();
+  const now = context.currentTime;
+  const source = context.createBufferSource();
+  source.buffer = createNoiseBuffer(context, 0.42);
+
+  const filter = context.createBiquadFilter();
   filter.type = "bandpass";
   filter.frequency.value = 620 + strength * 430;
   filter.Q.value = 0.62;
 
-  const gain = audioContext.createGain();
+  const gain = context.createGain();
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.006 + strength * 0.012, now + 0.05);
   gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
 
   source.connect(filter);
   filter.connect(gain);
-  gain.connect(audioMasterGain);
+  gain.connect(masterGain);
   source.start(now);
   source.stop(now + 0.46);
   source.onended = () => {
@@ -332,23 +375,27 @@ export function playSwimStrokeSound(strength = 0.5) {
 export function playParanormalSound(strength = 0.5) {
   if (!ambientAudioEnabled || !isAudioRunning()) return;
 
-  const now = audioContext.currentTime;
-  const gain = audioContext.createGain();
+  const context = audioContext;
+  const masterGain = audioMasterGain;
+  if (!context || !masterGain) return;
+
+  const now = context.currentTime;
+  const gain = context.createGain();
   gain.gain.setValueAtTime(0.0001, now);
   gain.gain.exponentialRampToValueAtTime(0.011 + strength * 0.028, now + 0.04);
   gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
 
-  const low = audioContext.createOscillator();
+  const low = context.createOscillator();
   low.type = "sawtooth";
   low.frequency.setValueAtTime(43 + strength * 12, now);
   low.frequency.exponentialRampToValueAtTime(31 + strength * 8, now + 1.0);
 
-  const bend = audioContext.createOscillator();
+  const bend = context.createOscillator();
   bend.type = "sine";
   bend.frequency.setValueAtTime(212 + Math.random() * 90, now);
   bend.frequency.exponentialRampToValueAtTime(96 + Math.random() * 32, now + 0.72);
 
-  const filter = audioContext.createBiquadFilter();
+  const filter = context.createBiquadFilter();
   filter.type = "lowpass";
   filter.frequency.value = 380 + strength * 160;
   filter.Q.value = 1.6;
@@ -356,7 +403,7 @@ export function playParanormalSound(strength = 0.5) {
   low.connect(filter);
   bend.connect(filter);
   filter.connect(gain);
-  gain.connect(audioMasterGain);
+  gain.connect(masterGain);
   low.start(now);
   bend.start(now + 0.03);
   low.stop(now + 1.25);
@@ -367,30 +414,32 @@ export function playParanormalSound(strength = 0.5) {
 }
 
 function playCampusRadioJingle(now, intensity = 1) {
-  if (!audioContext || !audioMasterGain) return;
+  const context = audioContext;
+  const masterGain = audioMasterGain;
+  if (!context || !masterGain) return;
 
   const notes = [659.25, 783.99, 988.0];
   const durations = [0.08, 0.09, 0.12];
   let start = now;
   for (let i = 0; i < notes.length; i += 1) {
-    const osc = audioContext.createOscillator();
+    const osc = context.createOscillator();
     osc.type = "square";
     osc.frequency.setValueAtTime(notes[i], start);
     osc.frequency.exponentialRampToValueAtTime(notes[i] * 1.02, start + durations[i] * 0.8);
 
-    const filter = audioContext.createBiquadFilter();
+    const filter = context.createBiquadFilter();
     filter.type = "bandpass";
     filter.frequency.value = 980 + i * 260;
     filter.Q.value = 1.3;
 
-    const gain = audioContext.createGain();
+    const gain = context.createGain();
     gain.gain.setValueAtTime(0.0001, start);
     gain.gain.exponentialRampToValueAtTime(0.01 + intensity * 0.004, start + 0.018);
     gain.gain.exponentialRampToValueAtTime(0.0001, start + durations[i]);
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(audioMasterGain);
+    gain.connect(masterGain);
     osc.start(start);
     osc.stop(start + durations[i] + 0.02);
 
@@ -402,14 +451,20 @@ function playCampusRadioJingle(now, intensity = 1) {
   }
 }
 
-export function updateAmbientAudio(time, state) {
+export function updateAmbientAudio(_time: number, state: AtmosphereState) {
   if (!ambientAudioEnabled) return;
   ensureAmbientAudio();
   if (!audioContext || audioContext.state !== "running") return;
 
   const now = audioContext.currentTime;
   const daylight = state.daylight;
-  const weather = state.weather || {};
+  const weather: AtmosphereWeatherState = state.weather || {
+    kind: "sol",
+    label: "ensolarado",
+    wind: 0,
+    rain: 0,
+    cloudMix: 0,
+  };
   const windLevel = 0.004 + weather.wind * 0.02 + weather.cloudMix * 0.003 + weather.rain * 0.006;
   const murmurLevel = state.label === "fim de aula"
     ? 0.009
@@ -476,7 +531,7 @@ export function updateAmbientAudio(time, state) {
   }
 }
 
-export function setAmbientAudioEnabled(nextEnabled) {
+export function setAmbientAudioEnabled(nextEnabled: boolean) {
   ambientAudioEnabled = !!nextEnabled;
   if (ambientAudioEnabled) {
     ensureAmbientAudio();

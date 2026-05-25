@@ -41,8 +41,8 @@ export type NpcNetState = {
 
 export function getNpcNetAnim(npc: Pick<NpcLike, "pose" | "dancing" | "danceTimer" | "celebrateTimer" | "state" | "running">) {
   if (npc.pose?.type === "sit") return "sit";
-  if (npc.dancing && npc.danceTimer > 0) return "dance";
-  if (npc.celebrateTimer && npc.celebrateTimer > 0) return "celebrate";
+  if (npc.dancing && (npc.danceTimer ?? 0) > 0) return "dance";
+  if ((npc.celebrateTimer ?? 0) > 0) return "celebrate";
   if (npc.state === "wander" || npc.state === "approach" || npc.state === "react") {
     return npc.running ? "run" : "walk";
   }

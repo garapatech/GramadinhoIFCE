@@ -9,12 +9,6 @@ export interface CameraFocusTarget {
   label: string;
 }
 
-export interface CameraModeState {
-  mode: CameraMode;
-  label: string;
-  focusLabel: string;
-}
-
 export interface CameraController {
   mode: CameraMode;
   orbitYaw: number;
@@ -40,7 +34,7 @@ export interface CameraController {
   ): void;
 }
 
-export function createCameraController(onCameraModeChange: (state: CameraModeState) => void): CameraController {
+export function createCameraController(): CameraController {
   let mode: CameraMode = "follow";
   let orbitYaw = Math.PI / 4;
   let orbitPitch = 0.68;
@@ -50,18 +44,9 @@ export function createCameraController(onCameraModeChange: (state: CameraModeSta
   let dragY = 0;
   let focusTarget: CameraFocusTarget | null = null;
 
-  function emitCameraModeChange() {
-    onCameraModeChange({
-      mode,
-      label: mode === "follow" ? "travada" : "livre",
-      focusLabel: mode === "orbit" && focusTarget ? focusTarget.label : "",
-    });
-  }
-
   function clearFocus() {
     if (!focusTarget) return;
     focusTarget = null;
-    emitCameraModeChange();
   }
 
   function setFocus(target: CameraFocusTarget | null | undefined) {
@@ -88,7 +73,6 @@ export function createCameraController(onCameraModeChange: (state: CameraModeSta
     }
 
     focusTarget = nextFocus;
-    emitCameraModeChange();
   }
 
   function getOrbitCenter(playerPosition: THREE.Vector3, isRemotePlayerActive: (id: string) => boolean) {
@@ -107,8 +91,6 @@ export function createCameraController(onCameraModeChange: (state: CameraModeSta
     dragActive = false;
     if (mode !== "orbit") {
       clearFocus();
-    } else {
-      emitCameraModeChange();
     }
   }
 
@@ -163,8 +145,6 @@ export function createCameraController(onCameraModeChange: (state: CameraModeSta
     const lookAtTarget = mode === "orbit" && focusTarget ? getOrbitCenter(playerPosition, isRemotePlayerActive) : playerPosition;
     camera.lookAt(lookAtTarget.x, lookAtTarget.y + 1.25, lookAtTarget.z);
   }
-
-  emitCameraModeChange();
 
   return {
     get mode() {

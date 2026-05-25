@@ -91,8 +91,6 @@ type EspectroEvent = {
   spawnIndex: number;
   expiresAt: number;
 };
-const MAX_SIGNAL_SDP = 30_000;
-const MAX_SIGNAL_CANDIDATE = 8_000;
 const MAX_ENTITY_ID = 96;
 const MAX_NPC_ID = 96;
 const MAX_NPCS = 32;
@@ -134,47 +132,6 @@ function sanitizeAvatar(input: unknown): AvatarState {
     backpackEnabled: raw.backpackEnabled !== false,
     glasses: raw.glasses === true,
   };
-}
-
-function sanitizeVoiceSignal(input: unknown) {
-  if (!input || typeof input !== "object") return null;
-  const raw = input as any;
-  const signal: any = {};
-
-  if (raw.description && typeof raw.description === "object") {
-    const type = raw.description.type;
-    const sdp = raw.description.sdp;
-    if (
-      (type === "offer" || type === "answer") &&
-      typeof sdp === "string" &&
-      sdp.length <= MAX_SIGNAL_SDP
-    ) {
-      signal.description = { type, sdp };
-    }
-  }
-
-  if (raw.candidate && typeof raw.candidate === "object") {
-    const candidate = raw.candidate.candidate;
-    if (typeof candidate === "string" && candidate.length <= MAX_SIGNAL_CANDIDATE) {
-      signal.candidate = {
-        candidate,
-        sdpMid:
-          typeof raw.candidate.sdpMid === "string" || raw.candidate.sdpMid === null
-            ? raw.candidate.sdpMid
-            : undefined,
-        sdpMLineIndex:
-          typeof raw.candidate.sdpMLineIndex === "number"
-            ? raw.candidate.sdpMLineIndex
-            : undefined,
-        usernameFragment:
-          typeof raw.candidate.usernameFragment === "string"
-            ? raw.candidate.usernameFragment
-            : undefined,
-      };
-    }
-  }
-
-  return signal.description || signal.candidate ? signal : null;
 }
 
 function sanitizeActivity(input: unknown): PlayerActivity {
@@ -562,14 +519,12 @@ export default class GameRoom implements Party.Server {
       if (!this.players.has(sender.id)) return;
       const target = sanitize(msg.target, 128);
       if (!target || target === sender.id) return;
-      const signal = sanitizeVoiceSignal(msg.signal);
-      if (!signal) return;
       this.room.getConnection(target)?.send(
         JSON.stringify({
           type: "voice-signal",
           from: sender.id,
           target,
-          signal,
+          signal: msg.signal,
         })
       );
       return;

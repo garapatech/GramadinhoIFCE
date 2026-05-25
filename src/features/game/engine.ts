@@ -3,6 +3,7 @@ import { avatarToGameAppearance } from "@/features/avatar/avatarConfig";
 import { getAtmosphereState, getAtmosphereStateKey, type AtmosphereState } from "@/game/atmosphere";
 import { createCameraController } from "@/game/camera";
 import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
+import { getEmoteDuration, type EmoteKind } from "@/features/game/emotes";
 import { createEspectroEvent } from "@/features/game/minigames/espectro";
 import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
 import { createParkourCircuit } from "@/features/game/minigames/parkour";
@@ -20,6 +21,7 @@ import { createDevTools } from "@/game/devtools";
 import { createGameInputBindings } from "@/features/game/inputBindings";
 import { createSpeechOverlay } from "@/features/game/overlay";
 import { createNpcSync } from "@/features/game/npcSync";
+import type { SocketInboundMessage } from "@/shared/schemas/multiplayer";
 import {
   attachElectricAura,
   clearElectricEffects,
@@ -31,6 +33,7 @@ import {
 } from "@/features/game/electricEffects";
 import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
+import { disposeObject3D } from "@/game/disposeObject3D";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
 import { buildBlocoTelematica } from "@/game/world/blocoTelematica/buildScene";
 import { createWorldSpatialHelpers, getDistance2D } from "@/game/world/spatial";
@@ -42,6 +45,9 @@ import {
   CAMPUS_WALL_HEIGHT,
   CAMPUS_WALL_LIMIT,
   CAMPUS_WALL_THICKNESS,
+  type CampusBuildingDefinition,
+  type CampusPathDefinition,
+  type CampusSurface,
   campusArena,
   campusBuildings,
   campusPaths,
@@ -89,6 +95,47 @@ import {
   getTargetStatus,
 } from "@/game/playerInteractions";
 
+type NpcSnapshotList = Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"];
+type MapBuilding = Pick<CampusBuildingDefinition, "x" | "z" | "width" | "depth" | "color" | "roof"> &
+  Partial<Pick<CampusBuildingDefinition, "height" | "name">>;
+type MapFeatures = {
+  buildings: MapBuilding[];
+  paths: CampusPathDefinition[];
+  trees: Array<{ x: number; z: number }>;
+};
+type GameInteractable = {
+  kind: string;
+  label: string;
+  radius: number;
+  position: THREE.Vector3;
+  root: THREE.Object3D;
+  group?: THREE.Object3D;
+  cullRadius?: number;
+  cullDistance?: number;
+  cullPosition?: THREE.Vector3;
+  npcApproachPosition?: THREE.Vector3;
+  npcApproachRadius?: number;
+  npcDuration?: number;
+  npcInteract?: (npc: any) => void;
+  isDisabledForPlayer?: () => boolean;
+  npcDisabled?: () => boolean;
+  interact?: () => void;
+  update?: (dt: number, time: number) => void;
+  crowdLabel?: string;
+  crowdCount?: number;
+  available?: boolean;
+};
+type PvpBall = {
+  mesh: THREE.Mesh;
+  x: number;
+  z: number;
+  dx: number;
+  dz: number;
+  life: number;
+  matchId: string;
+  isLocal: boolean;
+};
+
 const asFunction = (candidate) => (typeof candidate === "function" ? candidate : null);
 const asHandler = (candidate, fallback = () => {}) => asFunction(candidate) || fallback;
 
@@ -100,7 +147,6 @@ export function bootGame(opts: BootGameOptions = {}) {
   const onLocalEntityState = asHandler(opts.onLocalEntityState);
   const onNpcState = asHandler(opts.onNpcState);
   const onAtmosphereChange = asHandler(opts.onAtmosphereChange);
-  const onCameraModeChange = asHandler(opts.onCameraModeChange);
   const onAudioStateChange = asHandler(opts.onAudioStateChange);
   const onPlayerStateChange = asHandler(opts.onPlayerStateChange);
   const onEmote = asHandler(opts.onEmote);
@@ -113,15 +159,17 @@ export function bootGame(opts: BootGameOptions = {}) {
   const onChessSeatInteract = asHandler(opts.onChessSeatInteract);
   const shouldIgnoreKeys = asHandler(opts.shouldIgnoreKeys, () => false);
   const getWorldTime = asFunction(opts.getWorldTime);
-  const broadcastEmote = (kind, duration) => onEmote({ kind, duration });
+  const broadcastEmote = (kind: EmoteKind, duration: number) => onEmote({ kind, duration });
 
-  const canvas = container.querySelector('[data-game="scene"]');
-  const statusEl = container.querySelector('[data-game="status"]');
-  const speechEl = container.querySelector('[data-game="speech"]');
-  const speechBodyEl = container.querySelector('[data-game="speech-body"]');
-  const speechNameEl = container.querySelector('[data-game="speech-name"]');
-  const speechHintEl = container.querySelector('[data-game="speech-hint"]');
-  const minimapCanvas = container.querySelector('[data-game="minimap-canvas"]');
+  const canvas = container.querySelector<HTMLCanvasElement>('[data-game="scene"]');
+  if (!canvas) throw new Error("bootGame: scene canvas is required");
+  const sceneCanvas = canvas;
+  const statusEl = container.querySelector<HTMLElement>('[data-game="status"]');
+  const speechEl = container.querySelector<HTMLElement>('[data-game="speech"]');
+  const speechBodyEl = container.querySelector<HTMLElement>('[data-game="speech-body"]');
+  const speechNameEl = container.querySelector<HTMLElement>('[data-game="speech-name"]');
+  const speechHintEl = container.querySelector<HTMLElement>('[data-game="speech-hint"]');
+  const minimapCanvas = container.querySelector<HTMLCanvasElement>('[data-game="minimap-canvas"]');
   const minimapCtx = minimapCanvas ? minimapCanvas.getContext("2d") : null;
   const speechOverlay = createSpeechOverlay({
     statusEl,
@@ -144,8 +192,10 @@ export function bootGame(opts: BootGameOptions = {}) {
   resetGameAudio();
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xa7d7f7);
-  scene.fog = new THREE.Fog(0xa7d7f7, 45, 180);
+  const sceneBackgroundColor = new THREE.Color(0xa7d7f7);
+  const sceneFog = new THREE.Fog(0xa7d7f7, 45, 180);
+  scene.background = sceneBackgroundColor;
+  scene.fog = sceneFog;
 
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -160,7 +210,7 @@ export function bootGame(opts: BootGameOptions = {}) {
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500);
 camera.position.set(-22, 18, 54);
 let audioStateKey = "";
-const cameraController = createCameraController(onCameraModeChange);
+const cameraController = createCameraController();
 
 function emitAudioStateChange() {
   const audioState = readAmbientAudioState();
@@ -227,8 +277,8 @@ function applyAtmosphere(state: AtmosphereState) {
   const fogColor = tempFogColor.copy(dayFogColor).lerp(tempWeatherFogColor, 0.38).lerp(duskFogColor, duskMix * 0.45).lerp(nightFogColor, nightMix * 0.72);
   const groundColor = tempGroundColor.copy(dayGroundColor).lerp(duskGroundColor, duskMix * 0.45).lerp(nightGroundColor, nightMix * 0.68);
 
-  scene.background.copy(skyColor);
-  scene.fog.color.copy(fogColor);
+  sceneBackgroundColor.copy(skyColor);
+  sceneFog.color.copy(fogColor);
   renderer.setClearColor(skyColor, 1);
 
   const weatherDim = state.weather.rain * 0.22 + state.weather.cloudMix * 0.08;
@@ -265,6 +315,61 @@ function rand(min, max) {
   return min + (max - min) * seeded();
 }
 
+type CampusBusRoutePoint = {
+  x: number;
+  z: number;
+  dwell?: number;
+};
+
+type CampusBusRouteSegment = {
+  index: number;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  dx: number;
+  dz: number;
+  length: number;
+  yaw: number;
+  travelDuration: number;
+};
+
+type CampusBusState = {
+  group: THREE.Group;
+  route: Array<{
+    position: THREE.Vector3;
+    dwell: number;
+  }>;
+  routeSegments: CampusBusRouteSegment[];
+  routeIndex: number;
+  segmentProgress: number;
+  dwellTimer: number;
+  speed: number;
+  currentSpeed: number;
+  wheelSpin: number;
+  seatAnchor: THREE.Vector3;
+  facingYaw: number;
+  position: THREE.Vector3;
+  rideBeacon: number;
+  crowdCount: number;
+  crowdLabel: string;
+  crowdComplaintCooldown: number;
+  activeStopIndex: number;
+  routeReady: boolean;
+};
+
+type CampusBusInteractable = {
+  kind: "bus";
+  label: string;
+  radius: number;
+  position: THREE.Vector3;
+  root: THREE.Group;
+  npcApproachRadius: number;
+  npcDuration: number;
+  crowdLabel: string;
+  crowdCount: number;
+  interact: () => void;
+  update: (dt: number, time: number) => void;
+};
+
 const grass = createGrassTexture();
 const windowTexture = createWindowTexture();
 const noticeTexture = createNoticeTexture();
@@ -276,13 +381,13 @@ scene.add(world);
 initElectricEffects(world);
 
 const blockers: Blocker[] = [];
-const mapFeatures = {
+const mapFeatures: MapFeatures = {
   buildings: [],
   paths: [],
   trees: []
 };
-const interactables = [];
-const decorativeProps = [];
+const interactables: GameInteractable[] = [];
+const decorativeProps: Array<{ update?: (dt: number, time: number) => void }> = [];
 const cameraFrustum = new THREE.Frustum();
 const cameraMatrix = new THREE.Matrix4();
 const tempSphere = new THREE.Sphere();
@@ -294,7 +399,7 @@ const ENTITY_CULL_DIST = {
   remote: 42,
   bus: 56
 };
-const buses = [];
+const buses: CampusBusState[] = [];
 const defaultPlayerPosition = new THREE.Vector3();
 let playerPositionTarget: { position: THREE.Vector3 } | null = null;
 const weatherSystem = createWeatherSystem({
@@ -321,7 +426,7 @@ world.add(ground);
 const walkways = new THREE.Group();
 world.add(walkways);
 
-function addPath(width, depth, x, z, rotation = 0, surface = "cement") {
+function addPath(width, depth, x, z, rotation = 0, surface: CampusSurface = "cement") {
   mapFeatures.paths.push({ width, depth, x, z, rotation, surface });
   const path = new THREE.Mesh(
     new THREE.PlaneGeometry(width, depth),
@@ -440,7 +545,7 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     color: 0xb7aa8d,
     roughness: 0.95,
   });
-  const shellMeshes = [];
+  const shellMeshes: THREE.Mesh[] = [];
   const frontSegmentWidth = Math.max(0.9, (width - doorWidth) / 2);
 
   function addShell(geometry, material, px, py, pz) {
@@ -746,7 +851,7 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
   const bloco = buildBlocoTelematica({
     parent: world,
     createBlocker,
-    interactables,
+    interactables: interactables as any,
     getPlayerPosition: () => player.position,
     onPokerSeatInteract: (seatIndex, anchor) => {
       enterSitState(
@@ -782,7 +887,7 @@ player.position.set(CAMPUS_SPAWN.x, 0, CAMPUS_SPAWN.z);
 gateCheckpoint = createGateCheckpoint({
   container: container as HTMLElement | null | undefined,
   world,
-  interactables,
+  interactables: interactables as any,
   createBlocker,
   createNameLabel,
   getDistance2D,
@@ -797,11 +902,13 @@ function createNameLabel(text, color = "#fff8dc", accent = "#62ff9f") {
   const padding = 28;
   const fontSize = 56;
   const ctx2 = canvasEl.getContext("2d");
+  if (!ctx2) throw new Error("bootGame: 2D canvas context is required");
   ctx2.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
   const metrics = ctx2.measureText(text);
   canvasEl.width = Math.max(256, Math.ceil(metrics.width) + padding * 2);
   canvasEl.height = fontSize + padding * 2;
   const c = canvasEl.getContext("2d");
+  if (!c) throw new Error("bootGame: 2D canvas context is required");
   c.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
   c.textAlign = "center";
   c.textBaseline = "middle";
@@ -853,45 +960,6 @@ function createNameLabel(text, color = "#fff8dc", accent = "#62ff9f") {
 let localLabel = createNameLabel(localNickname, "#fff8dc", "#62ff9f");
 player.add(localLabel);
 
-function disposeMaterial(material, seenMaterials, seenTextures) {
-  if (!material || seenMaterials.has(material)) return;
-  seenMaterials.add(material);
-  for (const key of [
-    "map",
-    "alphaMap",
-    "aoMap",
-    "bumpMap",
-    "normalMap",
-    "roughnessMap",
-    "metalnessMap",
-    "emissiveMap",
-  ]) {
-    const texture = material[key];
-    if (texture && !seenTextures.has(texture)) {
-      seenTextures.add(texture);
-      texture.dispose?.();
-    }
-  }
-  material.dispose?.();
-}
-
-function disposeObject3D(object) {
-  if (!object) return;
-  const seenGeometries = new Set();
-  const seenMaterials = new Set();
-  const seenTextures = new Set();
-  object.traverse?.((node) => {
-    if (node.geometry && !seenGeometries.has(node.geometry)) {
-      seenGeometries.add(node.geometry);
-      node.geometry.dispose?.();
-    }
-    const materials = Array.isArray(node.material) ? node.material : [node.material];
-    for (const material of materials) {
-      disposeMaterial(material, seenMaterials, seenTextures);
-    }
-  });
-}
-
 function disposeSprite(sprite) {
   disposeObject3D(sprite);
 }
@@ -899,9 +967,9 @@ function disposeSprite(sprite) {
 const remotePlayers = new Map();
 const sharedBikes = new Map();
 let sharedBikeCount = 0;
-let swimmingMinigame = null;
-let espectroEvent = null;
-let parkourSystem = null;
+let swimmingMinigame: ReturnType<typeof createSwimmingMinigame> | null = null;
+let espectroEvent: ReturnType<typeof createEspectroEvent> | null = null;
+let parkourSystem: ReturnType<typeof createParkourCircuit> | null = null;
 
 function getFallbackRemoteAppearance(id = "") {
   const palette = hashPalette(id);
@@ -1047,7 +1115,7 @@ const EMOTE_GLYPHS = {
 
 function wrapText(ctx, text, maxWidth) {
   const words = text.split(/\s+/);
-  const lines = [];
+  const lines: string[] = [];
   let line = "";
   for (const word of words) {
     const candidate = line ? `${line} ${word}` : word;
@@ -1071,6 +1139,7 @@ function createSpeechBubble(text) {
   const tailHeight = 26;
 
   const measure = document.createElement("canvas").getContext("2d");
+  if (!measure) throw new Error("bootGame: 2D canvas context is required");
   measure.font = `800 ${fontSize}px "Segoe UI", Arial, sans-serif`;
   const lines = wrapText(measure, text, maxTextWidth);
 
@@ -1085,6 +1154,7 @@ function createSpeechBubble(text) {
   canvasEl.width = w;
   canvasEl.height = h;
   const c = canvasEl.getContext("2d");
+  if (!c) throw new Error("bootGame: 2D canvas context is required");
   c.font = `800 ${fontSize}px "Segoe UI", Arial, sans-serif`;
   c.textBaseline = "middle";
   c.textAlign = "center";
@@ -1151,8 +1221,8 @@ function layoutBubblesFor(pid) {
 
 function pushBubble(target, text, ttl = BUBBLE_TTL) {
   if (!text) return;
-  let group = null;
-  let key = null;
+  let group: THREE.Group | null = null;
+  let key: string | null = null;
   if (typeof target === "string") {
     key = target;
     if (target === "__local__") {
@@ -1168,6 +1238,7 @@ function pushBubble(target, text, ttl = BUBBLE_TTL) {
   } else {
     return;
   }
+  if (!group || !key) return;
   const sprite = createSpeechBubble(text);
   group.add(sprite);
   if (!chatBubbles.has(key)) chatBubbles.set(key, []);
@@ -1306,7 +1377,7 @@ function triggerNearbyDance() {
   triggerNearbyReaction(player.position, "cheer", { skipLocal: true });
 }
 
-function triggerNearbyCelebrate(origin, duration = 3.2, options: ReactionOptions = {}) {
+function triggerNearbyCelebrate(origin, duration = getEmoteDuration("cheer"), options: ReactionOptions = {}) {
   const RADIUS = 6.5;
   const skipLocal = options.skipLocal === true;
   const skipRemoteId = options.skipRemoteId || "";
@@ -1353,7 +1424,7 @@ function triggerNearbyReaction(origin, kind = "like", options: ReactionOptions =
   }
 }
 
-function triggerLocalEmote(kind = "dance", duration = 8.0) {
+function triggerLocalEmote(kind: EmoteKind = "dance", duration = getEmoteDuration(kind)) {
   if (kind === "stop") {
     playerState.dancing = false;
     playerState.danceTimer = 0;
@@ -1371,11 +1442,11 @@ function triggerLocalEmote(kind = "dance", duration = 8.0) {
     playerState.danceTimer = 0;
     playerState.celebrateTimer = 0;
     playerState.sixSevenTimer = 0;
-    playerState.glitchTimer = duration || 2.2;
+    playerState.glitchTimer = duration || getEmoteDuration("glitch");
     playerState.glitchSeed = Math.random() * Math.PI * 2;
     resetRigPose(playerRig.refs);
     pushEmoteBubble("__local__", kind);
-    broadcastEmote?.("glitch", duration || 2.2);
+    broadcastEmote?.("glitch", duration || getEmoteDuration("glitch"));
     return;
   }
 
@@ -1384,7 +1455,7 @@ function triggerLocalEmote(kind = "dance", duration = 8.0) {
     playerState.danceTimer = 0;
     playerState.glitchTimer = 0;
     playerState.sixSevenTimer = 0;
-    playerState.celebrateTimer = duration || 3.2;
+    playerState.celebrateTimer = duration || getEmoteDuration("cheer");
     playerState.celebrateSeed = Math.random() * Math.PI * 2;
     resetRigPose(playerRig.refs);
     triggerNearbyCelebrate(player.position, playerState.celebrateTimer, { skipLocal: true });
@@ -1423,7 +1494,7 @@ function triggerLocalEmote(kind = "dance", duration = 8.0) {
     playerState.danceTimer = 0;
     playerState.celebrateTimer = 0;
     playerState.glitchTimer = 0;
-    playerState.sixSevenTimer = duration || 3.4;
+    playerState.sixSevenTimer = duration || getEmoteDuration("sixseven");
     playerState.sixSevenSeed = Math.random() * Math.PI * 2;
     resetRigPose(playerRig.refs);
     broadcastEmote?.(kind, playerState.sixSevenTimer);
@@ -1442,12 +1513,12 @@ function triggerReaction(targetId, kind = "like") {
   pushReactionBubble(targetId, kind);
 }
 
-function triggerRemoteEmote(playerId, kind, duration) {
+function triggerRemoteEmote(playerId, kind: EmoteKind, duration: number) {
   const r = remotePlayers.get(playerId);
   if (!r) return;
   if (kind === "dance") {
     pushEmoteBubble(playerId, kind);
-    r.danceTimer = duration || 8.0;
+    r.danceTimer = duration || getEmoteDuration("dance");
     r.sixSevenTimer = 0;
     r.celebrateTimer = 0;
     r.phaseOffset = Math.random() * Math.PI * 2;
@@ -1455,7 +1526,7 @@ function triggerRemoteEmote(playerId, kind, duration) {
     for (const npc of npcs) {
       if (getDistance2D(r.group.position, npc.group.position) <= 6) {
         npc.dancing = true;
-        npc.danceTimer = duration || 8.0;
+        npc.danceTimer = duration || getEmoteDuration("dance");
         npc.pose = null;
         npc.focus = null;
       }
@@ -1466,7 +1537,7 @@ function triggerRemoteEmote(playerId, kind, duration) {
     r.sixSevenTimer = 0;
     r.glitchTimer = 0;
     r.celebrateSeed = Math.random() * Math.PI * 2;
-    r.celebrateTimer = duration || 3.2;
+    r.celebrateTimer = duration || getEmoteDuration("cheer");
     triggerNearbyCelebrate(r.group.position, r.celebrateTimer, { skipRemoteId: playerId });
   } else if (kind === "glitch") {
     pushEmoteBubble(playerId, kind);
@@ -1474,7 +1545,7 @@ function triggerRemoteEmote(playerId, kind, duration) {
     r.sixSevenTimer = 0;
     r.celebrateTimer = 0;
     r.glitchSeed = Math.random() * Math.PI * 2;
-    r.glitchTimer = duration || 2.2;
+    r.glitchTimer = duration || getEmoteDuration("glitch");
   } else if (kind === "stop") {
     pushEmoteBubble(playerId, kind);
     r.danceTimer = 0;
@@ -1487,7 +1558,7 @@ function triggerRemoteEmote(playerId, kind, duration) {
     r.danceTimer = 0;
     r.glitchTimer = 0;
     r.celebrateTimer = 0;
-    r.sixSevenTimer = duration || 3.4;
+    r.sixSevenTimer = duration || getEmoteDuration("sixseven");
     r.sixSevenSeed = Math.random() * Math.PI * 2;
   } else {
     pushEmoteBubble(playerId, kind);
@@ -1512,17 +1583,44 @@ const spawnGlow = new THREE.PointLight(0x62ff9f, 1.2, 10, 2);
 spawnGlow.position.set(CAMPUS_SPAWN.x, 2.2, CAMPUS_SPAWN.z);
 world.add(spawnGlow);
 
-const pvpBalls = [];
-let pvpActiveMatch = null; // { matchId, opponentId, side } | null
+const pvpBalls: PvpBall[] = [];
+let pvpActiveMatch: { matchId: string; opponentId: string | null; side: "A" | "B" | null } | null = null;
 let pvpThrowCooldown = 0;
-let pvpSavedPosition = null; // { x, z } before teleport
+let pvpSavedPosition: { x: number; z: number } | null = null;
 let queuedPvpThrow = false;
 const BALL_SPEED = 11;
 const BALL_LIFE = 2.2;
 const BALL_RADIUS = 0.28;
 const PLAYER_HIT_RADIUS = 0.65;
 
-const playerState = {
+type PlayerSitTarget = {
+  position: THREE.Vector3;
+  rotation: number;
+};
+
+type PlayerRuntimeState = {
+  sitting: boolean;
+  sitTimer: number;
+  sitTarget: PlayerSitTarget | null;
+  sitLabel: string;
+  sitEndMessage: string;
+  sitEndSpeaker: string;
+  sitPersistent: boolean;
+  ridingBike: any;
+  dancing: boolean;
+  danceTimer: number;
+  sixSevenTimer: number;
+  sixSevenSeed: number;
+  celebrateTimer: number;
+  celebrateSeed: number;
+  glitchTimer: number;
+  glitchSeed: number;
+  jumping: boolean;
+  jumpY: number;
+  jumpVel: number;
+};
+
+const playerState: PlayerRuntimeState = {
   sitting: false,
   sitTimer: 0,
   sitTarget: null,
@@ -1993,9 +2091,9 @@ function createBike(x, z, rotation = 0) {
     remoteMountedBy: null,
     remoteSpeed: 0,
     hasSharedState: false,
-    emitState: null,
-    mount: null,
-    dismount: null,
+    emitState: null as ((mounted?: boolean) => void) | null,
+    mount: null as (() => void) | null,
+    dismount: null as (() => boolean) | null,
   };
   sharedBikes.set(bikeState.syncId, bikeState);
 
@@ -2161,7 +2259,7 @@ function createBike(x, z, rotation = 0) {
   });
 }
 
-function createCampusBus(routePoints) {
+function createCampusBus(routePoints: CampusBusRoutePoint[]) {
   const bus = new THREE.Group();
   const wheelRadius = 0.34;
   const busSpeed = 6.2;
@@ -2282,7 +2380,7 @@ function createCampusBus(routePoints) {
     [-1.65, 0.42, -0.92],
     [1.65, 0.42, -0.92]
   ];
-  const wheels = [];
+  const wheels: THREE.Group[] = [];
   for (const [x, y, z] of wheelPositions) {
     const wheel = new THREE.Group();
     wheel.position.set(x, y, z);
@@ -2305,7 +2403,7 @@ function createCampusBus(routePoints) {
     position: new THREE.Vector3(point.x, 0, point.z),
     dwell: point.dwell ?? 1.0
   }));
-  const routeSegments = route.map((point, index) => {
+  const routeSegments = route.map((point, index): CampusBusRouteSegment => {
     const next = route[(index + 1) % route.length];
     const dx = next.position.x - point.position.x;
     const dz = next.position.z - point.position.z;
@@ -2328,7 +2426,7 @@ function createCampusBus(routePoints) {
   const seatAnchor = new THREE.Vector3();
   const initialPathYaw = routeSegments[0]?.yaw ?? Math.PI / 2;
   bus.rotation.y = routeYawToBusYaw(initialPathYaw);
-  const state: any = {
+  const state: CampusBusState = {
     group: bus,
     route,
     routeSegments,
@@ -2505,7 +2603,7 @@ function createCampusBus(routePoints) {
   world.add(bus);
   buses.push(state);
 
-  const busInteractable: any = {
+  const busInteractable: CampusBusInteractable = {
     kind: "bus",
     label: "Jardineira",
     radius: 4.6,
@@ -2513,6 +2611,8 @@ function createCampusBus(routePoints) {
     root: bus,
     npcApproachRadius: 1.2,
     npcDuration: 5.8,
+    crowdLabel: state.crowdLabel,
+    crowdCount: state.crowdCount,
     interact() {
       if (playerState.sitting) return;
       state.rideBeacon = 1.2;
@@ -3029,12 +3129,141 @@ function createDuck(x, z) {
 const DUCK_LINE =
   "Os outros pretendentes ao trono eram SkekUng o lider militar do imperio que ansiava pelo trono, e isso no livro fica bem claro, e SkekZok o lider espiritual.";
 
-const ducks = [];
-const pigeons = [];
+type BirdVisuals = {
+  group: THREE.Group;
+  head: THREE.Group;
+  leftWing: THREE.Mesh;
+  rightWing: THREE.Mesh;
+};
 
-function createDuckEntity(x, z) {
+type DuckVisuals = BirdVisuals & {
+  leftFoot: THREE.Mesh;
+  rightFoot: THREE.Mesh;
+};
+
+type BirdEntity = {
+  name: string;
+  kind: "duck" | "pigeon";
+  group: THREE.Group;
+  visuals: BirdVisuals;
+  radius: number;
+  home: THREE.Vector3;
+  target: THREE.Vector3;
+  waitTimer: number;
+  wanderTimer: number;
+  fleeTimer: number;
+  speed: number;
+  mapColor: string;
+  nearby: boolean;
+};
+
+type DuckEntity = BirdEntity & {
+  kind: "duck";
+  visuals: DuckVisuals;
+  hopPhase: number;
+  hopSpeed: number;
+  lines: string[];
+  lastLineIndex: number;
+  previewLine: string;
+  pause: number;
+  talkCooldown: number;
+};
+
+type PigeonEntity = BirdEntity & {
+  kind: "pigeon";
+  visuals: BirdVisuals;
+  flapPhase: number;
+  pause?: number;
+  talkCooldown?: number;
+};
+
+type NpcPose = {
+  type?: string;
+  position: THREE.Vector3;
+  rotation: number;
+} | null;
+
+type NpcFocus = {
+  kind?: string;
+  label?: string;
+  position: THREE.Vector3;
+  radius: number;
+  npcApproachPosition?: THREE.Vector3;
+  npcApproachRadius?: number;
+  npcDuration?: number;
+  npcInteract?: (npc: NpcEntity) => void;
+  isDisabledForPlayer?: () => boolean;
+  npcDisabled?: () => boolean;
+} | null;
+
+type InteractableCandidate = {
+  item: NpcFocus;
+  score: number;
+};
+
+type NpcHumanTarget = {
+  position: THREE.Vector3;
+  speed: number;
+  distance: number;
+};
+
+type NpcEntity = {
+  id: string;
+  name: string;
+  rig: ReturnType<typeof createCharacter>;
+  group: THREE.Group;
+  path: { x: number; z: number }[];
+  anchors: THREE.Vector3[];
+  home: THREE.Vector3;
+  speed: number;
+  lines: string[];
+  lastLineIndex: number;
+  previewLine: string;
+  nearby: boolean;
+  pause: number;
+  talkCooldown: number;
+  radius: number;
+  phaseOffset: number;
+  celebrateTimer: number;
+  mapColor: string;
+  interests: Record<string, number>;
+  state: "idle" | "wander" | "approach" | "interact" | "react";
+  stateTimer: number;
+  moveTarget: THREE.Vector3;
+  focus: NpcFocus;
+  pose: NpcPose;
+  lastInteraction: NpcFocus;
+  personality: string;
+  bubbleKey: string;
+  awarenessRadius: number;
+  reactionRadius: number;
+  reactionCooldown: number;
+  reactionTimer: number;
+  reactionHuman: NpcHumanTarget | null;
+  chatterCooldown: number;
+  thinkRadius: number;
+  renderRadius: number;
+  slowThinkTimer: number;
+  targetX: number;
+  targetY: number;
+  targetZ: number;
+  targetRy: number;
+  netAnim: string;
+  hasNetState: boolean;
+  dancing: boolean;
+  danceTimer: number;
+  running: boolean;
+  holdingBucket?: boolean;
+  bucketGroup?: THREE.Group;
+  marker?: THREE.Mesh;
+};
+
+const ducks: DuckEntity[] = [];
+const pigeons: PigeonEntity[] = [];
+
+function createDuckEntity(x, z): DuckEntity {
   const visuals = createDuck(x, z);
-  const state: any = {
+  const state: DuckEntity = {
     name: "Pato",
     kind: "duck",
     group: visuals.group,
@@ -3043,6 +3272,8 @@ function createDuckEntity(x, z) {
     home: new THREE.Vector3(x, 0, z),
     target: new THREE.Vector3(x, 0, z),
     waitTimer: 0.5 + Math.random() * 1.5,
+    wanderTimer: 0,
+    fleeTimer: 0,
     hopPhase: Math.random() * Math.PI * 2,
     hopSpeed: 5.2 + Math.random() * 1.4,
     speed: 1.3,
@@ -3110,7 +3341,7 @@ function updateDuck(duck, dt, time) {
   duck.group.rotation.x = hop * 0.12;
 }
 
-function createPigeon(x, z) {
+function createPigeon(x, z): BirdVisuals {
   const root = new THREE.Group();
   root.position.set(x, 0, z);
   root.rotation.y = Math.random() * Math.PI * 2;
@@ -3185,7 +3416,7 @@ function createPigeon(x, z) {
   return { group: root, head, leftWing, rightWing };
 }
 
-function choosePigeonTarget(pigeon, spread = 3.4) {
+function choosePigeonTarget(pigeon: PigeonEntity, spread = 3.4) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const angle = rand(0, Math.PI * 2);
     const distance = rand(1.4, spread);
@@ -3203,9 +3434,9 @@ function choosePigeonTarget(pigeon, spread = 3.4) {
   return pigeon.home.clone();
 }
 
-function createPigeonEntity(x, z) {
+function createPigeonEntity(x, z): PigeonEntity {
   const visuals = createPigeon(x, z);
-  const state: any = {
+  const state: PigeonEntity = {
     name: "Pombo",
     kind: "pigeon",
     group: visuals.group,
@@ -3213,6 +3444,7 @@ function createPigeonEntity(x, z) {
     radius: 1.55,
     home: new THREE.Vector3(x, 0, z),
     target: new THREE.Vector3(x, 0, z),
+    waitTimer: 0,
     wanderTimer: 0.35 + Math.random() * 1.1,
     fleeTimer: 0,
     flapPhase: Math.random() * Math.PI * 2,
@@ -3365,7 +3597,14 @@ function getNpcChatterDelay(npc) {
 }
 
 function findNearestHuman(position, maxDistance = 18) {
-  let best = null;
+  let best: {
+    id: string;
+    nick: string;
+    position: THREE.Vector3;
+    speed: number;
+    distance: number;
+    isLocal: boolean;
+  } | null = null;
   let bestDistance = maxDistance;
 
   const localDistance = getDistance2D(position, player.position);
@@ -3466,7 +3705,7 @@ function createNpc(config) {
   const anchors = config.path.map(({ x, z }) => new THREE.Vector3(x, 0, z));
   const id = `npc:${npcs.length}`;
 
-  const state: any = {
+  const state: NpcEntity = {
     id,
     name: config.name,
     rig,
@@ -3484,6 +3723,8 @@ function createNpc(config) {
     radius: 3.2,
     phaseOffset: rand(0, Math.PI * 2),
     celebrateTimer: 0,
+    dancing: false,
+    danceTimer: 0,
     mapColor: `#${config.colors.shirtColor.toString(16).padStart(6, "0")}`,
     interests: { ...(config.interests || {}) },
     state: "idle",
@@ -3509,6 +3750,7 @@ function createNpc(config) {
     targetRy: npc.rotation.y,
     netAnim: "idle",
     hasNetState: false,
+    running: false,
   };
   state.previewLine = pickRandomLine(state);
 
@@ -3524,8 +3766,8 @@ function createNpc(config) {
   return state;
 }
 
-const npcs = [];
-const npcById = new Map();
+const npcs: NpcEntity[] = [];
+const npcById = new Map<string, NpcEntity>();
 const npcSync = createNpcSync();
 createNpc({
   name: "Ana",
@@ -4108,7 +4350,7 @@ function setNpcAuthority(active) {
   npcSync.setNpcAuthority(active);
 }
 
-function applyNpcSnapshots(snapshots = []) {
+function applyNpcSnapshots(snapshots: NpcSnapshotList = []) {
   npcSync.applyNpcSnapshots(npcById, snapshots);
 }
 
@@ -4255,7 +4497,7 @@ function getCameraGroundBasis() {
 const keys = new Set();
 let interactQueued = false;
 let jumpQueued = false;
-let queuedEmoteKind = null;
+let queuedEmoteKind: EmoteKind | null = null;
 const inputBindings = createGameInputBindings({
   cameraController,
   devTools,
@@ -4338,7 +4580,7 @@ swimmingMinigame = createSwimmingMinigame({
   world,
   container,
   createBlocker,
-  interactables,
+  interactables: interactables as any,
   mapFeatures,
   player,
   playerRig,
@@ -4380,13 +4622,13 @@ parkourSystem = createParkourCircuit({
   playerState,
   playerVelocity,
   speak: speechOverlay.speak,
-  interactables,
+  interactables: interactables as any,
   container: container as HTMLElement | null,
   isKeyDown: (code) => keys.has(code),
 });
 
 function clampPlayerToWorld(radius = playerRadius) {
-  const limit = parkourSystem?.isInParkourZone(player.position.x, player.position.z) ? 105 : worldLimit;
+  const limit = parkourSystem?.isInParkourZone() ? 105 : worldLimit;
   player.position.x = THREE.MathUtils.clamp(player.position.x, -limit + radius, limit - radius);
   player.position.z = THREE.MathUtils.clamp(player.position.z, -limit + radius, limit - radius);
 }
@@ -4603,13 +4845,7 @@ function updatePlayer(dt, time) {
   player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, 0, Math.min(1, dt * 9));
 
   if (queuedEmoteKind) {
-    const queuedDuration =
-      queuedEmoteKind === "dance" ? 8.0 :
-      queuedEmoteKind === "glitch" ? 2.2 :
-      queuedEmoteKind === "cheer" ? 3.2 :
-      queuedEmoteKind === "sixseven" ? 3.4 :
-      2.4;
-    triggerLocalEmote(queuedEmoteKind, queuedDuration);
+    triggerLocalEmote(queuedEmoteKind);
   }
   queuedEmoteKind = null;
 
@@ -4799,7 +5035,12 @@ function refreshCameraFrustum() {
   cameraFrustum.setFromProjectionMatrix(cameraMatrix);
 }
 
-function isWithinCamera(entity, radius, maxDistance, positionOverride = null) {
+function isWithinCamera(
+  entity,
+  radius,
+  maxDistance,
+  positionOverride: THREE.Vector3 | null = null
+) {
   const position = positionOverride || entity.position;
   const dx = position.x - player.position.x;
   const dz = position.z - player.position.z;
@@ -4810,7 +5051,12 @@ function isWithinCamera(entity, radius, maxDistance, positionOverride = null) {
   return cameraFrustum.intersectsSphere(tempSphere);
 }
 
-function updateRenderableVisibility(entity, radius, maxDistance, positionOverride = null) {
+function updateRenderableVisibility(
+  entity,
+  radius,
+  maxDistance,
+  positionOverride: THREE.Vector3 | null = null
+) {
   if (devTools.isEnabled()) {
     if (entity.visible !== true) entity.visible = true;
     return true;
@@ -4903,7 +5149,7 @@ function pickNpcInteractable(npc) {
     kiosk: 0.82,
     bus: 0.12
   };
-  const candidates = [];
+  const candidates: InteractableCandidate[] = [];
 
   for (const item of interactables) {
     if (!isInteractableAvailableForNpc(item)) continue;
@@ -5303,7 +5549,7 @@ function updateInteractionUI() {
     return;
   }
 
-  if (target.lines) {
+  if (target.lines && target.previewLine) {
     if (speechEl && speechEl.dataset.locked !== "1") {
       speechOverlay.showSpeech(target.previewLine, target.name, "[E] falar");
     }
@@ -5419,8 +5665,8 @@ function updateCamera() {
 }
 
 function resize() {
-  const width = canvas.clientWidth || window.innerWidth;
-  const height = canvas.clientHeight || window.innerHeight;
+  const width = sceneCanvas.clientWidth || window.innerWidth;
+  const height = sceneCanvas.clientHeight || window.innerHeight;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -5567,7 +5813,7 @@ function updatePvpBalls(dt) {
     if (b.life <= 0) {
       world.remove(b.mesh);
       b.mesh.geometry.dispose();
-      b.mesh.material.dispose();
+      (b.mesh.material as THREE.Material).dispose();
       pvpBalls.splice(i, 1);
       continue;
     }
@@ -5587,7 +5833,7 @@ function updatePvpBalls(dt) {
           pvpShowHit(opponentId);
           world.remove(b.mesh);
           b.mesh.geometry.dispose();
-          b.mesh.material.dispose();
+          (b.mesh.material as THREE.Material).dispose();
           pvpBalls.splice(i, 1);
         }
       }
@@ -5601,7 +5847,7 @@ function pvpSetMatch(match) {
     for (const b of pvpBalls) {
       world.remove(b.mesh);
       b.mesh.geometry.dispose();
-      b.mesh.material.dispose();
+      (b.mesh.material as THREE.Material).dispose();
     }
     pvpBalls.length = 0;
     pvpThrowCooldown = 0;
@@ -5625,7 +5871,7 @@ function pvpShowHit(victimId) {
   let t = 0;
   const anim = () => {
     t += 0.035;
-    if (t >= 1) { target.remove(flash); flash.geometry.dispose(); flash.material.dispose(); return; }
+    if (t >= 1) { target.remove(flash); flash.geometry.dispose(); (flash.material as THREE.Material).dispose(); return; }
     flash.material.opacity = 0.55 * (1 - t);
     requestAnimationFrame(anim);
   };
@@ -5706,6 +5952,8 @@ function destroy() {
     exitSit,
   };
 }
+
+export type GameEngineApi = ReturnType<typeof bootGame>;
 
 function lerpAngle(a, b, t) {
   const delta = ((((b - a) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2)) - Math.PI;

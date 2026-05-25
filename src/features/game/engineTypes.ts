@@ -1,20 +1,25 @@
 import type { AtmosphereState } from "@/game/atmosphere";
-import type { GamePlayerActivity } from "@/features/game/gameViewState";
+import type { EmoteKind } from "@/features/game/emotes";
+import type { AmbientAudioState, PlayerStatusState } from "@/shared/schemas/gameUi";
+import type { SocketOutboundMessage } from "@/shared/schemas/multiplayer";
 
 export interface BootGameOptions {
-  container?: any;
+  container?: HTMLElement | null;
   nickname?: string;
   avatar?: unknown;
   shouldIgnoreKeys?: (event: Event) => boolean;
   getWorldTime?: () => number;
-  onLocalState?: (state: { activity?: GamePlayerActivity }) => void;
-  onLocalEntityState?: (state: unknown) => void;
-  onNpcState?: (npcs: unknown[]) => void;
+  onLocalState?: (state: Omit<Extract<SocketOutboundMessage, { type: "state" }>, "type">) => void;
+  onLocalEntityState?: (
+    state: Omit<Extract<SocketOutboundMessage, { type: "entity-state" }>, "type">
+  ) => void;
+  onNpcState?: (
+    npcs: Extract<SocketOutboundMessage, { type: "npc-state" }>["npcs"]
+  ) => void;
   onAtmosphereChange?: (state: AtmosphereState) => void;
-  onCameraModeChange?: (state: { mode: string; label: string; focusLabel: string }) => void;
-  onAudioStateChange?: (state: unknown) => void;
-  onPlayerStateChange?: (state: unknown) => void;
-  onEmote?: (emote: { kind: string; duration: number }) => void;
+  onAudioStateChange?: (state: AmbientAudioState) => void;
+  onPlayerStateChange?: (state: PlayerStatusState) => void;
+  onEmote?: (emote: { kind: EmoteKind; duration: number }) => void;
   onMediaBoothInteract?: () => void;
   onPvpThrow?: (matchId: string, dx: number, dz: number, x: number, z: number) => void;
   onPvpHit?: (matchId: string, victimId: string) => void;

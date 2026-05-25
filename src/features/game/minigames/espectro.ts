@@ -185,7 +185,7 @@ export function createEspectroEvent({
   onSecretDisconnect,
   playParanormalSound,
 }) {
-  let secretCourt = null;
+  let secretCourt: ReturnType<typeof createSecretCourt> | null = null;
   const veil = document.createElement("div");
   veil.className = "espectro-veil";
   container?.appendChild(veil);
@@ -210,7 +210,7 @@ export function createEspectroEvent({
     };
   }
 
-  const state = {
+  const state: any = {
     espectro: null,
     seed: null,
     rng: Math.random,
@@ -261,7 +261,7 @@ export function createEspectroEvent({
 
   function spawnEspectro(payload: EspectroSpawnPayload = {}) {
     removeEspectro({ clearPayload: true });
-    if (!payload || payload.expiresAt < Date.now()) return;
+    if (!payload || typeof payload.expiresAt !== "number" || payload.expiresAt < Date.now()) return;
     const seed = seedToNumber(payload.seed);
     const rng = mulberry32(seed);
     const spawn = ESPECTRO_SPAWN_POINTS[Math.abs(payload.spawnIndex || 0) % ESPECTRO_SPAWN_POINTS.length];

@@ -116,7 +116,7 @@ function serializeCandidate(candidate: RTCIceCandidate | null) {
       candidate: json.candidate,
       sdpMid: json.sdpMid,
       sdpMLineIndex: json.sdpMLineIndex,
-      usernameFragment: json.usernameFragment,
+      ...(json.usernameFragment ? { usernameFragment: json.usernameFragment } : {}),
     };
   }
   if (!candidate.candidate) return null;
@@ -124,7 +124,7 @@ function serializeCandidate(candidate: RTCIceCandidate | null) {
     candidate: candidate.candidate,
     sdpMid: candidate.sdpMid,
     sdpMLineIndex: candidate.sdpMLineIndex,
-    usernameFragment: candidate.usernameFragment,
+    ...(candidate.usernameFragment ? { usernameFragment: candidate.usernameFragment } : {}),
   };
 }
 

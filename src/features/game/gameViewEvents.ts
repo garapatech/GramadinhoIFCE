@@ -1,3 +1,21 @@
+import {
+  createEndedPvpState,
+  createIncomingPvpState,
+  createStartedPvpState,
+  createLocalOnlinePlayer as buildLocalOnlinePlayer,
+  decorateChatMessage,
+  bumpChatLikeCount,
+  normalizeOnlinePlayer,
+  patchOnlinePlayer,
+  removeOnlinePlayer,
+  upsertOnlinePlayer,
+} from "@/features/game/gameViewState";
+import type {
+  GamePvpState,
+  GameChatMessage,
+  GameOnlinePlayer,
+  GameConnectionState,
+} from "@/features/game/gameViewState";
 import type {
   ChatMessage,
   MultiplayerEvent,
@@ -13,21 +31,6 @@ type PokerCardPayload = PokerHoleMessage["cards"][number];
 
 type ChessStateMessage = Extract<SocketInboundMessage, { type: "chess-state" }>;
 type ChessStatePayload = ChessStateMessage["state"];
-import type {
-  GamePvpState,
-  GameChatMessage,
-  GameOnlinePlayer,
-  GamePlayerActivity,
-} from "@/features/game/gameViewState";
-import {
-  createEndedPvpState,
-  createIncomingPvpState,
-  createStartedPvpState,
-  decorateChatMessage,
-  patchOnlinePlayer,
-  removeOnlinePlayer,
-  upsertOnlinePlayer,
-} from "@/features/game/gameViewState";
 
 type MutableRef<T> = { current: T };
 type NpcStateList = Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"];
@@ -37,6 +40,7 @@ type PvpHitMessage = Extract<SocketInboundMessage, { type: "pvp-hit" }>;
 type SpectroSpawnMessage = Extract<SocketInboundMessage, { type: "espectro-spawn" }>;
 type VoiceReadyMessage = Extract<SocketInboundMessage, { type: "voice-ready" }>;
 type VoiceSignalMessage = Extract<SocketInboundMessage, { type: "voice-signal" }>;
+type SeatLike = { playerId?: string | null };
 
 type GameApi = {
   addRemotePlayer?: (player: PlayerSnapshot) => void;
@@ -77,14 +81,14 @@ type GameViewEventContext = {
   serverNowRef: MutableRef<number | null>;
   serverSyncedAtRef: MutableRef<number | null>;
   pvpStateRef: MutableRef<GamePvpState | null>;
-  pvpCountdownRef: MutableRef<{
+  pvpCountdown: {
     clear: () => void;
     start: (setPvpState: GameViewEventContext["setPvpState"]) => void;
-  } | null>;
+  };
   espectroNoticeTimerRef: MutableRef<ReturnType<typeof setTimeout> | null>;
   getGame: () => GameApi | null;
   getVoice: () => VoiceApi | null;
-  setConnection: (value: string) => void;
+  setConnection: (value: GameConnectionState) => void;
   setOnlinePlayers: (updater: (current: GameOnlinePlayer[]) => GameOnlinePlayer[]) => void;
   setChatMessages: (updater: (current: GameChatMessage[]) => GameChatMessage[]) => void;
   setPvpState: (next: GamePvpState | null | ((prev: GamePvpState | null) => GamePvpState | null)) => void;
@@ -108,6 +112,18 @@ function appendChatMessage(
     const next = [...prev, decorateChatMessage(message)];
     return next.length > 80 ? next.slice(next.length - 80) : next;
   });
+}
+
+function syncLocalSeatState(game: GameApi | null, localId: string | null, seats: SeatLike[]) {
+  if (!localId) {
+    game?.exitSit?.();
+    return;
+  }
+
+  const stillSeated = seats.some((seat) => seat.playerId === localId);
+  if (!stillSeated) {
+    game?.exitSit?.();
+  }
 }
 
 function handleEspectroSpawn(context: GameViewEventContext, event: SpectroSpawnMessage) {
@@ -142,7 +158,7 @@ function handlePvpHit(context: GameViewEventContext, event: PvpHitMessage) {
 
 function handlePvpEnd(context: GameViewEventContext, event: PvpEndMessage) {
   const game = context.getGame();
-  context.pvpCountdownRef.current?.clear();
+  context.pvpCountdown.clear();
   context.espectroNoticeTimerRef.current && clearTimeout(context.espectroNoticeTimerRef.current);
   context.espectroNoticeTimerRef.current = null;
   if (game) {
@@ -173,27 +189,12 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
     if (event.type === "init") {
       context.localIdRef.current = event.you;
       context.setOnlinePlayers(() => {
-        const nextPlayers: GameOnlinePlayer[] = [
-          {
-            id: event.you,
-            nick: context.nick,
-            activity: "idle" as GamePlayerActivity,
-            voiceEnabled: false,
-            voiceMuted: false,
-            isYou: true,
-          },
-          ...(Array.isArray(event.players) ? event.players : [])
-            .filter((player) => player?.id && player.id !== event.you)
-            .map((player) => ({
-              id: player.id,
-              nick: player.nick || "Player",
-              activity: (player.activity || "idle") as GamePlayerActivity,
-              voiceEnabled: player.voiceEnabled === true,
-              voiceMuted: player.voiceMuted === true,
-              isYou: false,
-            })),
-        ];
-        return nextPlayers;
+        const remotePlayers = (Array.isArray(event.players) ? event.players : [])
+          .filter((player) => player?.id && player.id !== event.you)
+          .map((player) => normalizeOnlinePlayer(player, event.you))
+          .filter((player): player is GameOnlinePlayer => player !== null);
+
+        return [buildLocalOnlinePlayer(event.you, context.nick), ...remotePlayers];
       });
       context.npcAuthorityIdRef.current =
         typeof event.npcAuthority === "string" ? event.npcAuthority : null;
@@ -318,12 +319,12 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
         game.pvpSetMatch?.(createPvpMatchUpdate(event.matchId, started.opponentId, started.side));
         game.pvpTeleportToArena?.(started.side);
       }
-      context.pvpCountdownRef.current?.start(context.setPvpState);
+      context.pvpCountdown.start(context.setPvpState);
       return;
     }
 
     if (event.type === "pvp-declined" || event.type === "pvp-cancelled") {
-      context.pvpCountdownRef.current?.clear();
+      context.pvpCountdown.clear();
       context.setPvpState(null);
       game?.pvpSetMatch?.(null);
       return;
@@ -357,16 +358,9 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
 
     if (event.type === "poker-state") {
       context.setPokerState(event.state);
-      const localId = context.localIdRef.current;
-      const mySeat = localId
-        ? event.state.seats.find((s) => s.playerId === localId)
-        : null;
-      // Fallback: server confirmou que sai (nao tem mais assento) -> garante
-      // que o engine tambem saia do sit, mesmo se o botao nao tiver chamado
-      // exitSit por algum motivo (HMR antigo, race, etc.).
-      if (!mySeat) {
-        game?.exitSit?.();
-      }
+      // If the server says the local player is no longer seated, mirror that
+      // state into the engine even if the HUD button missed the transition.
+      syncLocalSeatState(game, context.localIdRef.current, event.state.seats);
       return;
     }
 
@@ -382,11 +376,7 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
 
     if (event.type === "chess-state") {
       context.setChessState(event.state);
-      const localId = context.localIdRef.current;
-      const stillSeated = !!localId && event.state.seats.some((s) => s.playerId === localId);
-      if (!stillSeated) {
-        game?.exitSit?.();
-      }
+      syncLocalSeatState(game, context.localIdRef.current, event.state.seats);
       return;
     }
 
@@ -398,13 +388,7 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
     if (event.type === "reaction") {
       if (!event.targetId) return;
       if (event.targetKey) {
-        context.setChatMessages((prev) =>
-          prev.map((message) =>
-            message.key === event.targetKey
-              ? { ...message, likeCount: (message.likeCount || 0) + 1 }
-              : message
-          )
-        );
+        context.setChatMessages((prev) => bumpChatLikeCount(prev, event.targetKey));
       }
       if (game && event.targetId !== "__system__") {
         const target = event.targetId === context.localIdRef.current ? "__local__" : event.targetId;

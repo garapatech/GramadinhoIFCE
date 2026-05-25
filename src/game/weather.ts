@@ -24,6 +24,34 @@ type WeatherPlayerPosition = {
   z: number;
 };
 
+type WeatherPuddleUserData = {
+  baseRadius: number;
+  phase: number;
+};
+
+type WeatherCloudUserData = {
+  drift: number;
+  phase: number;
+  baseY: number;
+  baseScale: number;
+};
+
+type WeatherTreeUserData = {
+  windPhase: number;
+};
+
+type WeatherPuddleMesh = THREE.Mesh<THREE.CircleGeometry, THREE.MeshStandardMaterial> & {
+  userData: WeatherPuddleUserData;
+};
+
+type WeatherCloudSprite = THREE.Sprite & {
+  userData: WeatherCloudUserData;
+};
+
+type WeatherTreeGroup = THREE.Group & {
+  userData: WeatherTreeUserData;
+};
+
 export interface WeatherSystemOptions {
   scene: THREE.Scene;
   world: THREE.Group;
@@ -41,7 +69,7 @@ export interface WeatherSystem {
 }
 
 function createTree() {
-  const tree = new THREE.Group();
+  const tree = new THREE.Group() as WeatherTreeGroup;
   const trunk = new THREE.Mesh(
     new THREE.CylinderGeometry(0.38, 0.48, 2.8, 8),
     new THREE.MeshStandardMaterial({ color: 0x7a5636, roughness: 1 })
@@ -57,10 +85,18 @@ function createTree() {
   crown.position.y = 3.2;
   crown.castShadow = true;
   tree.add(crown);
+  tree.userData = { windPhase: 0 };
   return tree;
 }
 
-function createPuddle(world: THREE.Group, puddles: THREE.Mesh[], x: number, z: number, radius: number, phase = 0) {
+function createPuddle(
+  world: THREE.Group,
+  puddles: WeatherPuddleMesh[],
+  x: number,
+  z: number,
+  radius: number,
+  phase = 0
+) {
   const mesh = new THREE.Mesh(
     new THREE.CircleGeometry(radius, 24),
     new THREE.MeshStandardMaterial({
@@ -73,7 +109,7 @@ function createPuddle(world: THREE.Group, puddles: THREE.Mesh[], x: number, z: n
       emissiveIntensity: 0.08,
       depthWrite: false,
     })
-  );
+  ) as WeatherPuddleMesh;
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(x, 0.041, z);
   mesh.renderOrder = 2;
@@ -88,7 +124,7 @@ function createPuddle(world: THREE.Group, puddles: THREE.Mesh[], x: number, z: n
 
 function createCloudSprite(
   cloudLayer: THREE.Group,
-  cloudSprites: THREE.Sprite[],
+  cloudSprites: WeatherCloudSprite[],
   x: number,
   y: number,
   z: number,
@@ -106,7 +142,7 @@ function createCloudSprite(
       depthWrite: false,
       fog: false,
     })
-  );
+  ) as WeatherCloudSprite;
   cloud.position.set(x, y, z);
   cloud.scale.set(scale * 1.5, scale, 1);
   cloud.userData = { drift, phase, baseY: y, baseScale: scale };
@@ -121,9 +157,9 @@ export function createWeatherSystem(opts: WeatherSystemOptions): WeatherSystem {
   const cloudLayer = new THREE.Group();
   scene.add(cloudLayer);
 
-  const weatherTrees: THREE.Group[] = [];
-  const puddles: THREE.Mesh[] = [];
-  const cloudSprites: THREE.Sprite[] = [];
+  const weatherTrees: WeatherTreeGroup[] = [];
+  const puddles: WeatherPuddleMesh[] = [];
+  const cloudSprites: WeatherCloudSprite[] = [];
   let groundWetness = 0;
 
   const rainCount = 900;
@@ -193,12 +229,7 @@ export function createWeatherSystem(opts: WeatherSystemOptions): WeatherSystem {
 
     for (let i = 0; i < cloudSprites.length; i += 1) {
       const cloud = cloudSprites[i];
-      const data = cloud.userData as {
-        drift: number;
-        phase: number;
-        baseY: number;
-        baseScale: number;
-      };
+      const data = cloud.userData;
       cloud.position.x += (data.drift + wind * 0.35) * 0.018;
       if (cloud.position.x > 82) cloud.position.x = -82;
       if (cloud.position.x < -82) cloud.position.x = 82;
@@ -249,7 +280,7 @@ export function createWeatherSystem(opts: WeatherSystemOptions): WeatherSystem {
 
     const puddleBaseOpacity = Math.max(0, groundWetness - 0.06);
     for (const puddle of puddles) {
-      const phase = puddle.userData.phase || 0;
+      const phase = puddle.userData.phase;
       const shimmer = 0.015 * Math.sin(time * 2.4 + phase) + 0.01 * Math.sin(time * 4.9 + phase * 1.7);
       const size = puddle.userData.baseRadius * (1 + groundWetness * 0.06 + shimmer);
       puddle.scale.setScalar(size / puddle.userData.baseRadius);
@@ -286,11 +317,7 @@ export function createWeatherSystem(opts: WeatherSystemOptions): WeatherSystem {
   function destroy() {
     scene.remove(cloudLayer);
     scene.remove(rainField);
-
-    for (const cloud of cloudSprites) {
-      cloudLayer.remove(cloud);
-      disposeObject3D(cloud);
-    }
+    disposeObject3D(cloudLayer);
 
     for (const puddle of puddles) {
       world.remove(puddle);
@@ -303,7 +330,6 @@ export function createWeatherSystem(opts: WeatherSystemOptions): WeatherSystem {
     }
 
     disposeObject3D(rainField);
-    cloudTexture.dispose();
   }
 
   return {

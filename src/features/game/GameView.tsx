@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Chat from "@/features/chat/Chat";
 import MediaPlayerPanel from "@/features/media/MediaPlayerPanel";
@@ -11,8 +11,11 @@ import OnlinePlayersPanel from "@/features/game/OnlinePlayersPanel";
 import PokerHud from "@/features/game/PokerHud";
 import ChessHud from "@/features/game/ChessHud";
 import { createPvpCountdownController } from "@/features/game/pvpCountdown";
+import { emoteBar, getEmoteDuration } from "@/features/game/emotes";
 import {
   patchOnlinePlayer,
+  bumpChatLikeCount,
+  type GameConnectionState,
   type GameChatMessage,
   type GameOnlinePlayer,
   type GamePvpState,
@@ -23,74 +26,70 @@ import { useMobileViewport } from "@/features/game/useMobileViewport";
 import { useMobileControls } from "@/features/game/useMobileControls";
 import { connectMultiplayer } from "@/features/multiplayer/client";
 import { createVoiceChat, getInitialVoiceState } from "@/features/multiplayer/voice";
+import type { GameEngineApi } from "@/features/game/engine";
 import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
 import { readPublicEnv } from "@/shared/schemas/env";
 import { readGameRouteNick } from "@/shared/schemas/gameRoute";
+import {
+  defaultAmbientAudioState,
+  defaultPlayerStatusState,
+  type AmbientAudioState,
+  type PlayerStatusState,
+} from "@/shared/schemas/gameUi";
+import type { SocketInboundMessage } from "@/shared/schemas/multiplayer";
+import type { VoiceState } from "@/shared/schemas/voice";
+
+type PokerState = Extract<SocketInboundMessage, { type: "poker-state" }>["state"];
+type PokerHoleCards = Extract<SocketInboundMessage, { type: "poker-hole" }>["cards"];
+type ChessState = Extract<SocketInboundMessage, { type: "chess-state" }>["state"];
 
 export default function GameView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nick = readGameRouteNick(searchParams);
 
-  const containerRef = useRef(null);
-  const gameApiRef = useRef(null);
-  const multiplayerRef = useRef(null);
-  const voiceRef = useRef(null);
-  const localIdRef = useRef(null);
-  const npcAuthorityIdRef = useRef(null);
-  const npcSnapshotRef = useRef([]);
-  const espectroSnapshotRef = useRef(null);
-  const mobileRunRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const gameApiRef = useRef<GameEngineApi | null>(null);
+  const multiplayerRef = useRef<ReturnType<typeof connectMultiplayer> | null>(null);
+  const voiceRef = useRef<ReturnType<typeof createVoiceChat> | null>(null);
+  const localIdRef = useRef<string | null>(null);
+  const npcAuthorityIdRef = useRef<string | null>(null);
+  const npcSnapshotRef = useRef<Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"]>([]);
+  const espectroSnapshotRef = useRef<Extract<SocketInboundMessage, { type: "espectro-spawn" }>["espectro"] | null>(null);
+  const mobileRunRef = useRef<boolean>(false);
   const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([]);
-  const [voiceState, setVoiceState] = useState(getInitialVoiceState);
-  const [connection, setConnection] = useState("connecting");
-  const [chatFocused, setChatFocused] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>(getInitialVoiceState);
+  const [connection, setConnection] = useState<GameConnectionState>("connecting");
   const [onlinePlayers, setOnlinePlayers] = useState<GameOnlinePlayer[]>([]);
-  const [avatar, setAvatar] = useState(null);
+  const [avatar] = useState(() => readStoredAvatar());
   const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
-  const [mediaFocused, setMediaFocused] = useState(false);
   const [pvpState, setPvpState] = useState<GamePvpState | null>(null);
   const pvpStateRef = useRef<GamePvpState | null>(null);
-  const pvpCountdownRef = useRef<ReturnType<typeof createPvpCountdownController> | null>(null);
+  const pvpCountdown = useMemo(() => createPvpCountdownController(), []);
   const [atmosphere, setAtmosphere] = useState(defaultAtmosphereState);
-  const [cameraMode, setCameraMode] = useState({
-    mode: "follow",
-    label: "travada",
-    focusLabel: "",
-  });
-  const [audioState, setAudioState] = useState({
-    enabled: true,
-    label: "ativo",
-  });
-  const [playerState, setPlayerState] = useState({
-    kind: "idle",
-    label: "parado",
-    detail: "vagando pelo campus",
-  });
+  const [audioState, setAudioState] = useState<AmbientAudioState>(defaultAmbientAudioState);
+  const [playerState, setPlayerState] = useState<PlayerStatusState>(defaultPlayerStatusState);
   const [espectroNotice, setEspectroNotice] = useState("");
-  const [pokerState, setPokerState] = useState(null);
-  const [pokerHole, setPokerHole] = useState(null);
-  const [pokerError, setPokerError] = useState(null);
+  const [pokerState, setPokerState] = useState<PokerState | null>(null);
+  const [pokerHole, setPokerHole] = useState<PokerHoleCards | null>(null);
+  const [pokerError, setPokerError] = useState<string | null>(null);
   const [pokerHudOpen, setPokerHudOpen] = useState(false);
-  const [chessState, setChessState] = useState(null);
-  const [chessError, setChessError] = useState(null);
+  const [chessState, setChessState] = useState<ChessState | null>(null);
+  const [chessError, setChessError] = useState<string | null>(null);
   const [chessHudOpen, setChessHudOpen] = useState(false);
-  const espectroNoticeTimerRef = useRef(null);
+  const espectroNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chatFocusedRef = useRef(false);
   const mediaFocusedRef = useRef(false);
-  const serverNowRef = useRef(null);
-  const serverSyncedAtRef = useRef(null);
+  const serverNowRef = useRef<number | null>(null);
+  const serverSyncedAtRef = useRef<number | null>(null);
   const {
     chatVisible,
     playersVisible,
     setChatVisible,
-    setPlayersVisible,
+    hideOverlays,
   } = useGameOverlayVisibility();
   const { mobileMode, orientationMessage, portraitLocked, requestLandscape } = useMobileViewport({
-    onFirstMobileLayout: () => {
-      setChatVisible(false);
-      setPlayersVisible(false);
-    },
+    onFirstMobileLayout: hideOverlays,
   });
   const {
     stick: mobileStick,
@@ -104,34 +103,9 @@ export default function GameView() {
     gameApiRef: gameApiRef,
     mobileRunRef,
   });
-  const emoteBar = [
-    { kind: "dance", label: "Dançar", short: "G", glyph: "🕺" },
-    { kind: "laugh", label: "Rir", short: "1", glyph: "😂" },
-    { kind: "sixseven", label: "67", short: "2", glyph: "🤲" },
-    { kind: "wave", label: "Acenar", short: "3", glyph: "👋" },
-    { kind: "point", label: "Apontar", short: "4", glyph: "👉" },
-    { kind: "cheer", label: "Comemorar", short: "5", glyph: "🎉" },
-  ];
-
-  function getEmoteDuration(kind) {
-    if (kind === "dance") return 8.0;
-    if (kind === "sixseven") return 3.4;
-    if (kind === "glitch") return 2.2;
-    if (kind === "cheer") return 3.2;
-    return 2.4;
-  }
-
   useEffect(() => {
     pvpStateRef.current = pvpState;
   }, [pvpState]);
-
-  useEffect(() => {
-    chatFocusedRef.current = chatFocused;
-  }, [chatFocused]);
-
-  useEffect(() => {
-    mediaFocusedRef.current = mediaFocused;
-  }, [mediaFocused]);
 
   useEffect(() => {
     return () => {
@@ -139,24 +113,15 @@ export default function GameView() {
         clearTimeout(espectroNoticeTimerRef.current);
         espectroNoticeTimerRef.current = null;
       }
-      pvpCountdownRef.current?.clear();
+      pvpCountdown.clear();
     };
   }, []);
 
-  if (!pvpCountdownRef.current) {
-    pvpCountdownRef.current = createPvpCountdownController();
-  }
-
   useEffect(() => {
-    setAvatar(readStoredAvatar());
-  }, []);
-
-  useEffect(() => {
-    if (!avatar) return undefined;
     let cancelled = false;
-    let game = null;
-    let multiplayer = null;
-    let voice = null;
+    let game: GameEngineApi | null = null;
+    let multiplayer: ReturnType<typeof connectMultiplayer> | null = null;
+    let voice: ReturnType<typeof createVoiceChat> | null = null;
     const publicEnv = readPublicEnv();
     const handleMultiplayerEvent = createGameViewEventHandler({
       nick,
@@ -167,7 +132,7 @@ export default function GameView() {
       serverNowRef,
       serverSyncedAtRef,
       pvpStateRef,
-      pvpCountdownRef,
+      pvpCountdown,
       espectroNoticeTimerRef,
       getGame: () => gameApiRef.current,
       getVoice: () => voiceRef.current,
@@ -220,20 +185,19 @@ export default function GameView() {
         },
         onLocalState: (state) => {
           setOnlinePlayers((prev) => patchOnlinePlayer(prev, localIdRef.current, { activity: state.activity || "idle" }));
-          multiplayer.sendState(state);
+          multiplayer?.sendState(state);
         },
         onLocalEntityState: (state) => {
-          multiplayer.sendEntityState(state);
+          multiplayer?.sendEntityState(state);
         },
         onNpcState: (npcs) => {
-          multiplayer.sendNpcState(npcs);
+          multiplayer?.sendNpcState(npcs);
         },
         onAtmosphereChange: setAtmosphere,
-        onCameraModeChange: setCameraMode,
         onAudioStateChange: setAudioState,
         onPlayerStateChange: setPlayerState,
         onEmote: (emote) => {
-          multiplayer.sendEmote(emote.kind, emote.duration);
+          multiplayer?.sendEmote(emote.kind, emote.duration);
         },
         onMediaBoothInteract: () => {
           setMediaPanelOpen(true);
@@ -247,13 +211,13 @@ export default function GameView() {
           setChessHudOpen(true);
         },
         onPvpThrow: (matchId, dx, dz, x, z) => {
-          multiplayer.sendPvpThrow(matchId, dx, dz, x, z);
+          multiplayer?.sendPvpThrow(matchId, dx, dz, x, z);
         },
         onPvpHit: (matchId, victimId) => {
-          multiplayer.sendPvpHit(matchId, victimId);
+          multiplayer?.sendPvpHit(matchId, victimId);
         },
         onEspectroConsumed: (seed) => {
-          multiplayer.sendEspectroConsumed?.(seed);
+          multiplayer?.sendEspectroConsumed?.(seed);
         },
         onSecretDisconnect: () => {
           multiplayerRef.current?.close?.();
@@ -287,36 +251,27 @@ export default function GameView() {
       gameApiRef.current = null;
       multiplayerRef.current = null;
       voiceRef.current = null;
+      pvpCountdown.clear();
     };
   }, [nick, avatar]);
 
-  if (!avatar) {
-    return <div style={{ color: "#fff", padding: 24 }}>Carregando...</div>;
-  }
-
-  function handleSendChat(text) {
+  function handleSendChat(text: string) {
     const trimmed = (text || "").trim();
     if (!trimmed) return false;
     multiplayerRef.current?.sendChat(trimmed);
     return true;
   }
 
-  function handleReactToMessage(message) {
+  function handleReactToMessage(message: GameChatMessage) {
     if (!message?.key || !message?.id || message.id === "__system__") return;
-    setChatMessages((prev) =>
-      prev.map((entry) =>
-        entry.key === message.key
-          ? { ...entry, likeCount: (entry.likeCount || 0) + 1 }
-          : entry
-      )
-    );
+    setChatMessages((prev) => bumpChatLikeCount(prev, message.key));
     multiplayerRef.current?.sendReaction?.(message.key, "like");
     const target =
       message.id === localIdRef.current ? "__local__" : message.id;
     gameApiRef.current?.triggerReaction?.(target, "like");
   }
 
-  function handlePvpChallenge(targetId) {
+  function handlePvpChallenge(targetId: string) {
     multiplayerRef.current?.sendPvpChallenge?.(targetId);
   }
 
@@ -330,7 +285,7 @@ export default function GameView() {
     const cur = pvpStateRef.current;
     if (!cur || cur.phase !== "incoming") return;
     multiplayerRef.current?.sendPvpRespond?.(cur.matchId, false);
-    pvpCountdownRef.current?.clear();
+    pvpCountdown.clear();
     setPvpState(null);
   }
 
@@ -338,7 +293,7 @@ export default function GameView() {
     const cur = pvpStateRef.current;
     if (!cur || cur.phase === "ended") return;
     multiplayerRef.current?.sendPvpQuit?.(cur.matchId);
-    pvpCountdownRef.current?.clear();
+    pvpCountdown.clear();
     if (gameApiRef.current) {
       gameApiRef.current.pvpSetMatch(null);
       gameApiRef.current.pvpReturnFromArena();
@@ -347,7 +302,7 @@ export default function GameView() {
   }
 
   function handlePvpDismiss() {
-    pvpCountdownRef.current?.clear();
+    pvpCountdown.clear();
     setPvpState(null);
   }
 
@@ -365,6 +320,14 @@ export default function GameView() {
 
   function handleUnlockAudio() {
     voiceRef.current?.unlockAudio?.();
+  }
+
+  function handleChatFocusChange(focused: boolean) {
+    chatFocusedRef.current = focused;
+  }
+
+  function handleMediaFocusChange(focused: boolean) {
+    mediaFocusedRef.current = focused;
   }
 
   return (
@@ -448,7 +411,7 @@ export default function GameView() {
             <MediaPlayerPanel
               open={mediaPanelOpen}
               onClose={() => setMediaPanelOpen(false)}
-              onFocusChange={setMediaFocused}
+              onFocusChange={handleMediaFocusChange}
             />
           </div>
         </div>
@@ -500,7 +463,7 @@ export default function GameView() {
             messages={chatMessages}
             onSend={handleSendChat}
             onReact={handleReactToMessage}
-            onFocusChange={setChatFocused}
+            onFocusChange={handleChatFocusChange}
             connection={connection}
             myNick={nick}
             visible={chatVisible}

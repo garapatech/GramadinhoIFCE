@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { chatMessageSchema, playerActivitySchema } from "@/shared/schemas/multiplayer";
 
+export type GameConnectionState = "connecting" | "connected" | "disconnected" | "error";
+
 export type GameChatMessage = z.infer<typeof chatMessageSchema> & {
   key: string;
   likeCount: number;
@@ -31,6 +33,29 @@ export function decorateChatMessage(message: ChatMessageLike): GameChatMessage {
     ...message,
     key: `${message.id}:${message.ts}`,
     likeCount: 0,
+  };
+}
+
+export function bumpChatLikeCount(messages: GameChatMessage[], key: string) {
+  let changed = false;
+
+  const next = messages.map((message) => {
+    if (message.key !== key) return message;
+    changed = true;
+    return { ...message, likeCount: (message.likeCount || 0) + 1 };
+  });
+
+  return changed ? next : messages;
+}
+
+export function createLocalOnlinePlayer(id: string, nick: string): GameOnlinePlayer {
+  return {
+    id,
+    nick,
+    activity: "idle",
+    voiceEnabled: false,
+    voiceMuted: false,
+    isYou: true,
   };
 }
 

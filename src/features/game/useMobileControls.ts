@@ -1,4 +1,5 @@
 import { useRef, useState, type MutableRefObject } from "react";
+import type { GameEngineApi } from "@/features/game/engine";
 
 type MobileStickState = {
   active: boolean;
@@ -6,16 +7,8 @@ type MobileStickState = {
   y: number;
 };
 
-type MobileGameApi = {
-  setMobileInput?: (next: { x?: number; y?: number; running?: boolean }) => void;
-  queueMobileJump?: () => void;
-  queueMobileInteract?: () => void;
-  toggleCameraMode?: () => void;
-  queueMobilePvpThrow?: () => void;
-};
-
 type UseMobileControlsOptions = {
-  gameApiRef: MutableRefObject<MobileGameApi | null>;
+  gameApiRef: MutableRefObject<GameEngineApi | null>;
   mobileRunRef: MutableRefObject<boolean>;
 };
 

@@ -3,55 +3,38 @@
 import { useEffect, useState, type FormEvent, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import AvatarCustomizer from "@/features/avatar/AvatarCustomizer";
+import { useStoredAvatar } from "@/features/avatar/useStoredAvatar";
 import {
-  getDefaultAvatar,
-  readStoredAvatar,
-  writeStoredAvatar,
-  type Avatar,
-} from "@/features/avatar/avatarConfig";
-
-const STORAGE_KEY = "gramadinho.nick";
-const NICK_MIN_LENGTH = 2;
-const NICK_MAX_LENGTH = 16;
+  readStoredNick,
+  writeStoredNick,
+} from "@/features/menu/nickStorage";
+import {
+  NICK_MAX_LENGTH,
+  nickSchema,
+} from "@/shared/schemas/nick";
 
 export default function MainMenu() {
   const router = useRouter();
-  const [nick, setNick] = useState("");
-  const [avatar, setAvatar] = useState<Avatar>(getDefaultAvatar);
-  const [avatarReady, setAvatarReady] = useState(false);
+  const [nick, setNick] = useState(readStoredNick);
+  const [avatar, setAvatar] = useStoredAvatar();
   const [customizerOpen, setCustomizerOpen] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) setNick(saved);
-    } catch {}
-    setAvatar(readStoredAvatar());
-    setAvatarReady(true);
     router.prefetch("/play");
   }, [router]);
-
-  useEffect(() => {
-    if (!avatarReady) return;
-    writeStoredAvatar(avatar);
-  }, [avatar, avatarReady]);
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = nick.trim();
-    if (trimmed.length < NICK_MIN_LENGTH) {
-      setError("Seu nick precisa de pelo menos 2 letras.");
+
+    const parsed = nickSchema.safeParse(trimmed);
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message || "");
       return;
     }
-    if (trimmed.length > NICK_MAX_LENGTH) {
-      setError("Nick muito grande (máx. 16 caracteres).");
-      return;
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, trimmed);
-    } catch {}
-    writeStoredAvatar(avatar);
+
+    writeStoredNick(trimmed);
     router.push(`/play?nick=${encodeURIComponent(trimmed)}`);
   }
 

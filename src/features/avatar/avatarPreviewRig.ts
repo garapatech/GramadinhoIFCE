@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { avatarToGameAppearance, type Avatar } from "@/features/avatar/avatarConfig";
+import { disposeObject3D } from "@/game/disposeObject3D";
 
 export type AvatarPreviewRefs = {
   torso: THREE.Group;
@@ -17,7 +18,23 @@ export type AvatarPreviewRefs = {
 export type AvatarPreviewRig = {
   group: THREE.Group;
   refs: AvatarPreviewRefs;
-  disposables: Array<THREE.BufferGeometry | THREE.Material>;
+  materials: {
+    skin: THREE.MeshStandardMaterial;
+    shirt: THREE.MeshStandardMaterial;
+    shirtFront: THREE.MeshStandardMaterial;
+    pants: THREE.MeshStandardMaterial;
+    shoes: THREE.MeshStandardMaterial;
+    backpack: THREE.MeshStandardMaterial;
+    hair: THREE.MeshStandardMaterial;
+    brow: THREE.MeshStandardMaterial;
+    nose: THREE.MeshStandardMaterial;
+    mouth: THREE.MeshStandardMaterial;
+    cheek: THREE.MeshStandardMaterial;
+  };
+  accessories: {
+    backpack: THREE.Group;
+    glasses: THREE.Group;
+  };
 };
 
 function markCastShadow(root: THREE.Object3D) {
@@ -26,24 +43,6 @@ function markCastShadow(root: THREE.Object3D) {
       (obj as THREE.Mesh).castShadow = true;
     }
   });
-}
-
-function collectDisposables(root: THREE.Object3D) {
-  const disposables = new Set<THREE.BufferGeometry | THREE.Material>();
-
-  root.traverse((obj) => {
-    const mesh = obj as THREE.Mesh;
-    if (mesh.geometry) disposables.add(mesh.geometry);
-    if (mesh.material) {
-      if (Array.isArray(mesh.material)) {
-        mesh.material.forEach((material) => disposables.add(material));
-      } else {
-        disposables.add(mesh.material);
-      }
-    }
-  });
-
-  return Array.from(disposables);
 }
 
 function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): AvatarPreviewRig {
@@ -106,18 +105,20 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   neck.position.y = 1.02;
   torso.add(neck);
 
-  if (backpack) {
-    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.78, 0.22), backpackMat);
-    pack.position.set(0, 0.5, -0.34);
-    pack.castShadow = true;
-    torso.add(pack);
-    const strapL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.78, 0.08), backpackMat);
-    strapL.position.set(-0.2, 0.55, -0.2);
-    torso.add(strapL);
-    const strapR = strapL.clone();
-    strapR.position.x = 0.2;
-    torso.add(strapR);
-  }
+  const backpackGroup = new THREE.Group();
+  backpackGroup.visible = backpack;
+  torso.add(backpackGroup);
+
+  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.78, 0.22), backpackMat);
+  pack.position.set(0, 0.5, -0.34);
+  pack.castShadow = true;
+  backpackGroup.add(pack);
+  const strapL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.78, 0.08), backpackMat);
+  strapL.position.set(-0.2, 0.55, -0.2);
+  backpackGroup.add(strapL);
+  const strapR = strapL.clone();
+  strapR.position.x = 0.2;
+  backpackGroup.add(strapR);
 
   const head = new THREE.Group();
   head.position.set(0, 1.16, 0.02);
@@ -207,37 +208,39 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   rightEar.position.x = 0.32;
   head.add(rightEar);
 
-  if (glasses) {
-    const frameMat = new THREE.MeshStandardMaterial({
-      color: 0x1a1a1a,
-      roughness: 0.5,
-      metalness: 0.4,
-    });
-    const lensMat = new THREE.MeshStandardMaterial({
-      color: 0xa9d8ef,
-      roughness: 0.2,
-      metalness: 0.1,
-      transparent: true,
-      opacity: 0.55,
-    });
-    const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 18);
-    const leftLens = new THREE.Mesh(lensGeo, frameMat);
-    leftLens.position.set(-0.13, 0.06, 0.365);
-    head.add(leftLens);
-    const rightLens = leftLens.clone();
-    rightLens.position.x = 0.12;
-    head.add(rightLens);
-    const innerGeo = new THREE.CircleGeometry(0.082, 16);
-    const leftGlass = new THREE.Mesh(innerGeo, lensMat);
-    leftGlass.position.set(-0.13, 0.06, 0.367);
-    head.add(leftGlass);
-    const rightGlass = leftGlass.clone();
-    rightGlass.position.x = 0.12;
-    head.add(rightGlass);
-    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.012), frameMat);
-    bridge.position.set(0, 0.06, 0.365);
-    head.add(bridge);
-  }
+  const glassesGroup = new THREE.Group();
+  glassesGroup.visible = glasses;
+  head.add(glassesGroup);
+
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a,
+    roughness: 0.5,
+    metalness: 0.4,
+  });
+  const lensMat = new THREE.MeshStandardMaterial({
+    color: 0xa9d8ef,
+    roughness: 0.2,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.55,
+  });
+  const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 18);
+  const leftLens = new THREE.Mesh(lensGeo, frameMat);
+  leftLens.position.set(-0.13, 0.06, 0.365);
+  glassesGroup.add(leftLens);
+  const rightLens = leftLens.clone();
+  rightLens.position.x = 0.12;
+  glassesGroup.add(rightLens);
+  const innerGeo = new THREE.CircleGeometry(0.082, 16);
+  const leftGlass = new THREE.Mesh(innerGeo, lensMat);
+  leftGlass.position.set(-0.13, 0.06, 0.367);
+  glassesGroup.add(leftGlass);
+  const rightGlass = leftGlass.clone();
+  rightGlass.position.x = 0.12;
+  glassesGroup.add(rightGlass);
+  const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.012), frameMat);
+  bridge.position.set(0, 0.06, 0.365);
+  glassesGroup.add(bridge);
 
   function buildArm(side: "left" | "right") {
     const sign = side === "left" ? -1 : 1;
@@ -325,12 +328,48 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
       rightHip: rightLeg.hip,
       rightKnee: rightLeg.knee,
     },
-    disposables: collectDisposables(root),
+    materials: {
+      skin: skinMat,
+      shirt: shirtMat,
+      shirtFront: shirtFront.material as THREE.MeshStandardMaterial,
+      pants: pantsMat,
+      shoes: shoesMat,
+      backpack: backpackMat,
+      hair: hairMat,
+      brow: browMat,
+      nose: nose.material as THREE.MeshStandardMaterial,
+      mouth: mouthMat,
+      cheek: cheekMat,
+    },
+    accessories: {
+      backpack: backpackGroup,
+      glasses: glassesGroup,
+    },
   };
 }
 
 export function buildAvatarPreviewRig(avatar: Avatar): AvatarPreviewRig {
   return buildCharacter(avatarToGameAppearance(avatar));
+}
+
+export function applyAvatarPreviewAppearance(rig: AvatarPreviewRig, avatar: Avatar) {
+  const appearance = avatarToGameAppearance(avatar);
+
+  rig.materials.skin.color.setHex(appearance.skinColor);
+  rig.materials.shirt.color.setHex(appearance.shirtColor);
+  rig.materials.shirtFront.color
+    .copy(new THREE.Color(appearance.shirtColor))
+    .offsetHSL(0, -0.05, 0.12);
+  rig.materials.pants.color.setHex(appearance.pantsColor);
+  rig.materials.shoes.color.setHex(appearance.shoesColor);
+  rig.materials.backpack.color.setHex(appearance.backpackColor);
+  rig.materials.hair.color.setHex(appearance.hairColor);
+  rig.materials.brow.color.setHex(appearance.hairColor);
+  rig.materials.nose.color.setHex(appearance.skinColor);
+  rig.materials.mouth.color.setHex(0x7f3030);
+  rig.materials.cheek.color.setHex(0xe08a8a);
+  rig.accessories.backpack.visible = appearance.backpack;
+  rig.accessories.glasses.visible = appearance.glasses;
 }
 
 export function applyAvatarPreviewIdlePose(refs: AvatarPreviewRefs, time: number) {
@@ -348,5 +387,5 @@ export function applyAvatarPreviewIdlePose(refs: AvatarPreviewRefs, time: number
 }
 
 export function disposeAvatarPreviewRig(rig: AvatarPreviewRig) {
-  rig.disposables.forEach((disposable) => disposable.dispose());
+  disposeObject3D(rig.group);
 }

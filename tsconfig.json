@@ -29,7 +29,8 @@
     "skipLibCheck": true,
     "target": "esnext",
     "strict": false,
-    "incremental": true
+    "incremental": true,
+    "strictNullChecks": true
   },
   "include": [
     "next-env.d.ts",

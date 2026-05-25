@@ -1,11 +1,11 @@
 import {
   DEFAULT_AVATAR,
-  createDefaultAvatar,
   normalizeAvatar,
   parseStoredAvatar,
   serializeStoredAvatar,
   type Avatar,
 } from "@/shared/schemas/avatar";
+import { readLocalStorageItem, writeLocalStorageItem } from "@/shared/storage/localStorage";
 
 export const AVATAR_STORAGE_KEY = "gramadinho.avatar";
 
@@ -15,31 +15,12 @@ function hexToInt(hex: string) {
   return Number.parseInt(hex.slice(1), 16);
 }
 
-export function getDefaultAvatar(): Avatar {
-  return createDefaultAvatar();
-}
-
 export function readStoredAvatar(): Avatar {
-  if (typeof window === "undefined") {
-    return getDefaultAvatar();
-  }
-
-  try {
-    const raw = window.localStorage.getItem(AVATAR_STORAGE_KEY);
-    return parseStoredAvatar(raw);
-  } catch {
-    return getDefaultAvatar();
-  }
+  return parseStoredAvatar(readLocalStorageItem(AVATAR_STORAGE_KEY));
 }
 
 export function writeStoredAvatar(avatar: unknown) {
-  if (typeof window === "undefined") return;
-
-  try {
-    window.localStorage.setItem(AVATAR_STORAGE_KEY, serializeStoredAvatar(avatar));
-  } catch {
-    // Ignore storage failures; the menu must keep working offline and in private mode.
-  }
+  writeLocalStorageItem(AVATAR_STORAGE_KEY, serializeStoredAvatar(avatar));
 }
 
 export function avatarToGameAppearance(avatar: unknown) {

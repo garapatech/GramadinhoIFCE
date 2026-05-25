@@ -21,6 +21,8 @@ export function useMobileViewport(options: UseMobileViewportOptions = {}) {
   const { onFirstMobileLayout } = options;
   const onFirstMobileLayoutRef = useRef(onFirstMobileLayout);
   const mobileLayoutAppliedRef = useRef(false);
+  const mountedRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
   const [mobileMode, setMobileMode] = useState(false);
   const [portraitLocked, setPortraitLocked] = useState(false);
   const [orientationMessage, setOrientationMessage] = useState("");
@@ -29,8 +31,28 @@ export function useMobileViewport(options: UseMobileViewportOptions = {}) {
     onFirstMobileLayoutRef.current = onFirstMobileLayout;
   }, [onFirstMobileLayout]);
 
+  function scheduleViewportRefresh(delayMs: number) {
+    if (refreshTimerRef.current !== null) {
+      window.clearTimeout(refreshTimerRef.current);
+    }
+
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (mountedRef.current) {
+        refreshMobileViewport();
+      }
+    }, delayMs);
+  }
+
+  function setOrientationMessageIfMounted(message: string) {
+    if (mountedRef.current) {
+      setOrientationMessage(message);
+    }
+  }
+
   function refreshMobileViewport() {
     if (typeof window === "undefined") return;
+    if (!mountedRef.current) return;
 
     const nextMobileMode = isTouchViewport();
     const nextPortraitLocked = nextMobileMode && window.innerHeight > window.innerWidth;
@@ -48,7 +70,8 @@ export function useMobileViewport(options: UseMobileViewportOptions = {}) {
     if (typeof window === "undefined") return;
     if (!isTouchViewport()) return;
 
-    setOrientationMessage("Abrindo em tela horizontal...");
+    if (!mountedRef.current) return;
+    setOrientationMessageIfMounted("Abrindo em tela horizontal...");
 
     try {
       if (
@@ -66,18 +89,19 @@ export function useMobileViewport(options: UseMobileViewportOptions = {}) {
     try {
       if (window.screen?.orientation?.lock) {
         await window.screen.orientation.lock("landscape");
-        setOrientationMessage("Tela horizontal ativa.");
+        setOrientationMessageIfMounted("Tela horizontal ativa.");
       } else {
-        setOrientationMessage("Gire o aparelho para jogar.");
+        setOrientationMessageIfMounted("Gire o aparelho para jogar.");
       }
     } catch {
-      setOrientationMessage("Gire o aparelho para jogar.");
+      setOrientationMessageIfMounted("Gire o aparelho para jogar.");
     }
 
-    window.setTimeout(refreshMobileViewport, 120);
+    scheduleViewportRefresh(120);
   }
 
   useEffect(() => {
+    mountedRef.current = true;
     refreshMobileViewport();
     const timer = window.setTimeout(() => requestLandscape({ preferFullscreen: false }), 160);
 
@@ -94,7 +118,12 @@ export function useMobileViewport(options: UseMobileViewportOptions = {}) {
     window.addEventListener("orientationchange", onViewportChange);
 
     return () => {
+      mountedRef.current = false;
       window.clearTimeout(timer);
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
       window.removeEventListener("pointerdown", onFirstPointer);
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("orientationchange", onViewportChange);

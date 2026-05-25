@@ -1,12 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  resolveMediaEmbed,
-  type MediaEmbedSuccess,
-} from "@/features/media/mediaEmbeds";
-
-const STORAGE_KEY = "gramadinho.media.url";
+import { useMediaPlayerPanel } from "@/features/media/useMediaPlayerPanel";
 
 type MediaPlayerPanelProps = {
   open: boolean;
@@ -19,86 +13,18 @@ export default function MediaPlayerPanel({
   onClose,
   onFocusChange,
 }: MediaPlayerPanelProps) {
-  const panelRef = useRef<HTMLElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const [draftUrl, setDraftUrl] = useState("");
-  const [media, setMedia] = useState<MediaEmbedSuccess | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const savedUrl = window.localStorage.getItem(STORAGE_KEY) || "";
-    if (!savedUrl) return;
-
-    setDraftUrl(savedUrl);
-    const resolved = resolveMediaEmbed(savedUrl);
-    if (resolved.ok) {
-      setMedia(resolved);
-      setError("");
-    } else {
-      setError("reason" in resolved ? resolved.reason : "");
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!open) {
-      onFocusChange?.(false);
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 30);
-
-    return () => window.clearTimeout(timer);
-  }, [open, onFocusChange]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose?.();
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, onClose]);
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const resolved = resolveMediaEmbed(draftUrl);
-    if (!resolved.ok) {
-      setError("reason" in resolved ? resolved.reason : "");
-      return;
-    }
-
-    setMedia(resolved);
-    setError("");
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, draftUrl.trim());
-    }
-  }
-
-  function handleClear() {
-    setDraftUrl("");
-    setMedia(null);
-    setError("");
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-    inputRef.current?.focus();
-  }
-
-  function handleBlurCapture() {
-    window.setTimeout(() => {
-      const hasFocusInside = panelRef.current?.contains(document.activeElement);
-      onFocusChange?.(!!hasFocusInside);
-    }, 0);
-  }
+  const {
+    panelRef,
+    inputRef,
+    draftUrl,
+    media,
+    error,
+    setDraftUrl,
+    handleSubmit,
+    handleClear,
+    handleBlurCapture,
+    handleFocusCapture,
+  } = useMediaPlayerPanel({ open, onClose, onFocusChange });
 
   if (!open) return null;
 
@@ -106,7 +32,7 @@ export default function MediaPlayerPanel({
     <aside
       ref={panelRef}
       className="media-panel"
-      onFocusCapture={() => onFocusChange?.(true)}
+      onFocusCapture={handleFocusCapture}
       onBlurCapture={handleBlurCapture}
     >
       <div className="media-panel-header">

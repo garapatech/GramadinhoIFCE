@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ChatMessage } from "@/shared/schemas/multiplayer";
+import { useChatHotkeys } from "@/features/chat/useChatHotkeys";
 
 const STATUS_LABEL = {
   connecting: "conectando…",
@@ -40,32 +41,13 @@ export default function Chat({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  useChatHotkeys({ inputRef, onToggleVisible });
+
   useEffect(() => {
     if (!visible) return;
     if (!listRef.current) return;
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, visible]);
-
-  useEffect(() => {
-    function onKey(e: globalThis.KeyboardEvent) {
-      const isInChat = document.activeElement === inputRef.current;
-      if (e.code === "KeyT" && !isInChat) {
-        if (e.target && (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) return;
-        e.preventDefault();
-        onToggleVisible?.();
-        return;
-      }
-      if (e.code === "Enter" || e.key === "Enter") {
-        if (!isInChat) {
-          e.preventDefault();
-          inputRef.current?.focus();
-        }
-      }
-    }
-
-    window.addEventListener("keydown", onKey as EventListener);
-    return () => window.removeEventListener("keydown", onKey as EventListener);
-  }, [onToggleVisible]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

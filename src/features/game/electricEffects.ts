@@ -15,6 +15,7 @@ type LightningBolt = {
 
 const bolts: LightningBolt[] = [];
 let effectWorld: THREE.Object3D | null = null;
+let electricPulseTime = 0;
 
 const BOLT_TTL = 0.22;
 const STEP_COOLDOWN = 0.11;
@@ -141,13 +142,23 @@ export function tryNpcElectricMotion(npc: ElectricNpc, dx: number, dz: number, d
 }
 
 export function tickElectricCooldowns(npcs: ElectricNpc[], dt: number) {
+  const pulse = 0.72 + Math.sin(electricPulseTime * 12) * 0.18;
+  let hasElectricAura = false;
+
   for (const npc of npcs) {
-    if (!npc.electricAura || !npc.lightningCooldown) continue;
-    npc.lightningCooldown = Math.max(0, npc.lightningCooldown - dt);
+    if (!npc.electricAura) continue;
+    hasElectricAura = true;
+    const cooldown = npc.lightningCooldown ?? 0;
+    if (cooldown > 0) {
+      npc.lightningCooldown = Math.max(0, cooldown - dt);
+    }
     if (npc.auraLight) {
-      const pulse = 0.72 + Math.sin(performance.now() * 0.012) * 0.18;
       npc.auraLight.intensity = pulse;
     }
+  }
+
+  if (hasElectricAura) {
+    electricPulseTime += dt;
   }
 }
 
@@ -173,4 +184,6 @@ export function updateElectricEffects(dt: number) {
 export function clearElectricEffects() {
   for (const bolt of bolts) disposeBolt(bolt);
   bolts.length = 0;
+  effectWorld = null;
+  electricPulseTime = 0;
 }

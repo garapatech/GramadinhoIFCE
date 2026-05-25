@@ -1,5 +1,6 @@
 import type { CameraController } from "@/game/camera";
 import type { DevToolsController } from "@/game/devtools";
+import type { EmoteKind } from "@/features/game/emotes";
 
 type InputEvent = KeyboardEvent | MouseEvent | WheelEvent;
 
@@ -19,7 +20,7 @@ type GameInputBindingsContext = {
   onToggleCameraFocus: () => void;
   onQueueInteract: () => void;
   onQueueJump: () => void;
-  onQueueEmote: (kind: string) => void;
+  onQueueEmote: (kind: EmoteKind) => void;
   onQueuePvpThrow: () => void;
   clearKeys: () => void;
 };

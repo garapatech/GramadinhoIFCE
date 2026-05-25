@@ -5,9 +5,50 @@ type DevTarget = {
   label: string;
   kind: string;
   entityType?: string;
-  entity?: any;
+  entity?: DevTargetEntity;
   position?: THREE.Vector3;
   pickRadius: number;
+};
+
+type DevTargetEntity = DevInteractableEntity | DevNpcEntity | DevBirdEntity | DevBikeEntity | THREE.Object3D;
+
+type DevInteractableEntity = {
+  root?: THREE.Object3D;
+  kind?: string;
+  label?: string;
+  position?: THREE.Vector3;
+  radius?: number;
+  npcApproachRadius?: number;
+};
+
+type DevNpcEntity = {
+  group: THREE.Group;
+  name: string;
+  home: THREE.Vector3;
+  moveTarget: THREE.Vector3;
+  targetX: number;
+  targetZ: number;
+  pause: number;
+  focus: unknown;
+  pose: unknown;
+};
+
+type DevBirdEntity = {
+  group: THREE.Group;
+  name: string;
+  home: THREE.Vector3;
+  target: THREE.Vector3;
+  waitTimer: number;
+  wanderTimer: number;
+  fleeTimer: number;
+};
+
+type DevBikeEntity = {
+  group: THREE.Object3D;
+  targetX: number;
+  targetZ: number;
+  hasSharedState: boolean;
+  emitState?: (hasState: boolean) => void;
 };
 
 export interface DevToolsController {
@@ -28,11 +69,11 @@ interface DevToolsContext {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   player: THREE.Object3D;
-  interactables: any[];
-  npcs: any[];
-  ducks: any[];
-  pigeons: any[];
-  sharedBikes: Map<any, any>;
+  interactables: DevInteractableEntity[];
+  npcs: DevNpcEntity[];
+  ducks: DevBirdEntity[];
+  pigeons: DevBirdEntity[];
+  sharedBikes: Map<string, DevBikeEntity>;
   clearInputState: () => void;
   stopCameraDrag: () => void;
   stopPlayerMotion: () => void;
@@ -163,7 +204,23 @@ export function createDevTools({
     const targets: DevTarget[] = [];
     const seen = new Set<string>();
 
-    function addTarget({ object, label, kind, entityType, entity, position, pickRadius = 1.8 }: Omit<DevTarget, "object" | "label" | "kind" | "pickRadius"> & { object?: THREE.Object3D; label?: string; kind?: string; pickRadius?: number }) {
+    function addTarget({
+      object,
+      label,
+      kind,
+      entityType,
+      entity,
+      position,
+      pickRadius = 1.8,
+    }: {
+      object?: THREE.Object3D;
+      label?: string;
+      kind?: string;
+      entityType?: string;
+      entity?: DevTargetEntity;
+      position?: THREE.Vector3;
+      pickRadius?: number;
+    }) {
       if (!object || seen.has(object.uuid)) return;
       seen.add(object.uuid);
       targets.push({
@@ -303,19 +360,21 @@ export function createDevTools({
     }
 
     if (target.entityType === "npc" && target.entity) {
-      target.entity.home.set(x, 0, z);
-      target.entity.moveTarget.set(x, 0, z);
-      target.entity.targetX = x;
-      target.entity.targetZ = z;
-      target.entity.pause = 0.6;
-      target.entity.focus = null;
-      target.entity.pose = null;
+      const npc = target.entity as DevNpcEntity;
+      npc.home.set(x, 0, z);
+      npc.moveTarget.set(x, 0, z);
+      npc.targetX = x;
+      npc.targetZ = z;
+      npc.pause = 0.6;
+      npc.focus = null;
+      npc.pose = null;
     } else if ((target.entityType === "duck" || target.entityType === "pigeon") && target.entity) {
-      target.entity.home.set(x, 0, z);
-      target.entity.target.set(x, 0, z);
-      target.entity.waitTimer = 0.4;
-      target.entity.wanderTimer = 0.4;
-      target.entity.fleeTimer = 0;
+      const bird = target.entity as DevBirdEntity;
+      bird.home.set(x, 0, z);
+      bird.target.set(x, 0, z);
+      bird.waitTimer = 0.4;
+      bird.wanderTimer = 0.4;
+      bird.fleeTimer = 0;
     } else if (target.entityType === "interactable" && target.entity) {
       const bike = findBikeStateByGroup(target.object);
       if (bike) {
@@ -392,7 +451,7 @@ export function createDevTools({
       <div class="dev-tools-help">
         F2 liga/desliga · clique e arraste move · setas ajustam · Shift = passo maior · Alt = fino · Esc limpa
       </div>
-      ${devSelectionMoved ? `<div class="dev-tools-copy">Use x ${formatDevNumber(selectedPosition?.x)} / z ${formatDevNumber(selectedPosition?.z)} no código se quiser persistir.</div>` : ""}
+      ${devSelectionMoved && selectedPosition ? `<div class="dev-tools-copy">Use x ${formatDevNumber(selectedPosition.x)} / z ${formatDevNumber(selectedPosition.z)} no código se quiser persistir.</div>` : ""}
     `;
   }
 

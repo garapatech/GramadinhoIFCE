@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Blocker } from "@/features/game/engineTypes";
+import { disposeObject3D } from "@/game/disposeObject3D";
 
 type GateInteractable = {
   kind: string;
@@ -15,7 +16,7 @@ type CreateNameLabel = (
   text: string,
   color?: string,
   accent?: string
-) => THREE.Group;
+) => THREE.Object3D;
 
 type GateCheckpointOptions = {
   container: HTMLElement | null | undefined;
@@ -224,9 +225,14 @@ export function createGateCheckpoint({
   let armRotation = 0;
   let lastTyped = "";
   let modalOpen = false;
+  let focusRafId: number | null = null;
 
   function closeGateModal() {
     modalOpen = false;
+    if (focusRafId !== null) {
+      cancelAnimationFrame(focusRafId);
+      focusRafId = null;
+    }
     gateModal.classList.remove("visible");
     gateInputEl?.blur();
   }
@@ -236,7 +242,13 @@ export function createGateCheckpoint({
     gateModal.classList.add("visible");
     if (gateInputEl) {
       gateInputEl.value = lastTyped;
-      requestAnimationFrame(() => gateInputEl.focus());
+      if (focusRafId !== null) {
+        cancelAnimationFrame(focusRafId);
+      }
+      focusRafId = requestAnimationFrame(() => {
+        focusRafId = null;
+        gateInputEl.focus();
+      });
       gateInputEl.select?.();
     }
     if (gateErrorEl) gateErrorEl.textContent = "";
@@ -342,6 +354,9 @@ export function createGateCheckpoint({
 
   return {
     destroy() {
+      closeGateModal();
+      gateGroup.parent?.remove(gateGroup);
+      disposeObject3D(gateGroup);
       gateHud.remove();
       gateModal.remove();
     },

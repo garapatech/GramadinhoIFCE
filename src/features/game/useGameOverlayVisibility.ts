@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useGameOverlayVisibilityStore } from "@/features/game/gameOverlayVisibilityStore";
 
 export function useGameOverlayVisibility() {
-  const [chatVisible, setChatVisible] = useState(true);
-  const [playersVisible, setPlayersVisible] = useState(false);
+  const chatVisible = useGameOverlayVisibilityStore((state) => state.chatVisible);
+  const playersVisible = useGameOverlayVisibilityStore((state) => state.playersVisible);
+  const setChatVisible = useGameOverlayVisibilityStore((state) => state.setChatVisible);
+  const setPlayersVisible = useGameOverlayVisibilityStore((state) => state.setPlayersVisible);
+  const hideOverlays = useGameOverlayVisibilityStore((state) => state.hideOverlays);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -31,5 +35,6 @@ export function useGameOverlayVisibility() {
     playersVisible,
     setChatVisible,
     setPlayersVisible,
+    hideOverlays,
   };
 }

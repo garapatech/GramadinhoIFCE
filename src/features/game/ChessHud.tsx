@@ -45,6 +45,7 @@ export default function ChessHud({
 
   if (!state) return null;
 
+  const board = state.board;
   const isMyTurn = !!mySeat && state.phase === "playing" && state.turn === mySeat.color;
 
   // Orienta tabuleiro: brancas embaixo, pretas em cima. Se for jogador preto,
@@ -60,7 +61,7 @@ export default function ChessHud({
   function handleCellClick(file: number, rank: number) {
     if (!mySeat) return;
     const sq = { file, rank };
-    const piece = state.board[rank][file];
+    const piece = board[rank][file];
     if (selected) {
       if (selected.file === file && selected.rank === rank) {
         setSelected(null);
