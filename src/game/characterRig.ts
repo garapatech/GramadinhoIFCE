@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeStaticMeshesByMaterial } from "@/game/mergeStaticMeshes";
 
 export type CharacterAppearance = {
   shirtColor: number;
@@ -10,6 +11,12 @@ export type CharacterAppearance = {
   scale?: number;
   backpack?: boolean;
   glasses?: boolean;
+  accentColor?: number;
+  hairStyle?: "short" | "curly" | "mohawk" | "bun";
+  outfitStyle?: "classic" | "jacket" | "sport";
+  faceStyle?: "classic" | "freckles" | "smile";
+  headShape?: "round" | "oval" | "wide";
+  accessory?: "none" | "headphones" | "cap" | "beanie";
 };
 
 export type CharacterRigRefs = {
@@ -17,8 +24,10 @@ export type CharacterRigRefs = {
   head: THREE.Group;
   leftShoulder: THREE.Group;
   leftElbow: THREE.Group;
+  leftHand: THREE.Group;
   rightShoulder: THREE.Group;
   rightElbow: THREE.Group;
+  rightHand: THREE.Group;
   leftHip: THREE.Group;
   leftKnee: THREE.Group;
   rightHip: THREE.Group;
@@ -30,6 +39,32 @@ export type CharacterRig = {
   refs: CharacterRigRefs;
 };
 
+function mergeStaticJointMeshes(group: THREE.Group) {
+  const meshes: THREE.Mesh[] = [];
+  for (const child of [...group.children]) {
+    if (!(child instanceof THREE.Mesh)) continue;
+    if (!child.visible) {
+      group.remove(child);
+      continue;
+    }
+    meshes.push(child);
+  }
+  mergeStaticMeshesByMaterial(group, meshes);
+}
+
+function blendRotation(
+  object: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  blend = 0.3,
+) {
+  const alpha = THREE.MathUtils.clamp(blend, 0, 1);
+  object.rotation.x = THREE.MathUtils.lerp(object.rotation.x, x, alpha);
+  object.rotation.y = THREE.MathUtils.lerp(object.rotation.y, y, alpha);
+  object.rotation.z = THREE.MathUtils.lerp(object.rotation.z, z, alpha);
+}
+
 export function createCharacter({
   shirtColor,
   pantsColor,
@@ -40,6 +75,12 @@ export function createCharacter({
   scale = 1,
   backpack = true,
   glasses = false,
+  accentColor = 0xf6b94b,
+  hairStyle = "short",
+  outfitStyle = "classic",
+  faceStyle = "classic",
+  headShape = "round",
+  accessory = "none",
 }: CharacterAppearance): CharacterRig {
   const root = new THREE.Group();
   root.scale.setScalar(scale);
@@ -52,12 +93,13 @@ export function createCharacter({
   const backpackMat = new THREE.MeshStandardMaterial({ color: backpackColor, roughness: 1 });
   const hairMat = new THREE.MeshStandardMaterial({ color: hairColor, roughness: 1 });
   const eyeMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.4 });
+  const accentMat = new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.78 });
 
   const torso = new THREE.Group();
   torso.position.set(0, 1, 0);
   root.add(torso);
 
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.46, 6, 16), shirt);
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.36, 0.46, 5, 12), shirt);
   body.position.y = 0.45;
   body.scale.set(1.14, 0.92, 0.9);
   body.castShadow = true;
@@ -73,7 +115,20 @@ export function createCharacter({
   shirtFront.position.set(0, 0.48, 0.33);
   torso.add(shirtFront);
 
-  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.035, 8, 18), shirt);
+  if (outfitStyle === "sport") {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.64, 0.045), accentMat);
+    stripe.position.set(0, 0.48, 0.36);
+    torso.add(stripe);
+  } else if (outfitStyle === "jacket") {
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.58, 0.045), accentMat);
+      lapel.position.set(side * 0.13, 0.5, 0.365);
+      lapel.rotation.z = side * 0.16;
+      torso.add(lapel);
+    }
+  }
+
+  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.035, 6, 12), shirt);
   collar.position.y = 0.92;
   collar.rotation.x = Math.PI / 2;
   collar.scale.set(1.2, 0.78, 1);
@@ -102,27 +157,31 @@ export function createCharacter({
   head.position.set(0, 1.16, 0.02);
   torso.add(head);
 
-  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.39, 26, 24), skin);
-  skull.scale.set(1.02, 1.08, 0.95);
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(0.39, 18, 16), skin);
+  const headScale = headShape === "oval"
+    ? [0.94, 1.18, 0.92]
+    : headShape === "wide" ? [1.13, 1.02, 0.96] : [1.02, 1.08, 0.95];
+  skull.scale.set(headScale[0], headScale[1], headScale[2]);
   skull.castShadow = true;
   head.add(skull);
 
-  const facePatch = new THREE.Mesh(new THREE.SphereGeometry(0.34, 20, 18), faceMat);
+  const facePatch = new THREE.Mesh(new THREE.SphereGeometry(0.34, 16, 14), faceMat);
   facePatch.position.set(0, -0.04, 0.21);
   facePatch.scale.set(0.95, 1.05, 0.46);
   facePatch.castShadow = false;
   head.add(facePatch);
 
   const hair = new THREE.Mesh(
-    new THREE.SphereGeometry(0.405, 24, 20, 0, Math.PI * 2, 0, Math.PI / 1.86),
+    new THREE.SphereGeometry(0.405, 18, 14, 0, Math.PI * 2, 0, Math.PI / 1.86),
     hairMat
   );
   hair.position.set(0, 0.15, -0.035);
   hair.scale.set(1.04, 0.78, 1.02);
   hair.castShadow = true;
+  hair.visible = hairStyle === "short" || hairStyle === "bun";
   head.add(hair);
 
-  const bangGeo = new THREE.SphereGeometry(0.075, 10, 8);
+  const bangGeo = new THREE.SphereGeometry(0.075, 8, 6);
   const bangData = [
     [-0.22, 0.22, 0.2, 0.18, 0.12],
     [-0.08, 0.25, 0.235, 0.04, 0.08],
@@ -136,23 +195,53 @@ export function createCharacter({
     bang.rotation.z = rz;
     bang.rotation.x = rx;
     bang.castShadow = true;
+    bang.visible = hairStyle === "short" || hairStyle === "bun";
     head.add(bang);
   }
 
-  const hairBack = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), hairMat);
+  const hairBack = new THREE.Mesh(new THREE.SphereGeometry(0.26, 12, 9), hairMat);
   hairBack.position.set(0, -0.08, -0.27);
   hairBack.scale.set(1.18, 1.08, 0.82);
+  hairBack.visible = hairStyle === "short" || hairStyle === "bun";
   head.add(hairBack);
 
-  const leftSideHair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), hairMat);
+  const leftSideHair = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), hairMat);
   leftSideHair.position.set(-0.34, 0.02, -0.02);
   leftSideHair.scale.set(0.58, 1.22, 0.72);
+  leftSideHair.visible = hairStyle === "short" || hairStyle === "bun";
   head.add(leftSideHair);
   const rightSideHair = leftSideHair.clone();
   rightSideHair.position.x = 0.28;
   head.add(rightSideHair);
 
-  const leftEar = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 10), skin);
+  if (hairStyle === "curly") {
+    const curlGeo = new THREE.SphereGeometry(0.13, 10, 8);
+    for (const [x, y, z] of [
+      [-0.28, 0.2, 0], [-0.14, 0.32, 0.02], [0.02, 0.35, 0], [0.19, 0.3, -0.01],
+      [0.31, 0.16, -0.03], [-0.3, 0.04, -0.08], [0.28, 0.01, -0.1], [0, 0.28, -0.27],
+    ]) {
+      const curl = new THREE.Mesh(curlGeo, hairMat);
+      curl.position.set(x, y, z);
+      curl.scale.set(1, 0.9, 0.9);
+      curl.castShadow = true;
+      head.add(curl);
+    }
+  } else if (hairStyle === "mohawk") {
+    for (let i = 0; i < 5; i += 1) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 8), hairMat);
+      spike.position.set(0, 0.37, -0.2 + i * 0.1);
+      spike.rotation.x = -0.18 + i * 0.08;
+      spike.castShadow = true;
+      head.add(spike);
+    }
+  } else if (hairStyle === "bun") {
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(0.19, 12, 10), hairMat);
+    bun.position.set(0, 0.2, -0.36);
+    bun.castShadow = true;
+    head.add(bun);
+  }
+
+  const leftEar = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 7), skin);
   leftEar.scale.set(0.6, 1, 0.4);
   leftEar.position.set(-0.36, -0.01, 0.02);
   head.add(leftEar);
@@ -161,7 +250,7 @@ export function createCharacter({
   head.add(rightEar);
 
   const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
-  const leftEyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), eyeWhiteMat);
+  const leftEyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), eyeWhiteMat);
   leftEyeWhite.position.set(-0.135, 0.055, 0.352);
   leftEyeWhite.scale.set(1.06, 0.9, 0.48);
   head.add(leftEyeWhite);
@@ -169,7 +258,7 @@ export function createCharacter({
   rightEyeWhite.position.x = 0.12;
   head.add(rightEyeWhite);
 
-  const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 10), eyeMat);
+  const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.033, 8, 7), eyeMat);
   leftEye.position.set(-0.135, 0.052, 0.402);
   head.add(leftEye);
   const rightEye = leftEye.clone();
@@ -204,7 +293,19 @@ export function createCharacter({
   mouth.position.set(0, -0.135, 0.392);
   mouth.rotation.x = -0.08;
   mouth.scale.y = 0.72;
+  if (faceStyle === "smile") mouth.scale.set(1.28, 0.9, 1);
   head.add(mouth);
+
+  if (faceStyle === "freckles") {
+    const freckleMat = new THREE.MeshBasicMaterial({ color: 0x8a573f });
+    for (const side of [-1, 1]) {
+      for (let index = 0; index < 3; index += 1) {
+        const freckle = new THREE.Mesh(new THREE.SphereGeometry(0.012, 6, 5), freckleMat);
+        freckle.position.set(side * (0.13 + index * 0.035), -0.05 + (index % 2) * 0.025, 0.385);
+        head.add(freckle);
+      }
+    }
+  }
 
   const cheekMat = new THREE.MeshStandardMaterial({
     color: 0xe08a8a,
@@ -212,7 +313,7 @@ export function createCharacter({
     transparent: true,
     opacity: 0.55,
   });
-  const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), cheekMat);
+  const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 7, 6), cheekMat);
   leftCheek.position.set(-0.225, -0.075, 0.335);
   leftCheek.scale.set(1.12, 0.72, 0.32);
   head.add(leftCheek);
@@ -229,7 +330,7 @@ export function createCharacter({
       transparent: true,
       opacity: 0.55,
     });
-    const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 8, 18);
+    const lensGeo = new THREE.TorusGeometry(0.09, 0.012, 6, 12);
     const leftLens = new THREE.Mesh(lensGeo, frameMat);
     leftLens.position.set(-0.13, 0.06, 0.365);
     head.add(leftLens);
@@ -237,7 +338,7 @@ export function createCharacter({
     rightLens.position.x = 0.12;
     head.add(rightLens);
 
-    const innerGeo = new THREE.CircleGeometry(0.082, 16);
+    const innerGeo = new THREE.CircleGeometry(0.082, 12);
     const leftGlass = new THREE.Mesh(innerGeo, lensMat);
     leftGlass.position.set(-0.13, 0.06, 0.367);
     head.add(leftGlass);
@@ -260,6 +361,32 @@ export function createCharacter({
     head.add(rightTemple);
   }
 
+  if (accessory === "headphones") {
+    const band = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.035, 6, 16, Math.PI), accentMat);
+    band.position.set(0, 0.08, -0.02);
+    band.rotation.z = Math.PI;
+    head.add(band);
+    for (const side of [-1, 1]) {
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.07, 10), accentMat);
+      cup.position.set(side * 0.37, 0, 0);
+      cup.rotation.z = Math.PI / 2;
+      head.add(cup);
+    }
+  } else if (accessory === "cap") {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.415, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), accentMat);
+    cap.position.y = 0.18;
+    cap.scale.y = 0.62;
+    head.add(cap);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.035, 0.22), accentMat);
+    brim.position.set(0, 0.2, 0.36);
+    head.add(brim);
+  } else if (accessory === "beanie") {
+    const beanie = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 10, 0, Math.PI * 2, 0, Math.PI / 1.7), accentMat);
+    beanie.position.y = 0.18;
+    beanie.scale.y = 0.8;
+    head.add(beanie);
+  }
+
   function buildArm(side: "left" | "right") {
     const sign = side === "left" ? -1 : 1;
     const shoulder = new THREE.Group();
@@ -268,11 +395,11 @@ export function createCharacter({
     shoulder.rotation.x = -0.03;
     torso.add(shoulder);
 
-    const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 12), shirt);
+    const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), shirt);
     shoulderBall.castShadow = true;
     shoulder.add(shoulderBall);
 
-    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.34, 5, 12), shirt);
+    const upperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.095, 0.34, 4, 9), shirt);
     upperArm.position.y = -0.25;
     upperArm.rotation.z = sign * 0.02;
     upperArm.castShadow = true;
@@ -282,35 +409,41 @@ export function createCharacter({
     elbow.position.y = -0.48;
     shoulder.add(elbow);
 
-    const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 10), shirt);
+    const elbowBall = new THREE.Mesh(new THREE.SphereGeometry(0.105, 9, 7), shirt);
     elbowBall.scale.set(1.05, 0.82, 1.05);
     elbowBall.castShadow = true;
     elbow.add(elbowBall);
 
-    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.082, 0.36, 5, 12), skin);
+    const forearm = new THREE.Mesh(new THREE.CapsuleGeometry(0.082, 0.36, 4, 9), skin);
     forearm.position.y = -0.27;
     forearm.castShadow = true;
     elbow.add(forearm);
 
-    const wrist = new THREE.Mesh(new THREE.SphereGeometry(0.073, 10, 8), skin);
+    const wrist = new THREE.Mesh(new THREE.SphereGeometry(0.073, 8, 6), skin);
     wrist.position.y = -0.49;
     wrist.scale.set(1, 0.8, 1);
     elbow.add(wrist);
 
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), skin);
-    hand.position.y = -0.59;
-    hand.scale.set(0.95, 1.12, 0.78);
-    hand.castShadow = true;
-    elbow.add(hand);
+    const handMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 9, 7), skin);
+    handMesh.position.y = -0.59;
+    handMesh.scale.set(0.95, 1.12, 0.78);
+    handMesh.castShadow = true;
+    elbow.add(handMesh);
 
     for (const x of [-0.045, 0, 0.045]) {
-      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.065, 3, 6), skin);
+      const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.012, 0.065, 3, 5), skin);
       finger.position.set(x, -0.68, 0.02);
       finger.castShadow = true;
       elbow.add(finger);
     }
 
-    return { shoulder, elbow };
+    // Ponto de pega estável para itens. Ele acompanha toda a cadeia do braço,
+    // sem obrigar cada item a adivinhar a distância entre cotovelo e mão.
+    const hand = new THREE.Group();
+    hand.position.set(0, -0.62, 0.02);
+    elbow.add(hand);
+
+    return { shoulder, elbow, hand };
   }
 
   const leftArm = buildArm("left");
@@ -322,11 +455,11 @@ export function createCharacter({
     hip.position.set(sign * 0.18, 1.05, 0);
     root.add(hip);
 
-    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 12), pants);
+    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), pants);
     hipBall.castShadow = true;
     hip.add(hipBall);
 
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.42, 12), pants);
+    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.14, 0.42, 10), pants);
     thigh.position.y = -0.225;
     thigh.castShadow = true;
     hip.add(thigh);
@@ -335,16 +468,16 @@ export function createCharacter({
     knee.position.y = -0.45;
     hip.add(knee);
 
-    const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 10), pants);
+    const kneeBall = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 7), pants);
     kneeBall.castShadow = true;
     knee.add(kneeBall);
 
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.42, 12), pants);
+    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.12, 0.42, 10), pants);
     shin.position.y = -0.225;
     shin.castShadow = true;
     knee.add(shin);
 
-    const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), pants);
+    const ankle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), pants);
     ankle.position.y = -0.44;
     ankle.scale.set(1, 0.72, 1);
     ankle.castShadow = true;
@@ -355,7 +488,7 @@ export function createCharacter({
     foot.castShadow = true;
     knee.add(foot);
 
-    const heelCap = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 10), shoes);
+    const heelCap = new THREE.Mesh(new THREE.SphereGeometry(0.085, 8, 7), shoes);
     heelCap.position.set(0, -0.47, -0.1);
     heelCap.scale.set(1.2, 0.7, 0.9);
     knee.add(heelCap);
@@ -366,6 +499,31 @@ export function createCharacter({
   const leftLeg = buildLeg("left");
   const rightLeg = buildLeg("right");
 
+  // Cada articulação continua animável, mas suas peças imóveis com o mesmo
+  // material são enviadas à GPU em uma única chamada de desenho.
+  for (const joint of [
+    torso,
+    head,
+    leftArm.shoulder,
+    leftArm.elbow,
+    rightArm.shoulder,
+    rightArm.elbow,
+    leftLeg.hip,
+    leftLeg.knee,
+    rightLeg.hip,
+    rightLeg.knee,
+  ]) {
+    mergeStaticJointMeshes(joint);
+  }
+
+  // As articulacoes continuam dinamicas; as pecas dentro delas nunca mudam
+  // de transformacao local e nao precisam recalcular matrizes a cada frame.
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.updateMatrix();
+    object.matrixAutoUpdate = false;
+  });
+
   return {
     group: root,
     refs: {
@@ -373,8 +531,10 @@ export function createCharacter({
       head,
       leftShoulder: leftArm.shoulder,
       leftElbow: leftArm.elbow,
+      leftHand: leftArm.hand,
       rightShoulder: rightArm.shoulder,
       rightElbow: rightArm.elbow,
+      rightHand: rightArm.hand,
       leftHip: leftLeg.hip,
       leftKnee: leftLeg.knee,
       rightHip: rightLeg.hip,
@@ -385,39 +545,46 @@ export function createCharacter({
 
 export function animateWalk(refs: CharacterRigRefs, walkPhase: number, intensity: number) {
   const k = Math.min(Math.max(intensity, 0), 1);
-  const armSwing = Math.sin(walkPhase) * 1.0 * k;
-  const legSwing = Math.sin(walkPhase) * 0.85 * k;
+  const stride = Math.sin(walkPhase);
+  const nextStride = Math.sin(walkPhase + 0.42);
+  const vertical = Math.cos(walkPhase * 2);
+  const armSwing = stride * 0.72 * k;
+  const legSwing = stride * 0.82 * k;
+  const blend = 0.28;
 
-  refs.leftShoulder.rotation.x = -0.03;
-  refs.rightShoulder.rotation.x = -0.03;
-  refs.leftShoulder.rotation.z = -0.01;
-  refs.rightShoulder.rotation.z = 0.01;
-  refs.leftElbow.rotation.x = 0.1 + armSwing * 0.82;
-  refs.rightElbow.rotation.x = 0.1 - armSwing * 0.82;
-
-  refs.leftHip.rotation.x = -legSwing;
-  refs.rightHip.rotation.x = legSwing;
-  refs.leftKnee.rotation.x = Math.max(0, legSwing) * 1.2;
-  refs.rightKnee.rotation.x = Math.max(0, -legSwing) * 1.2;
-
-  refs.torso.rotation.y = -armSwing * 0.14;
-  refs.head.rotation.y = armSwing * 0.07;
-  refs.head.rotation.x = Math.sin(walkPhase * 2) * 0.05;
+  // Braço e perna opostos avançam juntos. O balanço nasce no ombro; o
+  // cotovelo só flexiona na volta, como numa caminhada humana.
+  blendRotation(refs.leftShoulder, armSwing - 0.05, 0, -0.035, blend);
+  blendRotation(refs.rightShoulder, -armSwing - 0.05, 0, 0.035, blend);
+  blendRotation(refs.leftElbow, 0.18 + Math.max(0, -nextStride) * 0.3 * k, 0, -0.025, blend);
+  blendRotation(refs.rightElbow, 0.18 + Math.max(0, nextStride) * 0.3 * k, 0, 0.025, blend);
+  blendRotation(refs.leftHip, -legSwing, 0, -0.018 * k, blend);
+  blendRotation(refs.rightHip, legSwing, 0, 0.018 * k, blend);
+  blendRotation(refs.leftKnee, 0.04 + Math.max(0, legSwing) * 0.92, 0, 0, blend);
+  blendRotation(refs.rightKnee, 0.04 + Math.max(0, -legSwing) * 0.92, 0, 0, blend);
+  blendRotation(refs.torso, 0.018 - vertical * 0.018 * k, -stride * 0.09 * k, -stride * 0.025 * k, blend);
+  blendRotation(refs.head, -vertical * 0.018 * k, stride * 0.045 * k, stride * 0.012 * k, blend);
 }
 
 export function setRestPose(refs: CharacterRigRefs, time: number, offset = 0) {
   const breath = Math.sin(time * 1.6 + offset) * 0.05;
-  refs.leftShoulder.rotation.x = -0.04 + breath * 0.35;
-  refs.rightShoulder.rotation.x = -0.04 - breath * 0.35;
-  refs.leftElbow.rotation.x = 0.14 + breath * 0.25;
-  refs.rightElbow.rotation.x = 0.14 + breath * 0.25;
-  refs.leftHip.rotation.x = 0;
-  refs.rightHip.rotation.x = 0;
-  refs.leftKnee.rotation.x = 0.05;
-  refs.rightKnee.rotation.x = 0.05;
-  refs.torso.rotation.y = Math.sin(time * 0.6 + offset) * 0.04;
-  refs.head.rotation.y = Math.sin(time * 0.5 + offset * 1.3) * 0.18;
-  refs.head.rotation.x = Math.sin(time * 0.8 + offset) * 0.04;
+  const blend = 0.16;
+  blendRotation(refs.leftShoulder, -0.04 + breath * 0.35, 0, 0, blend);
+  blendRotation(refs.rightShoulder, -0.04 - breath * 0.35, 0, 0, blend);
+  blendRotation(refs.leftElbow, 0.14 + breath * 0.25, 0, 0, blend);
+  blendRotation(refs.rightElbow, 0.14 + breath * 0.25, 0, 0, blend);
+  blendRotation(refs.leftHip, 0, 0, 0, blend);
+  blendRotation(refs.rightHip, 0, 0, 0, blend);
+  blendRotation(refs.leftKnee, 0.05, 0, 0, blend);
+  blendRotation(refs.rightKnee, 0.05, 0, 0, blend);
+  blendRotation(refs.torso, 0, Math.sin(time * 0.6 + offset) * 0.04, 0, blend);
+  blendRotation(
+    refs.head,
+    Math.sin(time * 0.8 + offset) * 0.04,
+    Math.sin(time * 0.5 + offset * 1.3) * 0.18,
+    0,
+    blend,
+  );
 }
 
 export function animateCelebrate(refs: CharacterRigRefs, time: number, intensity = 1) {
@@ -443,40 +610,62 @@ export function animateCelebrate(refs: CharacterRigRefs, time: number, intensity
   refs.head.rotation.z = Math.sin(time * 6.9) * 0.1 * k;
 }
 
-export function setSittingPose(refs: CharacterRigRefs) {
-  refs.leftShoulder.rotation.x = -0.08;
-  refs.rightShoulder.rotation.x = -0.08;
-  refs.leftElbow.rotation.x = 0.42;
-  refs.rightElbow.rotation.x = 0.42;
-  refs.leftHip.rotation.x = -Math.PI / 2.2;
-  refs.rightHip.rotation.x = -Math.PI / 2.2;
-  refs.leftKnee.rotation.x = Math.PI / 2.3;
-  refs.rightKnee.rotation.x = Math.PI / 2.3;
-  refs.torso.rotation.y = 0;
-  refs.head.rotation.x = -0.05;
-  refs.head.rotation.y = 0;
+export function setSittingPose(refs: CharacterRigRefs, time = 0, blend = 0.22) {
+  const breath = Math.sin(time * 1.45) * 0.025;
+  blendRotation(refs.leftShoulder, -0.12 + breath, 0, -0.025, blend);
+  blendRotation(refs.rightShoulder, -0.12 - breath, 0, 0.025, blend);
+  blendRotation(refs.leftElbow, 0.48, 0, -0.02, blend);
+  blendRotation(refs.rightElbow, 0.48, 0, 0.02, blend);
+  blendRotation(refs.leftHip, -Math.PI / 2.16, 0, -0.025, blend);
+  blendRotation(refs.rightHip, -Math.PI / 2.16, 0, 0.025, blend);
+  blendRotation(refs.leftKnee, Math.PI / 2.24, 0, 0, blend);
+  blendRotation(refs.rightKnee, Math.PI / 2.24, 0, 0, blend);
+  blendRotation(refs.torso, 0.04 + breath * 0.3, 0, 0, blend);
+  blendRotation(refs.head, -0.04 + breath * 0.15, Math.sin(time * 0.42) * 0.04, 0, blend);
 }
 
 export function animateRun(refs: CharacterRigRefs, walkPhase: number, intensity: number) {
   const k = Math.min(Math.max(intensity, 0), 1);
   const armSwing = Math.sin(walkPhase) * 1.6 * k;
   const legSwing = Math.sin(walkPhase) * 1.35 * k;
-  refs.leftShoulder.rotation.x = -0.08;
-  refs.rightShoulder.rotation.x = -0.08;
-  refs.leftShoulder.rotation.z = 0.1;
-  refs.rightShoulder.rotation.z = -0.1;
-  refs.leftElbow.rotation.x = 0.45 + armSwing * 1.35;
-  refs.rightElbow.rotation.x = 0.45 - armSwing * 1.35;
-  refs.leftElbow.rotation.z = 0.03;
-  refs.rightElbow.rotation.z = -0.03;
-  refs.leftHip.rotation.x = -legSwing;
-  refs.rightHip.rotation.x = legSwing;
-  refs.leftKnee.rotation.x = Math.max(0, legSwing) * 1.7;
-  refs.rightKnee.rotation.x = Math.max(0, -legSwing) * 1.7;
-  refs.torso.rotation.x = 0.12 * k;
-  refs.torso.rotation.y = -armSwing * 0.12;
-  refs.head.rotation.x = 0.02 - Math.sin(walkPhase * 2) * 0.03;
-  refs.head.rotation.y = armSwing * 0.05;
+  const blend = 0.38;
+  blendRotation(refs.leftShoulder, -0.08, 0, 0.1, blend);
+  blendRotation(refs.rightShoulder, -0.08, 0, -0.1, blend);
+  blendRotation(refs.leftElbow, 0.45 + armSwing * 1.35, 0, 0.03, blend);
+  blendRotation(refs.rightElbow, 0.45 - armSwing * 1.35, 0, -0.03, blend);
+  blendRotation(refs.leftHip, -legSwing, 0, 0, blend);
+  blendRotation(refs.rightHip, legSwing, 0, 0, blend);
+  blendRotation(refs.leftKnee, Math.max(0, legSwing) * 1.7, 0, 0, blend);
+  blendRotation(refs.rightKnee, Math.max(0, -legSwing) * 1.7, 0, 0, blend);
+  blendRotation(refs.torso, 0.12 * k, -armSwing * 0.12, 0, blend);
+  blendRotation(refs.head, 0.02 - Math.sin(walkPhase * 2) * 0.03, armSwing * 0.05, 0, blend);
+}
+
+export function animateJump(refs: CharacterRigRefs, verticalVelocity: number) {
+  const rising = THREE.MathUtils.clamp(verticalVelocity / 8.2, -1, 1);
+  const tuck = rising >= 0 ? 0.2 + rising * 0.22 : 0.42 + Math.abs(rising) * 0.18;
+  blendRotation(refs.leftShoulder, -0.42 + rising * 0.12, 0, -0.08, 0.28);
+  blendRotation(refs.rightShoulder, -0.42 + rising * 0.12, 0, 0.08, 0.28);
+  blendRotation(refs.leftElbow, 0.58, 0, 0, 0.28);
+  blendRotation(refs.rightElbow, 0.58, 0, 0, 0.28);
+  blendRotation(refs.leftHip, -tuck, 0, 0, 0.28);
+  blendRotation(refs.rightHip, -tuck * 0.86, 0, 0, 0.28);
+  blendRotation(refs.leftKnee, tuck * 1.55, 0, 0, 0.28);
+  blendRotation(refs.rightKnee, tuck * 1.38, 0, 0, 0.28);
+  blendRotation(refs.torso, rising >= 0 ? -0.04 : 0.08, 0, 0, 0.24);
+  blendRotation(refs.head, rising >= 0 ? 0.04 : -0.03, 0, 0, 0.24);
+}
+
+export function animateLanding(refs: CharacterRigRefs, intensity: number) {
+  const k = THREE.MathUtils.clamp(intensity, 0, 1);
+  blendRotation(refs.leftHip, -0.42 * k, 0, 0, 0.34);
+  blendRotation(refs.rightHip, -0.42 * k, 0, 0, 0.34);
+  blendRotation(refs.leftKnee, 0.82 * k, 0, 0, 0.34);
+  blendRotation(refs.rightKnee, 0.82 * k, 0, 0, 0.34);
+  blendRotation(refs.leftShoulder, 0.16 * k, 0, -0.04, 0.28);
+  blendRotation(refs.rightShoulder, 0.16 * k, 0, 0.04, 0.28);
+  blendRotation(refs.torso, 0.18 * k, 0, 0, 0.3);
+  blendRotation(refs.head, -0.08 * k, 0, 0, 0.3);
 }
 
 export function setCrouchPose(refs: CharacterRigRefs, time: number, intensity: number) {

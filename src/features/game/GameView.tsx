@@ -10,6 +10,11 @@ import { bootGame } from "@/features/game/engine";
 import OnlinePlayersPanel from "@/features/game/OnlinePlayersPanel";
 import PokerHud from "@/features/game/PokerHud";
 import ChessHud from "@/features/game/ChessHud";
+import SwimmingDuelHud, { type SwimmingDuelState } from "@/features/game/SwimmingDuelHud";
+import TypingGamePanel, {
+  type TypingIncoming,
+  type TypingMatchUi,
+} from "@/features/game/TypingGamePanel";
 import { createPvpCountdownController } from "@/features/game/pvpCountdown";
 import { emoteBar, getEmoteDuration } from "@/features/game/emotes";
 import {
@@ -42,6 +47,30 @@ import type { VoiceState } from "@/shared/schemas/voice";
 type PokerState = Extract<SocketInboundMessage, { type: "poker-state" }>["state"];
 type PokerHoleCards = Extract<SocketInboundMessage, { type: "poker-hole" }>["cards"];
 type ChessState = Extract<SocketInboundMessage, { type: "chess-state" }>["state"];
+type GlobalMediaState = Extract<SocketInboundMessage, { type: "media-state" }>["state"];
+type WorldItemState = Extract<SocketInboundMessage, { type: "item-state" }>["state"];
+type TypingRoomState = Extract<SocketInboundMessage, { type: "typing-room-state" }>;
+type TypingLobbyRoom = Extract<SocketInboundMessage, { type: "typing-lobby" }>["rooms"][number];
+
+const EMPTY_MEDIA_STATE: GlobalMediaState = {
+  url: null,
+  provider: null,
+  startedBy: null,
+  startedByNick: "",
+  playing: false,
+  paused: false,
+  volume: 0.72,
+  position: 0,
+  startedAt: 0,
+  updatedAt: 0,
+};
+
+const EMPTY_ITEM_STATE: WorldItemState = {
+  batOwnerId: null,
+  umbrellaOwners: [],
+  openUmbrellas: [],
+  biribaBallOwners: [],
+};
 
 export default function GameView() {
   const router = useRouter();
@@ -56,6 +85,11 @@ export default function GameView() {
   const npcAuthorityIdRef = useRef<string | null>(null);
   const npcSnapshotRef = useRef<Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"]>([]);
   const espectroSnapshotRef = useRef<Extract<SocketInboundMessage, { type: "espectro-spawn" }>["espectro"] | null>(null);
+  const worldItemStateRef = useRef<WorldItemState>(EMPTY_ITEM_STATE);
+  const itemSequenceRef = useRef(0);
+  const swimSequenceRef = useRef(0);
+  const typingSequenceRef = useRef(0);
+  const modalActivityBusyRef = useRef(false);
   const mobileRunRef = useRef<boolean>(false);
   const [chatMessages, setChatMessages] = useState<GameChatMessage[]>([]);
   const [voiceState, setVoiceState] = useState<VoiceState>(getInitialVoiceState);
@@ -63,6 +97,15 @@ export default function GameView() {
   const [onlinePlayers, setOnlinePlayers] = useState<GameOnlinePlayer[]>([]);
   const [avatar] = useState(() => readStoredAvatar());
   const [mediaPanelOpen, setMediaPanelOpen] = useState(false);
+  const [mediaState, setMediaState] = useState<GlobalMediaState>(EMPTY_MEDIA_STATE);
+  const [worldItemState, setWorldItemState] = useState<WorldItemState>(EMPTY_ITEM_STATE);
+  const [swimDuel, setSwimDuel] = useState<SwimmingDuelState | null>(null);
+  const [typingPanelOpen, setTypingPanelOpen] = useState(false);
+  const [typingComputerId, setTypingComputerId] = useState("pc-1");
+  const [typingIncoming, setTypingIncoming] = useState<TypingIncoming | null>(null);
+  const [typingRoom, setTypingRoom] = useState<TypingRoomState | null>(null);
+  const [typingLobby, setTypingLobby] = useState<TypingLobbyRoom[]>([]);
+  const [typingMatch, setTypingMatch] = useState<TypingMatchUi | null>(null);
   const [pvpState, setPvpState] = useState<GamePvpState | null>(null);
   const pvpStateRef = useRef<GamePvpState | null>(null);
   const pvpCountdown = useMemo(() => createPvpCountdownController(), []);
@@ -106,6 +149,140 @@ export default function GameView() {
   useEffect(() => {
     pvpStateRef.current = pvpState;
   }, [pvpState]);
+
+  useEffect(() => {
+    modalActivityBusyRef.current = Boolean(
+      swimDuel ||
+      typingIncoming ||
+      typingRoom ||
+      (typingMatch && !typingMatch.ended)
+    );
+  }, [swimDuel, typingIncoming, typingRoom, typingMatch]);
+
+  function getEstimatedServerNow() {
+    const serverNow = serverNowRef.current;
+    const syncedAt = serverSyncedAtRef.current;
+    return typeof serverNow === "number" && typeof syncedAt === "number"
+      ? serverNow + (Date.now() - syncedAt)
+      : Date.now();
+  }
+
+  function showGameplayNotice(message: string) {
+    setEspectroNotice(message);
+    if (espectroNoticeTimerRef.current) clearTimeout(espectroNoticeTimerRef.current);
+    espectroNoticeTimerRef.current = setTimeout(() => {
+      setEspectroNotice("");
+      espectroNoticeTimerRef.current = null;
+    }, 4500);
+  }
+
+  function updateWorldItems(next: WorldItemState) {
+    const localId = localIdRef.current;
+    const gainedBiribaBall = !!localId &&
+      !worldItemStateRef.current.biribaBallOwners.includes(localId) &&
+      next.biribaBallOwners.includes(localId);
+    worldItemStateRef.current = next;
+    setWorldItemState(next);
+    if (gainedBiribaBall) showGameplayNotice("Você recebeu a Bola Errante do Biriba. Use Q para lançar.");
+  }
+
+  function handleGameplayEvent(event: SocketInboundMessage) {
+    if (event.type === "swim-challenge") {
+      setSwimDuel({ phase: "incoming", ...event });
+      return;
+    }
+    if (event.type === "swim-start") {
+      const localId = localIdRef.current;
+      const side = event.playerA === localId ? "A" : "B";
+      const scores = [
+        { playerId: event.playerA, nick: event.nickA, strokes: 0, progress: 0 },
+        { playerId: event.playerB, nick: event.nickB, strokes: 0, progress: 0 },
+      ];
+      swimSequenceRef.current = 0;
+      setSwimDuel({ phase: "active", ...event, scores });
+      gameApiRef.current?.swimStartNetwork?.({
+        matchId: event.matchId,
+        side,
+        startAt: event.startAt,
+        endAt: event.endAt,
+      });
+      return;
+    }
+    if (event.type === "swim-progress") {
+      setSwimDuel((current) => current?.phase === "active" && current.matchId === event.matchId
+        ? { ...current, scores: event.scores }
+        : current);
+      gameApiRef.current?.swimApplyNetworkProgress?.(event.matchId, event.scores, localIdRef.current);
+      return;
+    }
+    if (event.type === "swim-end") {
+      gameApiRef.current?.swimEndNetwork?.(event.matchId);
+      setSwimDuel({ phase: "ended", ...event });
+      return;
+    }
+    if (event.type === "swim-declined" || event.type === "swim-cancelled") {
+      setSwimDuel(null);
+      showGameplayNotice(event.type === "swim-declined" ? `${event.opponentNick} recusou o duelo.` : event.reason);
+      return;
+    }
+    if (event.type === "typing-challenge") {
+      setTypingIncoming(event);
+      setTypingPanelOpen(true);
+      return;
+    }
+    if (event.type === "typing-lobby") {
+      setTypingLobby(event.rooms);
+      return;
+    }
+    if (event.type === "typing-room-state") {
+      setTypingRoom(event);
+      setTypingPanelOpen(true);
+      return;
+    }
+    if (event.type === "typing-start") {
+      typingSequenceRef.current = 0;
+      setTypingIncoming(null);
+      setTypingRoom(null);
+      setTypingPanelOpen(true);
+      setTypingMatch({
+        start: event,
+        ended: null,
+        results: event.participants.map((participant) => ({
+          ...participant,
+          progress: 0,
+          timeMs: null,
+          accuracy: 100,
+          errors: 0,
+          wpm: 0,
+          cpm: 0,
+          rank: null,
+          finished: false,
+        })),
+      });
+      return;
+    }
+    if (event.type === "typing-progress") {
+      setTypingMatch((current) => current && current.start.matchId === event.matchId
+        ? { ...current, results: event.results }
+        : current);
+      return;
+    }
+    if (event.type === "typing-end") {
+      setTypingMatch((current) => current && current.start.matchId === event.matchId
+        ? { ...current, results: event.results, ended: event }
+        : current);
+      return;
+    }
+    if (event.type === "typing-declined" || event.type === "typing-cancelled") {
+      setTypingIncoming(null);
+      setTypingMatch(null);
+      showGameplayNotice(event.type === "typing-declined" ? `${event.opponentNick} recusou o duelo.` : event.reason);
+      return;
+    }
+    if (event.type === "gameplay-error") {
+      showGameplayNotice(event.message);
+    }
+  }
 
   // Reflete o estado do pôquer na mesa 3D (cartas, fichas, jogadores, pote).
   useEffect(() => {
@@ -157,6 +334,9 @@ export default function GameView() {
       setPokerError,
       setChessState,
       setChessError,
+      setMediaState,
+      setWorldItemState: updateWorldItems,
+      onGameplayEvent: handleGameplayEvent,
     });
 
     function boot() {
@@ -213,6 +393,23 @@ export default function GameView() {
         onMediaBoothInteract: () => {
           setMediaPanelOpen(true);
         },
+        onComputerInteract: (computerId) => {
+          setTypingComputerId(computerId);
+          setTypingPanelOpen(true);
+        },
+        onItemPickup: (itemId) => {
+          multiplayer?.sendItemPickup?.(itemId);
+        },
+        onItemUse: (itemId, targetId) => {
+          multiplayer?.sendItemUse?.(itemId, ++itemSequenceRef.current, targetId || undefined);
+        },
+        onSwimStroke: (matchId) => {
+          multiplayer?.sendSwimStroke?.(matchId, ++swimSequenceRef.current);
+        },
+        onSwimQuit: (matchId) => {
+          multiplayer?.sendSwimQuit?.(matchId);
+          setSwimDuel(null);
+        },
         onPokerSeatInteract: (seatIndex) => {
           multiplayer?.sendPokerSit?.(seatIndex);
           setPokerHudOpen(true);
@@ -227,14 +424,21 @@ export default function GameView() {
         onPvpHit: (matchId, victimId) => {
           multiplayer?.sendPvpHit(matchId, victimId);
         },
-        onEspectroConsumed: (seed) => {
-          multiplayer?.sendEspectroConsumed?.(seed);
+        onEspectroConsumed: (seed, outcome) => {
+          multiplayer?.sendEspectroConsumed?.(seed, outcome);
+        },
+        onEspectroDuelStart: (seed) => {
+          multiplayer?.sendEspectroDuelStart?.(seed);
+        },
+        onEspectroDuelHit: (seed, sequence) => {
+          multiplayer?.sendEspectroDuelHit?.(seed, sequence);
         },
         onSecretDisconnect: () => {
           multiplayerRef.current?.close?.();
           setConnection("disconnected");
           router.push("/");
         },
+        canStartBiribaSecret: () => !modalActivityBusyRef.current,
       });
       game.setNpcAuthority?.(
         !!localIdRef.current && npcAuthorityIdRef.current === localIdRef.current
@@ -243,6 +447,7 @@ export default function GameView() {
       if (espectroSnapshotRef.current) {
         game.espectroSpawn?.(espectroSnapshotRef.current);
       }
+      game.applyWorldItems?.(worldItemStateRef.current, localIdRef.current);
       gameApiRef.current = game;
     }
 
@@ -284,6 +489,43 @@ export default function GameView() {
 
   function handlePvpChallenge(targetId: string) {
     multiplayerRef.current?.sendPvpChallenge?.(targetId);
+  }
+
+  function handleSwimChallenge(targetId: string) {
+    multiplayerRef.current?.sendSwimChallenge?.(targetId);
+    showGameplayNotice("Desafio de natação enviado.");
+  }
+
+  function handleSwimAccept() {
+    if (swimDuel?.phase !== "incoming") return;
+    multiplayerRef.current?.sendSwimRespond?.(swimDuel.matchId, true);
+  }
+
+  function handleSwimDecline() {
+    if (swimDuel?.phase !== "incoming") return;
+    multiplayerRef.current?.sendSwimRespond?.(swimDuel.matchId, false);
+    setSwimDuel(null);
+  }
+
+  function handleSwimQuit() {
+    if (!swimDuel || swimDuel.phase === "ended") return;
+    multiplayerRef.current?.sendSwimQuit?.(swimDuel.matchId);
+    gameApiRef.current?.swimEndNetwork?.(swimDuel.matchId);
+    setSwimDuel(null);
+  }
+
+  function closeTypingPanel() {
+    if (typingRoom) multiplayerRef.current?.sendTypingRoomLeave?.(typingRoom.roomId);
+    setTypingRoom(null);
+    setTypingPanelOpen(false);
+  }
+
+  function quitTypingMatch() {
+    if (typingMatch && !typingMatch.ended) {
+      multiplayerRef.current?.sendTypingQuit?.(typingMatch.start.matchId);
+    }
+    setTypingMatch(null);
+    setTypingPanelOpen(false);
   }
 
   function handlePvpAccept() {
@@ -355,12 +597,29 @@ export default function GameView() {
             players={onlinePlayers}
             pvpState={pvpState}
             onChallenge={handlePvpChallenge}
+            onSwimChallenge={handleSwimChallenge}
           />
         )}
 
         {espectroNotice ? (
           <div className="espectro-notice" role="status" aria-live="polite">
             {espectroNotice}
+          </div>
+        ) : null}
+
+        {(
+          worldItemState.batOwnerId === localIdRef.current ||
+          worldItemState.umbrellaOwners.includes(localIdRef.current || "") ||
+          worldItemState.biribaBallOwners.includes(localIdRef.current || "")
+        ) ? (
+          <div className="item-hud" aria-label="Itens equipados">
+            {worldItemState.batOwnerId === localIdRef.current ? <span>🏏 Taco · R para rebater</span> : null}
+            {worldItemState.umbrellaOwners.includes(localIdRef.current || "") ? (
+              <span>☂️ Guarda-chuva · U para {worldItemState.openUmbrellas.includes(localIdRef.current || "") ? "fechar" : "abrir"}</span>
+            ) : null}
+            {worldItemState.biribaBallOwners.includes(localIdRef.current || "") ? (
+              <span>🟣 Bola Errante · Q para lançar</span>
+            ) : null}
           </div>
         ) : null}
 
@@ -421,6 +680,10 @@ export default function GameView() {
 
             <MediaPlayerPanel
               open={mediaPanelOpen}
+              state={mediaState}
+              getServerNow={getEstimatedServerNow}
+              onSetUrl={(url) => multiplayerRef.current?.sendMediaSet?.(url)}
+              onControl={(action, volume) => multiplayerRef.current?.sendMediaControl?.(action, volume)}
               onClose={() => setMediaPanelOpen(false)}
               onFocusChange={handleMediaFocusChange}
             />
@@ -537,13 +800,6 @@ export default function GameView() {
               >
                 Ação
               </button>
-              <button
-                type="button"
-                className="mobile-action"
-                onPointerDown={(event) => handleMobileActionInput(event, "camera")}
-              >
-                Câmera
-              </button>
               {pvpState?.phase === "playing" && (
                 <button
                   type="button"
@@ -551,6 +807,42 @@ export default function GameView() {
                   onPointerDown={(event) => { event.preventDefault(); gameApiRef.current?.queueMobilePvpThrow?.(); }}
                 >
                   🏐 Lançar
+                </button>
+              )}
+              {pvpState?.phase !== "playing" && worldItemState.biribaBallOwners.includes(localIdRef.current || "") && (
+                <button
+                  type="button"
+                  className="mobile-action mobile-action-primary"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    gameApiRef.current?.queueMobilePvpThrow?.();
+                  }}
+                >
+                  Lançar bola
+                </button>
+              )}
+              {worldItemState.batOwnerId === localIdRef.current && (
+                <button
+                  type="button"
+                  className="mobile-action mobile-action-primary"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    gameApiRef.current?.queueMobileItemUse?.();
+                  }}
+                >
+                  Usar taco
+                </button>
+              )}
+              {worldItemState.umbrellaOwners.includes(localIdRef.current || "") && (
+                <button
+                  type="button"
+                  className="mobile-action"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    gameApiRef.current?.queueMobileUmbrellaUse?.();
+                  }}
+                >
+                  {worldItemState.openUmbrellas.includes(localIdRef.current || "") ? "Fechar ☂" : "Abrir ☂"}
                 </button>
               )}
             </div>
@@ -625,6 +917,50 @@ export default function GameView() {
           </div>
         </div>
       )}
+
+      <SwimmingDuelHud
+        state={swimDuel}
+        localId={localIdRef.current}
+        getServerNow={getEstimatedServerNow}
+        onAccept={handleSwimAccept}
+        onDecline={handleSwimDecline}
+        onQuit={handleSwimQuit}
+        onDismiss={() => setSwimDuel(null)}
+      />
+
+      <TypingGamePanel
+        open={typingPanelOpen}
+        computerId={typingComputerId}
+        localId={localIdRef.current}
+        players={onlinePlayers}
+        incoming={typingIncoming}
+        room={typingRoom}
+        lobby={typingLobby}
+        match={typingMatch}
+        getServerNow={getEstimatedServerNow}
+        onClose={closeTypingPanel}
+        onSolo={() => multiplayerRef.current?.sendTypingSolo?.(typingComputerId)}
+        onChallenge={(playerId) => multiplayerRef.current?.sendTypingChallenge?.(playerId, typingComputerId)}
+        onRespond={(accepted) => {
+          if (!typingIncoming) return;
+          multiplayerRef.current?.sendTypingRespond?.(typingIncoming.matchId, accepted);
+          if (!accepted) setTypingIncoming(null);
+        }}
+        onCreateRoom={() => multiplayerRef.current?.sendTypingRoomCreate?.(typingComputerId)}
+        onJoinRoom={(roomId) => multiplayerRef.current?.sendTypingRoomJoin?.(roomId)}
+        onLeaveRoom={() => {
+          if (typingRoom) multiplayerRef.current?.sendTypingRoomLeave?.(typingRoom.roomId);
+          setTypingRoom(null);
+        }}
+        onStartRoom={() => {
+          if (typingRoom) multiplayerRef.current?.sendTypingRoomStart?.(typingRoom.roomId);
+        }}
+        onInput={(typed) => {
+          if (!typingMatch || typingMatch.ended) return;
+          multiplayerRef.current?.sendTypingInput?.(typingMatch.start.matchId, typed, ++typingSequenceRef.current);
+        }}
+        onQuitMatch={quitTypingMatch}
+      />
 
       {mobileMode && portraitLocked && (
         <div className="mobile-orientation-gate" role="dialog" aria-label="Tela horizontal">

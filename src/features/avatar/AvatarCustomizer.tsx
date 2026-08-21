@@ -21,7 +21,7 @@ const Avatar3DPreview = dynamic(
   { ssr: false, loading: () => <div className="avatar-3d-stage" /> }
 );
 
-type AvatarFieldKey = "shirt" | "pants" | "shoes" | "skin" | "hair" | "backpack";
+type AvatarFieldKey = "shirt" | "pants" | "shoes" | "skin" | "hair" | "backpack" | "accent";
 
 type AvatarField = {
   key: AvatarFieldKey;
@@ -73,7 +73,21 @@ const COLOR_FIELDS: AvatarField[] = [
     Icon: BackpackIcon,
     palette: ["#b85a31", "#2f855a", "#3a6dc9", "#7a3aa0", "#2b2b2b", "#d94a4a", "#f6b94b", "#1f3550"],
   },
+  {
+    key: "accent",
+    label: "Detalhes",
+    Icon: SparkleIcon,
+    palette: ["#f6b94b", "#67d9ec", "#e85858", "#8f6ed5", "#f7f7f2", "#252b31", "#39b87f", "#e889bd"],
+  },
 ];
+
+const STYLE_OPTIONS = [
+  { key: "hairStyle", label: "Corte", values: [["short", "Curto"], ["curly", "Cacheado"], ["mohawk", "Moicano"], ["bun", "Coque"]] },
+  { key: "outfitStyle", label: "Roupa", values: [["classic", "Clássica"], ["jacket", "Jaqueta"], ["sport", "Esportiva"]] },
+  { key: "faceStyle", label: "Rosto", values: [["classic", "Clássico"], ["freckles", "Sardas"], ["smile", "Sorriso"]] },
+  { key: "headShape", label: "Cabeça", values: [["round", "Redonda"], ["oval", "Oval"], ["wide", "Larga"]] },
+  { key: "accessory", label: "Acessório", values: [["none", "Nenhum"], ["headphones", "Fone"], ["cap", "Boné"], ["beanie", "Gorro"]] },
+] as const;
 
 const TABS = [
   { id: "look", label: "Visual", Icon: PaletteIcon },
@@ -221,6 +235,23 @@ export default function AvatarCustomizer({ avatar, onChange, onClose }: AvatarCu
                       <small>Visual estudioso</small>
                     </span>
                   </label>
+                  {STYLE_OPTIONS.map((option) => (
+                    <div className="avatar-style-field" key={option.key}>
+                      <strong>{option.label}</strong>
+                      <div className="avatar-option-grid">
+                        {option.values.map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            className={avatar[option.key] === value ? "is-selected" : ""}
+                            onClick={() => updateField(option.key, value as Avatar[typeof option.key])}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

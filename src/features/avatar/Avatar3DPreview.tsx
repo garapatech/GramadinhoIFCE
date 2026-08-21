@@ -52,7 +52,10 @@ function Avatar3DPreview({ avatar }: Avatar3DPreviewProps) {
         camera={{ fov: 26, position: [0, 1.45, 7.2], near: 0.1, far: 50 }}
         style={{ width: "100%", height: "100%" }}
       >
-        <AvatarPreviewScene avatar={avatar} />
+        <AvatarPreviewScene
+          key={`${avatar.hairStyle}-${avatar.outfitStyle}-${avatar.faceStyle}-${avatar.headShape}-${avatar.accessory}-${avatar.accent}`}
+          avatar={avatar}
+        />
       </Canvas>
     </div>
   );

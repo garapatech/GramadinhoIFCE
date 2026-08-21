@@ -438,6 +438,8 @@ export function createDevTools({
     const selectedLine = selectedPosition
       ? `pos x ${formatDevNumber(selectedPosition.x)} / z ${formatDevNumber(selectedPosition.z)}`
       : "clique em um objeto para selecionar";
+    const renderInfo = renderer.info.render;
+    const memoryInfo = renderer.info.memory;
 
     devOverlay.innerHTML = `
       <div class="dev-tools-title">Modo desenvolvedor</div>
@@ -447,6 +449,10 @@ export function createDevTools({
         <span>mundo</span><strong>${devPointer.hasWorld ? `x ${formatDevNumber(devPointer.worldX)} / z ${formatDevNumber(devPointer.worldZ)}` : "--"}</strong>
         <span>seleção</span><strong>${escapeDevText(selectedLabel)}</strong>
         <span>posição</span><strong>${selectedLine}</strong>
+        <span>draw calls</span><strong>${renderInfo.calls}</strong>
+        <span>triângulos</span><strong>${renderInfo.triangles.toLocaleString("pt-BR")}</strong>
+        <span>geometrias</span><strong>${memoryInfo.geometries}</strong>
+        <span>texturas</span><strong>${memoryInfo.textures}</strong>
       </div>
       <div class="dev-tools-help">
         F2 liga/desliga · clique e arraste move · setas ajustam · Shift = passo maior · Alt = fino · Esc limpa

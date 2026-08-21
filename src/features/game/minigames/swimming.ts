@@ -1,10 +1,12 @@
 import * as THREE from "three";
 import type { CharacterRigRefs } from "@/game/characterRig";
 import { disposeObject3D } from "@/game/disposeObject3D";
+import { mergeStaticMeshesByMaterial } from "@/game/mergeStaticMeshes";
 
 export const SWIMMING_POOL_CONFIG = {
   centerX: 0,
-  centerZ: -48,
+  // Mantém um corredor livre entre a piscina e a fachada sul do Bloco Central.
+  centerZ: -52,
   areaWidth: 32,
   areaDepth: 26,
   waterWidth: 20,
@@ -18,7 +20,9 @@ type SwimPhase = "idle" | "countdown" | "race" | "finish";
 type SwimHudState = {
   phase: SwimPhase;
   countdown: number;
+  countdownEndsAt: number;
   progress: number;
+  targetProgress: number;
   energy: number;
   speed: number;
   speedPulse: number;
@@ -26,8 +30,13 @@ type SwimHudState = {
   savedPosition: { x: number; z: number } | null;
   taps: number[];
   strokeCount: number;
+  lastStrokeAt: number;
   waterSoundTimer: number;
   bikeWarnCooldown: number;
+  networkMatchId: string | null;
+  networkStartAt: number;
+  networkEndAt: number;
+  laneX: number;
 };
 
 type Blocker = {
@@ -88,6 +97,9 @@ export type SwimmingMinigameOptions = {
   ) => void;
   playPoolSound?: (intensity: number) => void;
   playSwimStrokeSound?: (intensity: number) => void;
+  onNetworkStroke?: (matchId: string) => void;
+  onNetworkQuit?: (matchId: string) => void;
+  getServerNow?: () => number;
 };
 
 function clamp01(value: number) {
@@ -251,26 +263,47 @@ function addBox(
   return mesh;
 }
 
-function applySwimPose(refs: CharacterRigRefs, time: number, intensity = 1) {
-  const k = clamp01(intensity);
-  const stroke = Math.sin(time * (6.5 + k * 6));
-  const strokeOpp = Math.sin(time * (6.5 + k * 6) + Math.PI);
-  const kick = Math.sin(time * (10 + k * 8));
+function blendJoint(
+  joint: THREE.Object3D,
+  x: number,
+  y: number,
+  z: number,
+  amount = 0.32,
+) {
+  joint.rotation.x = THREE.MathUtils.lerp(joint.rotation.x, x, amount);
+  joint.rotation.y = THREE.MathUtils.lerp(joint.rotation.y, y, amount);
+  joint.rotation.z = THREE.MathUtils.lerp(joint.rotation.z, z, amount);
+}
 
-  refs.leftShoulder.rotation.x = -1.1 + stroke * 0.72 * k;
-  refs.rightShoulder.rotation.x = -1.1 + strokeOpp * 0.72 * k;
-  refs.leftShoulder.rotation.z = -0.26 + Math.max(0, stroke) * 0.28 * k;
-  refs.rightShoulder.rotation.z = 0.26 - Math.max(0, strokeOpp) * 0.28 * k;
-  refs.leftElbow.rotation.x = 0.38 + Math.max(0, -stroke) * 0.7 * k;
-  refs.rightElbow.rotation.x = 0.38 + Math.max(0, -strokeOpp) * 0.7 * k;
-  refs.leftHip.rotation.x = -0.38 + kick * 0.32 * k;
-  refs.rightHip.rotation.x = -0.38 - kick * 0.32 * k;
-  refs.leftKnee.rotation.x = 0.46 + Math.max(0, -kick) * 0.36 * k;
-  refs.rightKnee.rotation.x = 0.46 + Math.max(0, kick) * 0.36 * k;
-  refs.torso.rotation.x = 0.34 + k * 0.1;
-  refs.torso.rotation.y = stroke * 0.09 * k;
-  refs.head.rotation.x = -0.12 + Math.sin(time * 3.4) * 0.04;
-  refs.head.rotation.y = -stroke * 0.08 * k;
+export function applySwimPose(refs: CharacterRigRefs, time: number, intensity = 1) {
+  const k = clamp01(intensity);
+  const phase = time * (4.8 + k * 5.4);
+  const leftStroke = Math.sin(phase);
+  const rightStroke = -leftStroke;
+  const flutter = Math.sin(phase * 1.85);
+  const blend = 0.3;
+
+  const poseArm = (shoulder: THREE.Group, elbow: THREE.Group, stroke: number, side: -1 | 1) => {
+    const pull = Math.max(0, stroke);
+    const recovery = Math.max(0, -stroke);
+    blendJoint(
+      shoulder,
+      -1.18 + stroke * 1.02 * k,
+      side * (0.04 + recovery * 0.18 * k),
+      side * (-0.18 - recovery * 0.24 * k),
+      blend,
+    );
+    blendJoint(elbow, 0.16 + pull * 1.02 * k + recovery * 0.25 * k, 0, side * 0.025, blend);
+  };
+
+  poseArm(refs.leftShoulder, refs.leftElbow, leftStroke, -1);
+  poseArm(refs.rightShoulder, refs.rightElbow, rightStroke, 1);
+  blendJoint(refs.leftHip, -0.16 + flutter * 0.22 * k, 0, -0.025, blend);
+  blendJoint(refs.rightHip, -0.16 - flutter * 0.22 * k, 0, 0.025, blend);
+  blendJoint(refs.leftKnee, 0.12 + Math.max(0, -flutter) * 0.34 * k, 0, 0, blend);
+  blendJoint(refs.rightKnee, 0.12 + Math.max(0, flutter) * 0.34 * k, 0, 0, blend);
+  blendJoint(refs.torso, 0.04, leftStroke * 0.14 * k, leftStroke * 0.035 * k, blend);
+  blendJoint(refs.head, -0.08 + Math.sin(phase * 0.5) * 0.025, -leftStroke * 0.07 * k, 0, blend);
 }
 
 export function createSwimmingMinigame({
@@ -289,6 +322,9 @@ export function createSwimmingMinigame({
   removeTreesInArea,
   playPoolSound,
   playSwimStrokeSound,
+  onNetworkStroke,
+  onNetworkQuit,
+  getServerNow = Date.now,
 }: SwimmingMinigameOptions) {
   const cfg = SWIMMING_POOL_CONFIG;
   const bounds = {
@@ -341,7 +377,9 @@ export function createSwimmingMinigame({
   deck.receiveShadow = true;
 
   const waterMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(cfg.waterWidth, cfg.waterDepth, 36, 24),
+    // As ondas sao feitas pela textura/transformacao; subdividir este plano
+    // criava mais de 1.700 triangulos sem alterar o resultado visual.
+    new THREE.PlaneGeometry(cfg.waterWidth, cfg.waterDepth, 1, 1),
     waterMat
   );
   waterMesh.rotation.x = -Math.PI / 2;
@@ -437,6 +475,7 @@ export function createSwimmingMinigame({
   group.add(rulesSign);
 
   const lampColor = 0x7fdcff;
+  const poolLights: THREE.PointLight[] = [];
   for (const [x, z] of [
     [bounds.minX + 2.2, bounds.minZ + 2.2],
     [bounds.maxX - 2.2, bounds.minZ + 2.2],
@@ -446,6 +485,7 @@ export function createSwimmingMinigame({
     const lamp = new THREE.PointLight(lampColor, 0.78, 14, 2);
     lamp.position.set(x, 3.1, z);
     group.add(lamp);
+    poolLights.push(lamp);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 3.0, 8), railMat);
     pole.position.set(x, 1.5, z);
     pole.castShadow = true;
@@ -461,7 +501,7 @@ export function createSwimmingMinigame({
   });
   for (let i = 0; i < 6; i += 1) {
     const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.25, 0.32, 24),
+      new THREE.RingGeometry(0.25, 0.32, 16),
       rippleMat.clone()
     ) as THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
     ring.rotation.x = -Math.PI / 2;
@@ -474,6 +514,19 @@ export function createSwimmingMinigame({
     ring.renderOrder = 4;
     group.add(ring);
     ripples.push(ring);
+  }
+
+  const dynamicPoolMeshes = new Set<THREE.Object3D>([waterMesh, ...ripples]);
+  mergeStaticMeshesByMaterial(
+    group,
+    group.children.filter(
+      (child): child is THREE.Mesh => child instanceof THREE.Mesh && !dynamicPoolMeshes.has(child),
+    ),
+  );
+  for (const child of group.children) {
+    if (dynamicPoolMeshes.has(child)) continue;
+    child.updateMatrix();
+    child.matrixAutoUpdate = false;
   }
 
   if (mapFeatures?.buildings) {
@@ -522,7 +575,9 @@ export function createSwimmingMinigame({
   const state: SwimHudState = {
     phase: "idle",
     countdown: 0,
+    countdownEndsAt: 0,
     progress: 0,
+    targetProgress: 0,
     energy: 0,
     speed: 0,
     speedPulse: 0,
@@ -530,8 +585,13 @@ export function createSwimmingMinigame({
     savedPosition: null,
     taps: [],
     strokeCount: 0,
+    lastStrokeAt: 0,
     waterSoundTimer: 1.5,
     bikeWarnCooldown: 0,
+    networkMatchId: null,
+    networkStartAt: 0,
+    networkEndAt: 0,
+    laneX,
   };
 
   function isActive() {
@@ -563,11 +623,18 @@ export function createSwimmingMinigame({
   function setRacePosition(progress: number, time: number) {
     const p = clamp01(progress);
     const laneJitter = Math.sin(time * 7.5) * state.speedPulse * 0.08;
-    player.position.x = laneX + laneJitter;
+    player.position.x = state.laneX + laneJitter;
     player.position.z = startZ + laneLength * p;
-    player.position.y = 0.05 + Math.sin(time * 6.2) * 0.04 + state.speedPulse * 0.03;
-    player.rotation.y = 0;
-    player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, -0.32, 0.2);
+    player.position.y = 0.38 + Math.sin(time * 6.2) * 0.025 + state.speedPulse * 0.018;
+    // O avatar avança para +Z nesta raia. A rotação de 90° o mantém deitado
+    // na superfície, com a cabeça apontando para a chegada.
+    player.rotation.y = Math.PI;
+    player.rotation.x = THREE.MathUtils.lerp(player.rotation.x, -Math.PI / 2, 0.3);
+    player.rotation.z = THREE.MathUtils.lerp(
+      player.rotation.z,
+      Math.sin(time * 5.2) * state.speedPulse * 0.035,
+      0.24,
+    );
   }
 
   function startRace() {
@@ -577,7 +644,9 @@ export function createSwimmingMinigame({
     }
     state.phase = "countdown";
     state.countdown = 3.25;
+    state.countdownEndsAt = performance.now() + 3_250;
     state.progress = 0;
+    state.targetProgress = 0;
     state.energy = 0;
     state.speed = 0;
     state.speedPulse = 0;
@@ -585,19 +654,62 @@ export function createSwimmingMinigame({
     state.savedPosition = { x: player.position.x, z: player.position.z };
     state.taps.length = 0;
     state.strokeCount = 0;
+    state.lastStrokeAt = 0;
+    state.networkMatchId = null;
+    state.networkStartAt = 0;
+    state.networkEndAt = 0;
+    state.laneX = laneX;
     playerVelocity.set(0, 0);
     setRacePosition(0, performance.now() / 1000);
     speak?.("Competidor na raia. A largada vai começar.", "Piscina");
   }
 
+  function startNetworkRace({
+    matchId,
+    side,
+    startAt,
+    endAt,
+  }: {
+    matchId: string;
+    side: "A" | "B";
+    startAt: number;
+    endAt: number;
+  }) {
+    if (isRidingBike?.()) return false;
+    state.phase = "countdown";
+    state.countdown = Math.max(0, (startAt - getServerNow()) / 1000);
+    state.countdownEndsAt = 0;
+    state.progress = 0;
+    state.targetProgress = 0;
+    state.energy = 0;
+    state.speed = 0;
+    state.speedPulse = 0;
+    state.finishTimer = 0;
+    state.savedPosition = { x: player.position.x, z: player.position.z };
+    state.taps.length = 0;
+    state.strokeCount = 0;
+    state.lastStrokeAt = 0;
+    state.networkMatchId = matchId;
+    state.networkStartAt = startAt;
+    state.networkEndAt = endAt;
+    state.laneX = water.minX + laneWidth * ((side === "A" ? 1 : 2) + 0.5);
+    playerVelocity.set(0, 0);
+    setRacePosition(0, performance.now() / 1000);
+    speak?.("Duelo confirmado. Prepare-se para a largada.", "Piscina");
+    return true;
+  }
+
   function finishRace(cancelled = false) {
     playerVelocity.set(0, 0);
     player.rotation.x = 0;
+    player.rotation.z = 0;
     resetRigPose?.(playerRig.refs);
     player.position.set(cfg.centerX, 0, bounds.minZ - 4.2);
     state.phase = "idle";
     state.countdown = 0;
+    state.countdownEndsAt = 0;
     state.progress = 0;
+    state.targetProgress = 0;
     state.energy = 0;
     state.speed = 0;
     state.speedPulse = 0;
@@ -605,16 +717,36 @@ export function createSwimmingMinigame({
     state.savedPosition = null;
     state.taps.length = 0;
     state.strokeCount = 0;
+    state.lastStrokeAt = 0;
+    state.networkMatchId = null;
+    state.networkStartAt = 0;
+    state.networkEndAt = 0;
+    state.laneX = laneX;
     if (cancelled) speak?.("Corrida cancelada. Voce voltou para a area de espera.", "Piscina");
   }
 
   function queueStroke() {
     if (state.phase !== "race") return;
     const now = performance.now() / 1000;
+    const interval = state.lastStrokeAt > 0 ? now - state.lastStrokeAt : 0.38;
+    state.lastStrokeAt = now;
     state.taps.push(now);
     while (state.taps.length && now - state.taps[0] > 1) state.taps.shift();
     const rate = state.taps.length;
-    state.energy = THREE.MathUtils.clamp(state.energy + 0.32 + Math.min(0.26, rate * 0.018), 0, 2.2);
+    if (state.networkMatchId) {
+      state.energy = THREE.MathUtils.clamp(state.energy + 0.32, 0, 2);
+      state.speedPulse = Math.min(1.25, state.speedPulse + 0.34);
+      onNetworkStroke?.(state.networkMatchId);
+      playSwimStrokeSound?.(Math.min(1, rate / 10));
+      return;
+    }
+    const rhythmDistance = Math.abs(interval - 0.36);
+    const rhythmBonus = interval >= 0.16 && interval <= 0.72
+      ? THREE.MathUtils.clamp(0.005 - rhythmDistance * 0.009, 0, 0.005)
+      : -0.003;
+    const strokeProgress = THREE.MathUtils.clamp(0.038 + rhythmBonus, 0.034, 0.043);
+    state.targetProgress = Math.min(1, state.targetProgress + strokeProgress);
+    state.energy = THREE.MathUtils.clamp(state.energy + 0.28 + Math.min(0.18, rate * 0.014), 0, 2.0);
     state.speedPulse = Math.min(1.25, state.speedPulse + 0.32);
     state.strokeCount += 1;
     playSwimStrokeSound?.(Math.min(1, rate / 10));
@@ -622,18 +754,45 @@ export function createSwimmingMinigame({
 
   function queueCancel() {
     if (!isActive()) return false;
+    if (state.networkMatchId) onNetworkQuit?.(state.networkMatchId);
     finishRace(true);
     return true;
   }
 
+  function applyNetworkProgress(
+    matchId: string,
+    scores: Array<{ playerId: string; strokes: number; progress: number }>,
+    localId: string | null,
+  ) {
+    if (!state.networkMatchId || state.networkMatchId !== matchId) return;
+    const mine = scores.find((score) => score.playerId === localId);
+    if (!mine) return;
+    state.targetProgress = clamp01(mine.progress);
+    state.strokeCount = mine.strokes;
+  }
+
+  function endNetworkRace(matchId: string) {
+    if (!state.networkMatchId || state.networkMatchId !== matchId) return;
+    state.phase = "finish";
+    state.finishTimer = 1.8;
+    state.speed = 0;
+  }
+
+  let lastHudSignature = "";
   function updateHud() {
     const visible = isActive();
+    const countdown = state.phase === "countdown" ? Math.max(1, Math.ceil(state.countdown)) : 0;
+    const progress = Math.round(clamp01(state.progress) * 100);
+    const speed = Math.round(clamp01(state.speed / 12) * 100);
+    const signature = `${visible ? 1 : 0}:${state.phase}:${countdown}:${progress}:${speed}:${state.strokeCount}`;
+    if (signature === lastHudSignature) return;
+    lastHudSignature = signature;
     hud.classList.toggle("visible", visible);
     if (!visible) return;
 
     if (state.phase === "countdown") {
       phaseEl.textContent = "Largada";
-      countEl.textContent = `${Math.max(1, Math.ceil(state.countdown))}`;
+      countEl.textContent = `${countdown}`;
     } else if (state.phase === "race") {
       phaseEl.textContent = "Corrida";
       countEl.textContent = "";
@@ -641,22 +800,24 @@ export function createSwimmingMinigame({
       phaseEl.textContent = "Vitória";
       countEl.textContent = "✓";
     }
-    barEl.style.width = `${Math.round(clamp01(state.progress) * 100)}%`;
-    speedEl.textContent = `ritmo ${Math.round(clamp01(state.speed / 12) * 100)}%`;
+    barEl.style.width = `${progress}%`;
+    speedEl.textContent = `ritmo ${speed}%`;
     tapsEl.textContent = `${state.strokeCount} toques`;
   }
 
   function updatePlayer(dt: number, time: number) {
     if (!isPlayerControlled()) return false;
     updatePlayerActivity?.({
-      kind: "emoting",
+      kind: "swimming",
       label: "nadando",
       detail: state.phase === "race" ? "competindo na piscina" : "na raia da piscina",
     });
     playerVelocity.set(0, 0);
 
     if (state.phase === "countdown") {
-      state.countdown -= dt;
+      state.countdown = state.networkMatchId
+        ? Math.max(0, (state.networkStartAt - getServerNow()) / 1000)
+        : Math.max(0, (state.countdownEndsAt - performance.now()) / 1000);
       setRacePosition(0, time);
       applySwimPose(playerRig.refs, time, 0.25);
       if (state.countdown <= 0) {
@@ -672,11 +833,19 @@ export function createSwimmingMinigame({
       state.energy = Math.max(0, state.energy - dt * 0.82);
       state.speedPulse = Math.max(0, state.speedPulse - dt * 1.6);
       const tapRate = state.taps.length;
-      state.speed = 1.15 + state.energy * 3.9 + tapRate * 0.34;
-      state.progress += (state.speed * dt) / laneLength;
+      state.speed = THREE.MathUtils.lerp(
+        state.speed,
+        state.energy * 3.5 + tapRate * 0.28,
+        1 - Math.exp(-dt * 7),
+      );
+      state.progress = THREE.MathUtils.lerp(
+        state.progress,
+        state.targetProgress,
+        1 - Math.exp(-dt * 8.5),
+      );
       setRacePosition(state.progress, time);
       applySwimPose(playerRig.refs, time, Math.min(1, state.speed / 9.5));
-      if (state.progress >= 1) {
+      if (!state.networkMatchId && state.targetProgress >= 1 && state.progress >= 0.995) {
         state.phase = "finish";
         state.finishTimer = 2.2;
         state.progress = 1;
@@ -688,7 +857,7 @@ export function createSwimmingMinigame({
 
     if (state.phase === "finish") {
       state.finishTimer -= dt;
-      setRacePosition(1, time);
+      setRacePosition(state.networkMatchId ? state.progress : 1, time);
       applySwimPose(playerRig.refs, time, 0.15);
       if (state.finishTimer <= 0) {
         finishRace(false);
@@ -699,9 +868,25 @@ export function createSwimmingMinigame({
     return false;
   }
 
+  let environmentAccumulator = 0;
+  let poolLightsVisible = true;
   function updateEnvironment(dt: number, time: number) {
     state.bikeWarnCooldown = Math.max(0, state.bikeWarnCooldown - dt);
     gateBlocker.active = true;
+
+    const dx = player.position.x - cfg.centerX;
+    const dz = player.position.z - cfg.centerZ;
+    const lightsShouldBeVisible = isActive() || dx * dx + dz * dz < 34 * 34;
+    if (lightsShouldBeVisible !== poolLightsVisible) {
+      poolLightsVisible = lightsShouldBeVisible;
+      for (const light of poolLights) light.visible = lightsShouldBeVisible;
+    }
+
+    environmentAccumulator += dt;
+    const visualInterval = isActive() ? 1 / 30 : 1 / 15;
+    if (environmentAccumulator < visualInterval) return;
+    const visualDt = environmentAccumulator;
+    environmentAccumulator = 0;
 
     const wave = Math.sin(time * 1.8) * 0.025 + Math.sin(time * 3.7) * 0.014;
     waterMesh.position.y = 0.125 + wave;
@@ -715,9 +900,7 @@ export function createSwimmingMinigame({
       ripple.material.opacity = Math.max(0, 0.22 * (1 - (phase % 1)));
     }
 
-    state.waterSoundTimer -= dt;
-    const dx = player.position.x - cfg.centerX;
-    const dz = player.position.z - cfg.centerZ;
+    state.waterSoundTimer -= visualDt;
     if (state.waterSoundTimer <= 0 && dx * dx + dz * dz < 30 * 30) {
       playPoolSound?.(isActive() ? 0.85 : 0.36);
       state.waterSoundTimer = isActive() ? 1.2 : 3.4;
@@ -751,12 +934,15 @@ export function createSwimmingMinigame({
     water,
     laneX,
     startRace,
+    startNetworkRace,
     isActive,
     isPlayerControlled,
     isNoBikeZone,
     rejectBikeEntry,
     queueStroke,
     queueCancel,
+    applyNetworkProgress,
+    endNetworkRace,
     updatePlayer,
     update: updateEnvironment,
     destroy() {

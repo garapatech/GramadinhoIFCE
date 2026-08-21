@@ -8,6 +8,7 @@ export const playerActivitySchema = z.enum([
   "crouching",
   "sitting",
   "riding",
+  "swimming",
   "emoting",
 ]);
 
@@ -24,6 +25,7 @@ export const playerSnapshotSchema = z
     speed: z.number().finite(),
     activity: playerActivitySchema,
     jumpY: z.number().finite(),
+    floorY: z.number().finite().min(0).max(64).default(0),
     voiceEnabled: z.boolean(),
     voiceMuted: z.boolean(),
   })
@@ -104,6 +106,7 @@ export const spectatorSpawnSchema = z
     seed: z.string().min(1).max(96),
     spawnIndex: z.number().int().nonnegative(),
     expiresAt: z.number().finite(),
+    mode: z.enum(["foot", "bike"]).default("foot"),
   })
   .strict();
 
@@ -127,6 +130,7 @@ export const socketOutboundStateSchema = z
     speed: z.number().finite(),
     activity: playerActivitySchema,
     jumpY: z.number().finite(),
+    floorY: z.number().finite().min(0).max(64).default(0),
   })
   .strict();
 
@@ -226,6 +230,22 @@ export const socketOutboundEspectroConsumedSchema = z
   .object({
     type: z.literal("espectro-consumed"),
     seed: z.string().min(1).max(96),
+    outcome: z.enum(["lost", "won"]).default("lost"),
+  })
+  .strict();
+
+export const socketOutboundEspectroDuelStartSchema = z
+  .object({
+    type: z.literal("espectro-duel-start"),
+    seed: z.string().min(1).max(96),
+  })
+  .strict();
+
+export const socketOutboundEspectroDuelHitSchema = z
+  .object({
+    type: z.literal("espectro-duel-hit"),
+    seed: z.string().min(1).max(96),
+    sequence: z.number().int().positive().max(32),
   })
   .strict();
 
@@ -234,6 +254,199 @@ export const socketOutboundVoiceSignalSchema = z
     type: z.literal("voice-signal"),
     target: z.string().min(1).max(128),
     signal: voiceSignalSchema,
+  })
+  .strict();
+
+// ---- Rádio global ----
+export const globalMediaStateSchema = z
+  .object({
+    url: z.string().max(2048).nullable(),
+    provider: z.enum(["youtube", "spotify"]).nullable(),
+    startedBy: z.string().min(1).max(128).nullable(),
+    startedByNick: z.string().max(16),
+    playing: z.boolean(),
+    paused: z.boolean(),
+    volume: z.number().finite().min(0).max(1),
+    position: z.number().finite().nonnegative(),
+    startedAt: z.number().finite(),
+    updatedAt: z.number().finite(),
+  })
+  .strict();
+
+export const socketOutboundMediaSetSchema = z
+  .object({
+    type: z.literal("media-set"),
+    url: z.string().trim().min(1).max(2048),
+  })
+  .strict();
+
+export const socketOutboundMediaControlSchema = z
+  .object({
+    type: z.literal("media-control"),
+    action: z.enum(["pause", "resume", "stop", "volume"]),
+    volume: z.number().finite().min(0).max(1).optional(),
+  })
+  .strict();
+
+// ---- Itens compartilhados ----
+export const usableItemIdSchema = z.enum(["bat", "umbrella", "biriba-ball"]);
+
+export const worldItemStateSchema = z
+  .object({
+    batOwnerId: z.string().min(1).max(128).nullable(),
+    umbrellaOwners: z.array(z.string().min(1).max(128)).max(64),
+    openUmbrellas: z.array(z.string().min(1).max(128)).max(64),
+    biribaBallOwners: z.array(z.string().min(1).max(128)).max(64),
+  })
+  .strict();
+
+export const socketOutboundItemPickupSchema = z
+  .object({
+    type: z.literal("item-pickup"),
+    itemId: usableItemIdSchema,
+  })
+  .strict();
+
+export const socketOutboundItemUseSchema = z
+  .object({
+    type: z.literal("item-use"),
+    itemId: usableItemIdSchema,
+    targetId: z.string().min(1).max(128).optional(),
+    sequence: z.number().int().nonnegative().max(1_000_000_000),
+  })
+  .strict();
+
+// ---- Duelo de natação ----
+export const swimScoreSchema = z
+  .object({
+    playerId: z.string().min(1).max(128),
+    nick: z.string().min(1).max(16),
+    strokes: z.number().int().nonnegative(),
+    progress: z.number().finite().min(0).max(1),
+  })
+  .strict();
+
+export const socketOutboundSwimChallengeSchema = z
+  .object({
+    type: z.literal("swim-challenge"),
+    to: z.string().min(1).max(128),
+  })
+  .strict();
+
+export const socketOutboundSwimRespondSchema = z
+  .object({
+    type: z.literal("swim-respond"),
+    matchId: pvpMatchIdSchema,
+    accepted: z.boolean(),
+  })
+  .strict();
+
+export const socketOutboundSwimStrokeSchema = z
+  .object({
+    type: z.literal("swim-stroke"),
+    matchId: pvpMatchIdSchema,
+    sequence: z.number().int().nonnegative().max(1_000_000_000),
+  })
+  .strict();
+
+export const socketOutboundSwimQuitSchema = z
+  .object({
+    type: z.literal("swim-quit"),
+    matchId: pvpMatchIdSchema,
+  })
+  .strict();
+
+// ---- Minigame de digitação ----
+export const typingModeSchema = z.enum(["solo", "duel", "room"]);
+export const typingResultSchema = z
+  .object({
+    playerId: z.string().min(1).max(128),
+    nick: z.string().min(1).max(16),
+    progress: z.number().finite().min(0).max(1),
+    timeMs: z.number().int().nonnegative().nullable(),
+    accuracy: z.number().finite().min(0).max(100),
+    errors: z.number().int().nonnegative(),
+    wpm: z.number().finite().nonnegative(),
+    cpm: z.number().finite().nonnegative(),
+    rank: z.number().int().positive().nullable(),
+    finished: z.boolean(),
+  })
+  .strict();
+
+export const typingRoomSummarySchema = z
+  .object({
+    roomId: z.string().min(1).max(64),
+    hostId: z.string().min(1).max(128),
+    hostNick: z.string().min(1).max(16),
+    participantCount: z.number().int().min(1).max(8),
+    open: z.boolean(),
+  })
+  .strict();
+
+export const socketOutboundTypingSoloSchema = z
+  .object({
+    type: z.literal("typing-solo"),
+    computerId: z.string().min(1).max(48),
+  })
+  .strict();
+
+export const socketOutboundTypingChallengeSchema = z
+  .object({
+    type: z.literal("typing-challenge"),
+    to: z.string().min(1).max(128),
+    computerId: z.string().min(1).max(48),
+  })
+  .strict();
+
+export const socketOutboundTypingRespondSchema = z
+  .object({
+    type: z.literal("typing-respond"),
+    matchId: pvpMatchIdSchema,
+    accepted: z.boolean(),
+  })
+  .strict();
+
+export const socketOutboundTypingRoomCreateSchema = z
+  .object({
+    type: z.literal("typing-room-create"),
+    computerId: z.string().min(1).max(48),
+  })
+  .strict();
+
+export const socketOutboundTypingRoomJoinSchema = z
+  .object({
+    type: z.literal("typing-room-join"),
+    roomId: z.string().min(1).max(64),
+  })
+  .strict();
+
+export const socketOutboundTypingRoomLeaveSchema = z
+  .object({
+    type: z.literal("typing-room-leave"),
+    roomId: z.string().min(1).max(64),
+  })
+  .strict();
+
+export const socketOutboundTypingRoomStartSchema = z
+  .object({
+    type: z.literal("typing-room-start"),
+    roomId: z.string().min(1).max(64),
+  })
+  .strict();
+
+export const socketOutboundTypingInputSchema = z
+  .object({
+    type: z.literal("typing-input"),
+    matchId: pvpMatchIdSchema,
+    typed: z.string().max(360),
+    sequence: z.number().int().nonnegative().max(1_000_000_000),
+  })
+  .strict();
+
+export const socketOutboundTypingQuitSchema = z
+  .object({
+    type: z.literal("typing-quit"),
+    matchId: pvpMatchIdSchema,
   })
   .strict();
 
@@ -415,7 +628,26 @@ export const socketOutboundMessageSchema = z.discriminatedUnion("type", [
   socketOutboundPvpHitSchema,
   socketOutboundPvpQuitSchema,
   socketOutboundEspectroConsumedSchema,
+  socketOutboundEspectroDuelStartSchema,
+  socketOutboundEspectroDuelHitSchema,
   socketOutboundVoiceSignalSchema,
+  socketOutboundMediaSetSchema,
+  socketOutboundMediaControlSchema,
+  socketOutboundItemPickupSchema,
+  socketOutboundItemUseSchema,
+  socketOutboundSwimChallengeSchema,
+  socketOutboundSwimRespondSchema,
+  socketOutboundSwimStrokeSchema,
+  socketOutboundSwimQuitSchema,
+  socketOutboundTypingSoloSchema,
+  socketOutboundTypingChallengeSchema,
+  socketOutboundTypingRespondSchema,
+  socketOutboundTypingRoomCreateSchema,
+  socketOutboundTypingRoomJoinSchema,
+  socketOutboundTypingRoomLeaveSchema,
+  socketOutboundTypingRoomStartSchema,
+  socketOutboundTypingInputSchema,
+  socketOutboundTypingQuitSchema,
   socketOutboundPokerSitSchema,
   socketOutboundPokerStandSchema,
   socketOutboundPokerActionSchema,
@@ -438,6 +670,8 @@ const socketInitMessageSchema = z
     npcs: z.array(npcStateSchema),
     history: z.array(chatMessageSchema),
     espectro: spectatorSpawnSchema.nullable(),
+    media: globalMediaStateSchema,
+    items: worldItemStateSchema,
     serverNow: z.number().finite(),
   })
   .strict();
@@ -466,6 +700,7 @@ const socketStateMessageSchema = z
     speed: z.number().finite(),
     activity: playerActivitySchema,
     jumpY: z.number().finite(),
+    floorY: z.number().finite().min(0).max(64).default(0),
   })
   .strict();
 
@@ -567,6 +802,7 @@ const socketPvpCancelledMessageSchema = z
   .object({
     type: z.literal("pvp-cancelled"),
     matchId: pvpMatchIdSchema,
+    reason: z.string().min(1).max(160).optional(),
   })
   .strict();
 
@@ -629,6 +865,190 @@ const socketReactionMessageSchema = z
   })
   .strict();
 
+const socketMediaStateMessageSchema = z
+  .object({
+    type: z.literal("media-state"),
+    state: globalMediaStateSchema,
+  })
+  .strict();
+
+const socketItemStateMessageSchema = z
+  .object({
+    type: z.literal("item-state"),
+    state: worldItemStateSchema,
+  })
+  .strict();
+
+const socketItemActionMessageSchema = z
+  .object({
+    type: z.literal("item-action"),
+    playerId: z.string().min(1).max(128),
+    itemId: usableItemIdSchema,
+    action: z.enum(["swing", "open", "close", "throw"]),
+    targetId: z.string().min(1).max(128).optional(),
+    x: z.number().finite().optional(),
+    z: z.number().finite().optional(),
+    dx: z.number().finite().optional(),
+    dz: z.number().finite().optional(),
+  })
+  .strict();
+
+const socketRagdollMessageSchema = z
+  .object({
+    type: z.literal("ragdoll"),
+    sourceId: z.string().min(1).max(128),
+    targetId: z.string().min(1).max(128),
+    duration: z.number().finite().min(0.2).max(4),
+  })
+  .strict();
+
+const socketSwimChallengeMessageSchema = z
+  .object({
+    type: z.literal("swim-challenge"),
+    matchId: pvpMatchIdSchema,
+    from: z.string().min(1).max(128),
+    fromNick: z.string().min(1).max(16),
+  })
+  .strict();
+
+const socketSwimStartMessageSchema = z
+  .object({
+    type: z.literal("swim-start"),
+    matchId: pvpMatchIdSchema,
+    playerA: z.string().min(1).max(128),
+    playerB: z.string().min(1).max(128),
+    nickA: z.string().min(1).max(16),
+    nickB: z.string().min(1).max(16),
+    startAt: z.number().finite(),
+    endAt: z.number().finite(),
+  })
+  .strict();
+
+const socketSwimProgressMessageSchema = z
+  .object({
+    type: z.literal("swim-progress"),
+    matchId: pvpMatchIdSchema,
+    scores: z.array(swimScoreSchema).length(2),
+    serverNow: z.number().finite(),
+  })
+  .strict();
+
+const socketSwimEndMessageSchema = z
+  .object({
+    type: z.literal("swim-end"),
+    matchId: pvpMatchIdSchema,
+    scores: z.array(swimScoreSchema).length(2),
+    winnerId: z.string().min(1).max(128).nullable(),
+    tie: z.boolean(),
+    reason: z.enum(["timeout", "forfeit", "cancelled"]),
+  })
+  .strict();
+
+const socketSwimDeclinedMessageSchema = z
+  .object({
+    type: z.literal("swim-declined"),
+    matchId: pvpMatchIdSchema,
+    opponentNick: z.string().min(1).max(16),
+  })
+  .strict();
+
+const socketSwimCancelledMessageSchema = z
+  .object({
+    type: z.literal("swim-cancelled"),
+    matchId: pvpMatchIdSchema,
+    reason: z.string().max(120),
+  })
+  .strict();
+
+const socketTypingChallengeMessageSchema = z
+  .object({
+    type: z.literal("typing-challenge"),
+    matchId: pvpMatchIdSchema,
+    from: z.string().min(1).max(128),
+    fromNick: z.string().min(1).max(16),
+  })
+  .strict();
+
+const socketTypingRoomStateMessageSchema = z
+  .object({
+    type: z.literal("typing-room-state"),
+    roomId: z.string().min(1).max(64),
+    hostId: z.string().min(1).max(128),
+    hostNick: z.string().min(1).max(16),
+    participants: z.array(z.object({
+      playerId: z.string().min(1).max(128),
+      nick: z.string().min(1).max(16),
+    }).strict()).min(1).max(8),
+    open: z.boolean(),
+  })
+  .strict();
+
+const socketTypingLobbyMessageSchema = z
+  .object({
+    type: z.literal("typing-lobby"),
+    rooms: z.array(typingRoomSummarySchema).max(32),
+  })
+  .strict();
+
+const socketTypingStartMessageSchema = z
+  .object({
+    type: z.literal("typing-start"),
+    matchId: pvpMatchIdSchema,
+    mode: typingModeSchema,
+    text: z.string().min(1).max(320),
+    startAt: z.number().finite(),
+    deadlineAt: z.number().finite(),
+    participants: z.array(z.object({
+      playerId: z.string().min(1).max(128),
+      nick: z.string().min(1).max(16),
+    }).strict()).min(1).max(8),
+  })
+  .strict();
+
+const socketTypingProgressMessageSchema = z
+  .object({
+    type: z.literal("typing-progress"),
+    matchId: pvpMatchIdSchema,
+    results: z.array(typingResultSchema).min(1).max(8),
+    serverNow: z.number().finite(),
+  })
+  .strict();
+
+const socketTypingEndMessageSchema = z
+  .object({
+    type: z.literal("typing-end"),
+    matchId: pvpMatchIdSchema,
+    mode: typingModeSchema,
+    winnerId: z.string().min(1).max(128).nullable(),
+    results: z.array(typingResultSchema).min(1).max(8),
+    reason: z.enum(["completed", "timeout", "forfeit", "cancelled"]),
+  })
+  .strict();
+
+const socketTypingDeclinedMessageSchema = z
+  .object({
+    type: z.literal("typing-declined"),
+    matchId: pvpMatchIdSchema,
+    opponentNick: z.string().min(1).max(16),
+  })
+  .strict();
+
+const socketTypingCancelledMessageSchema = z
+  .object({
+    type: z.literal("typing-cancelled"),
+    matchId: pvpMatchIdSchema,
+    reason: z.string().max(120),
+  })
+  .strict();
+
+const socketGameplayErrorMessageSchema = z
+  .object({
+    type: z.literal("gameplay-error"),
+    system: z.enum(["media", "item", "swim", "typing"]),
+    message: z.string().max(160),
+  })
+  .strict();
+
 const socketPokerStateMessageSchema = z
   .object({
     type: z.literal("poker-state"),
@@ -688,6 +1108,25 @@ export const socketInboundMessageSchema = z.discriminatedUnion("type", [
   socketEspectroSpawnMessageSchema,
   socketEspectroDespawnMessageSchema,
   socketReactionMessageSchema,
+  socketMediaStateMessageSchema,
+  socketItemStateMessageSchema,
+  socketItemActionMessageSchema,
+  socketRagdollMessageSchema,
+  socketSwimChallengeMessageSchema,
+  socketSwimStartMessageSchema,
+  socketSwimProgressMessageSchema,
+  socketSwimEndMessageSchema,
+  socketSwimDeclinedMessageSchema,
+  socketSwimCancelledMessageSchema,
+  socketTypingChallengeMessageSchema,
+  socketTypingRoomStateMessageSchema,
+  socketTypingLobbyMessageSchema,
+  socketTypingStartMessageSchema,
+  socketTypingProgressMessageSchema,
+  socketTypingEndMessageSchema,
+  socketTypingDeclinedMessageSchema,
+  socketTypingCancelledMessageSchema,
+  socketGameplayErrorMessageSchema,
   socketPokerStateMessageSchema,
   socketPokerHoleMessageSchema,
   socketPokerErrorMessageSchema,

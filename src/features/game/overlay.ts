@@ -17,8 +17,15 @@ export function createSpeechOverlay({
   speechHintEl,
   pushBubble,
 }: SpeechOverlayOptions) {
+  let lastStatus: string | null = null;
+  let lastSpeech = "";
+  let speechVisible = false;
+  let speechLockTtl = 0;
+
   function setStatus(text: string) {
     if (!statusEl) return;
+    if (text === lastStatus) return;
+    lastStatus = text;
     if (!text) {
       statusEl.textContent = "";
       statusEl.style.opacity = "0";
@@ -33,14 +40,25 @@ export function createSpeechOverlay({
 
   function showSpeech(text: string, speaker?: string, hint?: string) {
     if (!speechEl) return;
-    if (speechBodyEl) speechBodyEl.textContent = text;
-    if (speechNameEl) speechNameEl.textContent = speaker || "Aviso";
-    if (speechHintEl) speechHintEl.textContent = hint || "[E]";
-    speechEl.classList.add("visible");
+    const resolvedSpeaker = speaker || "Aviso";
+    const resolvedHint = hint || "[E]";
+    const signature = `${resolvedSpeaker}\u0000${text}\u0000${resolvedHint}`;
+    if (signature !== lastSpeech) {
+      lastSpeech = signature;
+      if (speechBodyEl) speechBodyEl.textContent = text;
+      if (speechNameEl) speechNameEl.textContent = resolvedSpeaker;
+      if (speechHintEl) speechHintEl.textContent = resolvedHint;
+    }
+    if (!speechVisible) {
+      speechVisible = true;
+      speechEl.classList.add("visible");
+    }
   }
 
   function hideSpeech() {
     if (!speechEl) return;
+    if (!speechVisible) return;
+    speechVisible = false;
     speechEl.classList.remove("visible");
   }
 
@@ -52,7 +70,7 @@ export function createSpeechOverlay({
 
     showSpeech(text, speaker, "");
     speechEl.dataset.locked = "1";
-    speechEl.dataset.ttl = "2.6";
+    speechLockTtl = 2.6;
   }
 
   function clearSpeech() {
@@ -63,13 +81,11 @@ export function createSpeechOverlay({
 
   function releaseSpeechLock(dt: number) {
     if (!speechEl) return;
-    if (speechEl.dataset.ttl) {
-      const ttl = Math.max(0, Number(speechEl.dataset.ttl) - dt);
-      speechEl.dataset.ttl = String(ttl);
-      if (ttl <= 0) {
+    if (speechLockTtl > 0) {
+      speechLockTtl = Math.max(0, speechLockTtl - dt);
+      if (speechLockTtl <= 0) {
         speechEl.dataset.locked = "0";
         hideSpeech();
-        delete speechEl.dataset.ttl;
       }
     }
   }

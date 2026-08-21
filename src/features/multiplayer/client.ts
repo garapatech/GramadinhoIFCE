@@ -38,9 +38,28 @@ type MultiplayerConnection = {
   sendPvpThrow: (matchId: string, dx: number, dz: number, x: number, z: number) => void;
   sendPvpHit: (matchId: string, victim: string) => void;
   sendPvpQuit: (matchId: string) => void;
-  sendEspectroConsumed: (seed: string | number | null | undefined) => void;
+  sendEspectroConsumed: (seed: string | number | null | undefined, outcome?: "lost" | "won") => void;
+  sendEspectroDuelStart: (seed: string | number | null | undefined) => void;
+  sendEspectroDuelHit: (seed: string | number | null | undefined, sequence: number) => void;
   sendVoiceReady: (enabled: boolean, muted?: boolean) => void;
   sendVoiceSignal: (target: string, signal: VoiceSignal) => void;
+  sendMediaSet: (url: string) => void;
+  sendMediaControl: (action: "pause" | "resume" | "stop" | "volume", volume?: number) => void;
+  sendItemPickup: (itemId: "bat" | "umbrella" | "biriba-ball") => void;
+  sendItemUse: (itemId: "bat" | "umbrella" | "biriba-ball", sequence: number, targetId?: string) => void;
+  sendSwimChallenge: (to: string) => void;
+  sendSwimRespond: (matchId: string, accepted: boolean) => void;
+  sendSwimStroke: (matchId: string, sequence: number) => void;
+  sendSwimQuit: (matchId: string) => void;
+  sendTypingSolo: (computerId: string) => void;
+  sendTypingChallenge: (to: string, computerId: string) => void;
+  sendTypingRespond: (matchId: string, accepted: boolean) => void;
+  sendTypingRoomCreate: (computerId: string) => void;
+  sendTypingRoomJoin: (roomId: string) => void;
+  sendTypingRoomLeave: (roomId: string) => void;
+  sendTypingRoomStart: (roomId: string) => void;
+  sendTypingInput: (matchId: string, typed: string, sequence: number) => void;
+  sendTypingQuit: (matchId: string) => void;
   sendPokerSit: (seatIndex: number) => void;
   sendPokerStand: () => void;
   sendPokerAction: (
@@ -179,9 +198,19 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendMessage({ type: "pvp-quit", matchId });
   }
 
-  function sendEspectroConsumed(seed: string | number | null | undefined) {
+  function sendEspectroConsumed(seed: string | number | null | undefined, outcome: "lost" | "won" = "lost") {
     if (seed == null) return;
-    sendMessage({ type: "espectro-consumed", seed: String(seed) });
+    sendMessage({ type: "espectro-consumed", seed: String(seed), outcome });
+  }
+
+  function sendEspectroDuelStart(seed: string | number | null | undefined) {
+    if (seed == null) return;
+    sendMessage({ type: "espectro-duel-start", seed: String(seed) });
+  }
+
+  function sendEspectroDuelHit(seed: string | number | null | undefined, sequence: number) {
+    if (seed == null) return;
+    sendMessage({ type: "espectro-duel-hit", seed: String(seed), sequence });
   }
 
   function sendVoiceSignal(target: string, signal: VoiceSignal) {
@@ -191,6 +220,81 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
       target,
       signal,
     });
+  }
+
+  function sendMediaSet(url: string) {
+    const value = url.trim();
+    if (!value) return;
+    sendMessage({ type: "media-set", url: value });
+  }
+
+  function sendMediaControl(action: "pause" | "resume" | "stop" | "volume", volume?: number) {
+    if (action === "volume") {
+      if (typeof volume !== "number" || !Number.isFinite(volume)) return;
+      sendMessage({ type: "media-control", action, volume: Math.max(0, Math.min(1, volume)) });
+      return;
+    }
+    sendMessage({ type: "media-control", action });
+  }
+
+  function sendItemPickup(itemId: "bat" | "umbrella" | "biriba-ball") {
+    sendMessage({ type: "item-pickup", itemId });
+  }
+
+  function sendItemUse(itemId: "bat" | "umbrella" | "biriba-ball", sequence: number, targetId?: string) {
+    sendMessage({ type: "item-use", itemId, sequence, ...(targetId ? { targetId } : {}) });
+  }
+
+  function sendSwimChallenge(to: string) {
+    if (to) sendMessage({ type: "swim-challenge", to });
+  }
+
+  function sendSwimRespond(matchId: string, accepted: boolean) {
+    if (matchId) sendMessage({ type: "swim-respond", matchId, accepted });
+  }
+
+  function sendSwimStroke(matchId: string, sequence: number) {
+    if (matchId) sendMessage({ type: "swim-stroke", matchId, sequence });
+  }
+
+  function sendSwimQuit(matchId: string) {
+    if (matchId) sendMessage({ type: "swim-quit", matchId });
+  }
+
+  function sendTypingSolo(computerId: string) {
+    if (computerId) sendMessage({ type: "typing-solo", computerId });
+  }
+
+  function sendTypingChallenge(to: string, computerId: string) {
+    if (to && computerId) sendMessage({ type: "typing-challenge", to, computerId });
+  }
+
+  function sendTypingRespond(matchId: string, accepted: boolean) {
+    if (matchId) sendMessage({ type: "typing-respond", matchId, accepted });
+  }
+
+  function sendTypingRoomCreate(computerId: string) {
+    if (computerId) sendMessage({ type: "typing-room-create", computerId });
+  }
+
+  function sendTypingRoomJoin(roomId: string) {
+    if (roomId) sendMessage({ type: "typing-room-join", roomId });
+  }
+
+  function sendTypingRoomLeave(roomId: string) {
+    if (roomId) sendMessage({ type: "typing-room-leave", roomId });
+  }
+
+  function sendTypingRoomStart(roomId: string) {
+    if (roomId) sendMessage({ type: "typing-room-start", roomId });
+  }
+
+  function sendTypingInput(matchId: string, typed: string, sequence: number) {
+    if (matchId) sendMessage({ type: "typing-input", matchId, typed, sequence });
+  }
+
+  function sendTypingQuit(matchId: string) {
+    if (matchId) sendMessage({ type: "typing-quit", matchId });
   }
 
   function sendPokerSit(seatIndex: number) {
@@ -258,8 +362,27 @@ export function connectMultiplayer({ nickname, avatar, onEvent, host }: ConnectM
     sendPvpHit,
     sendPvpQuit,
     sendEspectroConsumed,
+    sendEspectroDuelStart,
+    sendEspectroDuelHit,
     sendVoiceReady,
     sendVoiceSignal,
+    sendMediaSet,
+    sendMediaControl,
+    sendItemPickup,
+    sendItemUse,
+    sendSwimChallenge,
+    sendSwimRespond,
+    sendSwimStroke,
+    sendSwimQuit,
+    sendTypingSolo,
+    sendTypingChallenge,
+    sendTypingRespond,
+    sendTypingRoomCreate,
+    sendTypingRoomJoin,
+    sendTypingRoomLeave,
+    sendTypingRoomStart,
+    sendTypingInput,
+    sendTypingQuit,
     sendPokerSit,
     sendPokerStand,
     sendPokerAction,

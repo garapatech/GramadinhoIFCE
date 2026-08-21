@@ -72,6 +72,7 @@ export function createNoticeTexture(): CampusNoticeTexture {
   const { canvas, ctx } = createCanvas(512, 256);
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
+  let lastRenderKey = "";
 
   const noticeLines = [
     "Biblioteca aberta ate 21h",
@@ -136,6 +137,17 @@ export function createNoticeTexture(): CampusNoticeTexture {
     const isRainy = weatherKind === "rain" || (state.weather?.rain ?? 0) > 0.08;
     const isCloudy = weatherKind === "cloudy" || (state.weather?.cloudMix ?? 0) > 0.35;
     const isNight = (state.daylight ?? 1) < 0.26;
+    // O conteudo do mural muda no maximo a cada 12 s. Sem este cache, o
+    // canvas inteiro era redesenhado e enviado novamente a GPU a cada frame.
+    const renderKey = [
+      state.clock || "--:--",
+      state.label || "campus",
+      state.weatherLabel || "",
+      isRainy ? "rain" : isNight ? "night" : isCloudy ? "cloudy" : "clear",
+      Math.floor(time / 12),
+    ].join("|");
+    if (renderKey === lastRenderKey) return;
+    lastRenderKey = renderKey;
     const baseLines = [
       `Agora: ${state.clock || "--:--"} • ${state.label || "campus"}`,
       state.weatherLabel ? `Clima: ${state.weatherLabel}` : "Clima: observando o patio",

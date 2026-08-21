@@ -25,6 +25,8 @@ let audioRadioGain: GainNode | null = null;
 let audioNextBirdAt = 0;
 let audioNextRadioAt = 0;
 let audioFootstepSide = 1;
+let audioResumePending = false;
+let audioLastAmbientUpdateAt = -Infinity;
 
 const rand = (min, max) => min + Math.random() * (max - min);
 
@@ -35,6 +37,7 @@ export function resetGameAudio() {
   audioNextBirdAt = 0;
   audioNextRadioAt = 0;
   audioFootstepSide = 1;
+  audioLastAmbientUpdateAt = -Infinity;
 }
 
 export function readAmbientAudioState(): AmbientAudioState {
@@ -140,8 +143,11 @@ export function ensureAmbientAudio() {
     audioRadioGain = radioLayer.gain;
   }
 
-  if (audioContext.state === "suspended") {
-    audioContext.resume().catch(() => {});
+  if (audioContext.state === "suspended" && !audioResumePending) {
+    audioResumePending = true;
+    audioContext.resume().catch(() => {}).finally(() => {
+      audioResumePending = false;
+    });
   }
 
   const masterGain = audioMasterGain;
@@ -453,10 +459,11 @@ function playCampusRadioJingle(now, intensity = 1) {
 
 export function updateAmbientAudio(_time: number, state: AtmosphereState) {
   if (!ambientAudioEnabled) return;
-  ensureAmbientAudio();
   if (!audioContext || audioContext.state !== "running") return;
 
   const now = audioContext.currentTime;
+  if (now - audioLastAmbientUpdateAt < 0.1) return;
+  audioLastAmbientUpdateAt = now;
   const daylight = state.daylight;
   const weather: AtmosphereWeatherState = state.weather || {
     kind: "sol",
@@ -564,6 +571,8 @@ export function destroyGameAudio() {
   audioRadioGain = null;
   audioNextBirdAt = 0;
   audioNextRadioAt = 0;
+  audioResumePending = false;
+  audioLastAmbientUpdateAt = -Infinity;
   if (audioContext) {
     audioContext.close?.().catch(() => {});
   }

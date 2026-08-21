@@ -9,6 +9,7 @@ const ACTIVITY_LABEL: Record<GameOnlinePlayer["activity"], string> = {
   crouching: "agachado",
   sitting: "sentado",
   riding: "pedalando",
+  swimming: "nadando",
   emoting: "emote",
 };
 
@@ -16,12 +17,14 @@ type OnlinePlayersPanelProps = {
   players: GameOnlinePlayer[];
   pvpState: GamePvpState | null;
   onChallenge: (playerId: string) => void;
+  onSwimChallenge?: (playerId: string) => void;
 };
 
 export default function OnlinePlayersPanel({
   players,
   pvpState,
   onChallenge,
+  onSwimChallenge,
 }: OnlinePlayersPanelProps) {
   return (
     <div className="players-panel" role="dialog" aria-label="Jogadores online">
@@ -44,14 +47,24 @@ export default function OnlinePlayersPanel({
               {player.voiceEnabled ? (player.voiceMuted ? "mutado" : "voz") : "sem voz"}
             </span>
             {!player.isYou && !pvpState && (
-              <button
-                type="button"
-                className="players-pvp-btn"
-                onClick={() => onChallenge(player.id)}
-                title="Desafiar para queimado"
-              >
-                🏐
-              </button>
+              <span className="players-challenge-actions">
+                <button
+                  type="button"
+                  className="players-pvp-btn"
+                  onClick={() => onChallenge(player.id)}
+                  title="Desafiar para queimado"
+                >
+                  🏐
+                </button>
+                <button
+                  type="button"
+                  className="players-pvp-btn"
+                  onClick={() => onSwimChallenge?.(player.id)}
+                  title="Desafiar para natação"
+                >
+                  🏊
+                </button>
+              </span>
             )}
           </div>
         ))}

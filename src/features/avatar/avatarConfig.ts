@@ -33,8 +33,14 @@ export function avatarToGameAppearance(avatar: unknown) {
     skinColor: hexToInt(normalized.skin),
     backpackColor: hexToInt(normalized.backpack),
     hairColor: hexToInt(normalized.hair),
+    accentColor: hexToInt(normalized.accent),
     backpack: normalized.backpackEnabled,
     glasses: normalized.glasses,
+    hairStyle: normalized.hairStyle,
+    outfitStyle: normalized.outfitStyle,
+    faceStyle: normalized.faceStyle,
+    headShape: normalized.headShape,
+    accessory: normalized.accessory,
     scale: 1,
   };
 }

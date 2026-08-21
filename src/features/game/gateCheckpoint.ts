@@ -254,7 +254,11 @@ export function createGateCheckpoint({
     if (gateErrorEl) gateErrorEl.textContent = "";
   }
 
+  let lastGateHudState = "";
   function updateGateHud(visible: boolean) {
+    const state = `${visible ? 1 : 0}:${unlocked ? 1 : 0}:${modalOpen ? 1 : 0}`;
+    if (state === lastGateHudState) return;
+    lastGateHudState = state;
     gateHud.classList.toggle("visible", visible);
     gateHud.classList.toggle("unlocked", unlocked);
     if (gatePhaseEl) gatePhaseEl.textContent = unlocked ? "LIBERADO" : "BLOQUEADO";
@@ -282,6 +286,8 @@ export function createGateCheckpoint({
     unlocked = true;
     closeGateModal();
     gateBlocker.active = false;
+    posts[0].material.color.setHex(0x4f6661);
+    posts[1].material.color.setHex(0x4f6661);
     indicatorMaterial.color.setHex(0x3fbf6b);
     indicatorMaterial.emissive.setHex(0x123f20);
     indicatorMaterial.emissiveIntensity = 0.35;
@@ -344,9 +350,8 @@ export function createGateCheckpoint({
         Math.min(1, dt * (unlocked ? 4.5 : 8))
       );
       armHub.rotation.y = armRotation;
-      posts[0].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
-      posts[1].material.color.setHex(unlocked ? 0x4f6661 : 0x55636a);
-      this.label = unlocked ? "Entrada liberada" : "Digite sua matricula";
+      const nextLabel = unlocked ? "Entrada liberada" : "Digite sua matricula";
+      if (this.label !== nextLabel) this.label = nextLabel;
       const visible = getDistance2D(player.position, this.position) <= 5.4;
       updateGateHud(visible);
     },

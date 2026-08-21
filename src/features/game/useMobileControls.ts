@@ -12,7 +12,7 @@ type UseMobileControlsOptions = {
   mobileRunRef: MutableRefObject<boolean>;
 };
 
-type MobileAction = "jump" | "interact" | "camera";
+type MobileAction = "jump" | "interact";
 
 type PointerLike = {
   clientX: number;
@@ -96,10 +96,8 @@ export function useMobileControls({ gameApiRef, mobileRunRef }: UseMobileControl
 
     if (action === "jump") {
       gameApiRef.current?.queueMobileJump?.();
-    } else if (action === "interact") {
+    } else {
       gameApiRef.current?.queueMobileInteract?.();
-    } else if (action === "camera") {
-      gameApiRef.current?.toggleCameraMode?.();
     }
   }
 

@@ -5,7 +5,7 @@ import { createCameraController } from "@/game/camera";
 import { defaultAtmosphereState } from "@/shared/schemas/atmosphere";
 import { getEmoteDuration, type EmoteKind } from "@/features/game/emotes";
 import { createEspectroEvent } from "@/features/game/minigames/espectro";
-import { createSwimmingMinigame } from "@/features/game/minigames/swimming";
+import { applySwimPose, createSwimmingMinigame } from "@/features/game/minigames/swimming";
 import { createParkourCircuit } from "@/features/game/minigames/parkour";
 import type {
   Blocker,
@@ -22,18 +22,10 @@ import { createGameInputBindings } from "@/features/game/inputBindings";
 import { createSpeechOverlay } from "@/features/game/overlay";
 import { createNpcSync } from "@/features/game/npcSync";
 import type { SocketInboundMessage } from "@/shared/schemas/multiplayer";
-import {
-  attachElectricAura,
-  clearElectricEffects,
-  initElectricEffects,
-  tickElectricCooldowns,
-  tryNpcElectricMotion,
-  tryNpcElectricStep,
-  updateElectricEffects,
-} from "@/features/game/electricEffects";
 import { renderMinimap } from "@/game/minimap";
 import { createWeatherSystem } from "@/game/weather";
 import { disposeObject3D } from "@/game/disposeObject3D";
+import { mergeStaticMeshesByMaterial } from "@/game/mergeStaticMeshes";
 import { getCampusSurfaceAt } from "@/game/world/campusSurface";
 import {
   buildBlocoTelematica,
@@ -81,6 +73,8 @@ import {
   animateCelebrate,
   animateDance,
   animateGlitch,
+  animateJump,
+  animateLanding,
   animateRun,
   animateSixSeven,
   animateWalk,
@@ -89,6 +83,7 @@ import {
   setCrouchPose,
   setRestPose,
   setSittingPose,
+  type CharacterRigRefs,
 } from "@/game/characterRig";
 import {
   formatSeconds,
@@ -101,6 +96,8 @@ import {
 } from "@/game/playerInteractions";
 
 type NpcSnapshotList = Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"];
+type WorldItemState = Extract<SocketInboundMessage, { type: "item-state" }>["state"];
+type ItemActionMessage = Extract<SocketInboundMessage, { type: "item-action" }>;
 type MapBuilding = Pick<CampusBuildingDefinition, "x" | "z" | "width" | "depth" | "color" | "roof"> &
   Partial<Pick<CampusBuildingDefinition, "height" | "name">>;
 type MapFeatures = {
@@ -156,13 +153,21 @@ export function bootGame(opts: BootGameOptions = {}) {
   const onPlayerStateChange = asHandler(opts.onPlayerStateChange);
   const onEmote = asHandler(opts.onEmote);
   const onMediaBoothInteract = asHandler(opts.onMediaBoothInteract);
+  const onComputerInteract = asHandler(opts.onComputerInteract);
+  const onItemPickup = asHandler(opts.onItemPickup);
+  const onItemUse = asHandler(opts.onItemUse);
+  const onSwimStroke = asHandler(opts.onSwimStroke);
+  const onSwimQuit = asHandler(opts.onSwimQuit);
   const onPvpThrow = asHandler(opts.onPvpThrow);
   const onPvpHit = asHandler(opts.onPvpHit);
   const onEspectroConsumed = asHandler(opts.onEspectroConsumed);
+  const onEspectroDuelStart = asHandler(opts.onEspectroDuelStart);
+  const onEspectroDuelHit = asHandler(opts.onEspectroDuelHit);
   const onSecretDisconnect = asHandler(opts.onSecretDisconnect);
   const onPokerSeatInteract = asHandler(opts.onPokerSeatInteract);
   const onChessSeatInteract = asHandler(opts.onChessSeatInteract);
   const shouldIgnoreKeys = asHandler(opts.shouldIgnoreKeys, () => false);
+  const canStartBiribaSecret = asHandler(opts.canStartBiribaSecret, () => true);
   const getWorldTime = asFunction(opts.getWorldTime);
   const broadcastEmote = (kind: EmoteKind, duration: number) => onEmote({ kind, duration });
 
@@ -202,14 +207,25 @@ export function bootGame(opts: BootGameOptions = {}) {
   scene.background = sceneBackgroundColor;
   scene.fog = sceneFog;
 
+  const coarsePointer = window.matchMedia?.("(hover: none), (pointer: coarse)").matches ?? false;
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
+  const cpuCores = navigator.hardwareConcurrency || 8;
+  const lowPowerHint = coarsePointer || deviceMemory <= 4 || cpuCores <= 4;
+  type RenderQuality = "high" | "balanced" | "low" | "performance";
+  let renderQuality: RenderQuality = lowPowerHint ? "balanced" : "high";
+
   const renderer = new THREE.WebGLRenderer({
     canvas,
-    antialias: true,
+    // MSAA cannot be disabled after the WebGL context is created. It made the
+    // adaptive quality setting ineffective on slower GPUs, especially around
+    // the denser center of campus. The low-poly art remains crisp without it.
+    antialias: false,
     powerPreference: "high-performance"
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  const pixelRatioCap = renderQuality === "high" ? 1.2 : 0.9;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
   renderer.setClearColor(0xa7d7f7, 1);
-  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.enabled = renderQuality === "high";
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 500);
@@ -236,16 +252,18 @@ scene.add(ambient);
 
 const sun = new THREE.DirectionalLight(0xffffff, 2.3);
 sun.position.set(28, 42, 18);
-sun.castShadow = true;
-sun.shadow.mapSize.width = 1024;
-sun.shadow.mapSize.height = 1024;
-sun.shadow.camera.left = -70;
-sun.shadow.camera.right = 70;
-sun.shadow.camera.top = 70;
-sun.shadow.camera.bottom = -70;
+sun.castShadow = renderQuality === "high";
+sun.shadow.mapSize.width = renderQuality === "high" ? 1024 : 512;
+sun.shadow.mapSize.height = renderQuality === "high" ? 1024 : 512;
+const shadowExtent = coarsePointer ? 28 : 38;
+sun.shadow.camera.left = -shadowExtent;
+sun.shadow.camera.right = shadowExtent;
+sun.shadow.camera.top = shadowExtent;
+sun.shadow.camera.bottom = -shadowExtent;
 sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 120;
-scene.add(sun);
+sun.shadow.camera.far = 100;
+sun.shadow.normalBias = 0.025;
+scene.add(sun, sun.target);
 
 scene.add(new THREE.AmbientLight(0x88aa88, 0.35));
 
@@ -272,6 +290,17 @@ const tempFogColor = new THREE.Color();
 const tempGroundColor = new THREE.Color();
 let lastAtmosphereKey = "";
 let currentAtmosphereState: AtmosphereState = defaultAtmosphereState;
+function updateSunAnchor(state: AtmosphereState) {
+  const lightCenter = playerPositionTarget?.position ?? defaultPlayerPosition;
+  sun.position.set(
+    lightCenter.x + 28 - state.daylight * 10,
+    18 + state.daylight * 28,
+    lightCenter.z + 18 + state.daylight * 8,
+  );
+  sun.target.position.set(lightCenter.x, 0, lightCenter.z);
+  sun.target.updateMatrixWorld();
+}
+
 function applyAtmosphere(state: AtmosphereState) {
   const duskMix = Math.min(Math.max(1 - state.daylight * 1.2, 0), 1);
   const nightMix = state.daylight <= 0 ? 1 : Math.max(0, 1 - state.daylight * 1.8);
@@ -292,7 +321,7 @@ function applyAtmosphere(state: AtmosphereState) {
 
   sun.intensity = Math.max(0.34, 0.32 + state.daylight * 2.2 - state.weather.rain * 0.45 - state.weather.cloudMix * 0.18);
   sun.color.setHex(state.daylight > 0.5 ? (state.weather.rain ? 0xe4e8f4 : 0xfff4d6) : state.daylight > 0.1 ? 0xffcab4 : 0xc9d7ff);
-  sun.position.set(28 - state.daylight * 10, 18 + state.daylight * 28, 18 + state.daylight * 8);
+  updateSunAnchor(state);
 
   const groundWetness = weatherSystem.getGroundWetness();
   ground.material.color.copy(groundColor).lerp(wetGroundColor, state.weather.rain * 0.12 + groundWetness * 0.08);
@@ -383,7 +412,6 @@ const campusBannerTexture = createCampusBannerTexture();
 
 const world = new THREE.Group();
 scene.add(world);
-initElectricEffects(world);
 
 const blockers: Blocker[] = [];
 const mapFeatures: MapFeatures = {
@@ -396,6 +424,23 @@ const decorativeProps: Array<{ update?: (dt: number, time: number) => void }> = 
 const cameraFrustum = new THREE.Frustum();
 const cameraMatrix = new THREE.Matrix4();
 const tempSphere = new THREE.Sphere();
+let visibilitySyncCooldown = 0;
+const detachedWorldRenderables = new Set<THREE.Object3D>();
+const culledUpdateAccumulators = new WeakMap<THREE.Object3D, number>();
+function consumeEntityUpdateDelta(group: THREE.Object3D, dt: number) {
+  if (!detachedWorldRenderables.has(group)) {
+    const carried = culledUpdateAccumulators.get(group) ?? 0;
+    culledUpdateAccumulators.delete(group);
+    return Math.min(0.15, dt + carried);
+  }
+  const accumulated = (culledUpdateAccumulators.get(group) ?? 0) + dt;
+  if (accumulated < 0.1) {
+    culledUpdateAccumulators.set(group, accumulated);
+    return 0;
+  }
+  culledUpdateAccumulators.set(group, 0);
+  return Math.min(0.15, accumulated);
+}
 const ENTITY_CULL_DIST = {
   npc: 40,
   duck: 30,
@@ -414,6 +459,7 @@ const weatherSystem = createWeatherSystem({
   rand,
   getPlayerPosition: () => playerPositionTarget?.position ?? defaultPlayerPosition,
   disposeObject3D,
+  lowPowerMode: lowPowerHint,
 });
 
 const ground = new THREE.Mesh(
@@ -427,19 +473,22 @@ const ground = new THREE.Mesh(
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 world.add(ground);
+ground.updateMatrix();
+ground.matrixAutoUpdate = false;
 
 const walkways = new THREE.Group();
 world.add(walkways);
+const walkwayMaterial = new THREE.MeshStandardMaterial({
+  color: 0xc8c1b2,
+  roughness: 1,
+  metalness: 0,
+});
 
 function addPath(width, depth, x, z, rotation = 0, surface: CampusSurface = "cement") {
   mapFeatures.paths.push({ width, depth, x, z, rotation, surface });
   const path = new THREE.Mesh(
     new THREE.PlaneGeometry(width, depth),
-    new THREE.MeshStandardMaterial({
-      color: 0xc8c1b2,
-      roughness: 1,
-      metalness: 0
-    })
+    walkwayMaterial,
   );
   path.rotation.x = -Math.PI / 2;
   path.rotation.z = rotation;
@@ -451,6 +500,12 @@ function addPath(width, depth, x, z, rotation = 0, surface: CampusSurface = "cem
 for (const path of campusPaths) {
   addPath(path.width, path.depth, path.x, path.z, path.rotation || 0, path.surface || "cement");
 }
+mergeStaticMeshesByMaterial(
+  walkways,
+  walkways.children.filter((child): child is THREE.Mesh => child instanceof THREE.Mesh),
+);
+walkways.updateMatrix();
+walkways.matrixAutoUpdate = false;
 
 function createBlocker(minX, maxX, minZ, maxZ, options: BlockerOptions = {}) {
   const blocker = {
@@ -464,19 +519,22 @@ function createBlocker(minX, maxX, minZ, maxZ, options: BlockerOptions = {}) {
   return blocker;
 }
 
+const campusWallMaterial = new THREE.MeshStandardMaterial({
+  color: 0xd8d3c5,
+  roughness: 0.94,
+  metalness: 0.02,
+});
+const campusWallMeshes: THREE.Mesh[] = [];
 function addWallSegment(width, depth, x, z, height = CAMPUS_WALL_HEIGHT) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(width, height, depth),
-    new THREE.MeshStandardMaterial({
-      color: 0xd8d3c5,
-      roughness: 0.94,
-      metalness: 0.02,
-    })
+    campusWallMaterial,
   );
   mesh.position.set(x, height / 2, z);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   world.add(mesh);
+  campusWallMeshes.push(mesh);
   createBlocker(x - width / 2, x + width / 2, z - depth / 2, z + depth / 2);
   return mesh;
 }
@@ -505,6 +563,7 @@ function addCampusPerimeter() {
 }
 
 addCampusPerimeter();
+mergeStaticMeshesByMaterial(world, campusWallMeshes);
 let gateCheckpoint: { destroy(): void } | undefined;
 
 function addBuilding({ x, z, width, depth, height, color, roof, name }) {
@@ -521,19 +580,16 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     map: windowTexture,
     roughness: 0.92,
     metalness: 0.03,
-    transparent: true,
     opacity: 1,
   });
   const roofMat = new THREE.MeshStandardMaterial({
     color: roof,
     roughness: 1,
-    transparent: true,
     opacity: 1,
   });
   const frameMat = new THREE.MeshStandardMaterial({
     color: 0xf3f0e7,
     roughness: 0.8,
-    transparent: true,
     opacity: 1,
   });
   const floorMat = new THREE.MeshStandardMaterial({
@@ -543,7 +599,6 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
   const doorMat = new THREE.MeshStandardMaterial({
     color: 0x6c4a2e,
     roughness: 0.92,
-    transparent: true,
     opacity: 1,
   });
   const accentMat = new THREE.MeshStandardMaterial({
@@ -551,6 +606,9 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     roughness: 0.95,
   });
   const shellMeshes: THREE.Mesh[] = [];
+  const interiorDetails = new THREE.Group();
+  interiorDetails.name = `${name || "estrutura"}.interior`;
+  group.add(interiorDetails);
   const frontSegmentWidth = Math.max(0.9, (width - doorWidth) / 2);
 
   function addShell(geometry, material, px, py, pz) {
@@ -620,26 +678,27 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
   );
   floor.position.set(0, 0.04, 0);
   floor.receiveShadow = true;
-  group.add(floor);
+  interiorDetails.add(floor);
 
   const innerCarpet = new THREE.Mesh(
     new THREE.BoxGeometry(Math.max(1.4, width - 2.4), 0.03, Math.max(1.4, depth - 2.2)),
     new THREE.MeshStandardMaterial({ color: 0xb8d7c0, roughness: 1 })
   );
   innerCarpet.position.set(0, 0.09, -0.12);
-  group.add(innerCarpet);
+  interiorDetails.add(innerCarpet);
 
   const innerBench = new THREE.Mesh(
     new THREE.BoxGeometry(Math.min(4, width - 2.8), 0.22, 0.54),
     accentMat
   );
   innerBench.position.set(0, 0.5, -Math.max(1.4, depth * 0.22));
-  innerBench.castShadow = true;
-  group.add(innerBench);
+  innerBench.castShadow = false;
+  innerBench.receiveShadow = true;
+  interiorDetails.add(innerBench);
 
   const interiorLight = new THREE.PointLight(0xfff0c4, 0.32, Math.max(width, depth) * 1.4, 2);
   interiorLight.position.set(0, height - 0.9, 0);
-  group.add(interiorLight);
+  interiorDetails.add(interiorLight);
 
   if (name) {
     const sign = addShell(
@@ -651,6 +710,10 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     );
     sign.castShadow = true;
   }
+
+  const mergedShellMeshes = mergeStaticMeshesByMaterial(group, shellMeshes);
+  shellMeshes.length = 0;
+  shellMeshes.push(...mergedShellMeshes);
 
   const leftDoorPivot = new THREE.Group();
   leftDoorPivot.position.set(-doorWidth / 2, 0, facadeDepth + 0.03);
@@ -678,6 +741,16 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
 
   group.position.set(x, 0, z);
   world.add(group);
+  group.updateMatrix();
+  group.matrixAutoUpdate = false;
+  interiorDetails.traverse((object) => {
+    object.updateMatrix();
+    object.matrixAutoUpdate = false;
+  });
+  for (const door of [leftDoor, rightDoor]) {
+    door.updateMatrix();
+    door.matrixAutoUpdate = false;
+  }
 
   createBlocker(
     x - width / 2 - 0.9,
@@ -733,6 +806,9 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
     radius: 2.8,
     position: new THREE.Vector3(x, 0, z + depth / 2 - 0.2),
     root: group,
+    cullPosition: new THREE.Vector3(x, height / 2, z),
+    cullRadius: Math.hypot(width / 2, depth / 2, height),
+    cullDistance: 190,
     npcDisabled: () => true,
     interact() {
       if (doorOpen) {
@@ -759,7 +835,22 @@ function addBuilding({ x, z, width, depth, height, color, roof, name }) {
         player.position.x < x + width / 2 - wallThickness - 0.12 &&
         player.position.z > z - depth / 2 + wallThickness + 0.12 &&
         player.position.z < z + depth / 2 - wallThickness - 0.12;
+      const distanceSq =
+        (player.position.x - x) * (player.position.x - x) +
+        (player.position.z - z) * (player.position.z - z);
+      const showInterior = inside || distanceSq < 34 * 34;
+      interiorDetails.visible = showInterior;
+      interiorLight.visible = inside || distanceSq < 22 * 22;
       const opacity = inside ? 0.18 : 1;
+
+      // Outside, these are ordinary opaque walls. Leaving `transparent` on at
+      // opacity 1 forced expensive back-to-front blending across every campus
+      // building. Only the building currently entered needs transparency.
+      for (const material of [bodyMat, roofMat, frameMat, doorMat]) {
+        if (material.transparent === inside) continue;
+        material.transparent = inside;
+        material.needsUpdate = true;
+      }
 
       bodyMat.opacity = opacity;
       bodyMat.depthWrite = opacity > 0.92;
@@ -791,17 +882,20 @@ const ARENA_CZ = campusArena.z;
 const ARENA_W = campusArena.width;
 const ARENA_D = campusArena.depth;
 /* arena build scope */ {
+  const arenaStaticMeshes: THREE.Mesh[] = [];
   const floorMat = new THREE.MeshStandardMaterial({ color: campusArena.floorColor, roughness: 1 });
   const arenaFloor = new THREE.Mesh(new THREE.BoxGeometry(ARENA_W, 0.07, ARENA_D), floorMat);
   arenaFloor.position.set(ARENA_CX, 0.035, ARENA_CZ);
   arenaFloor.receiveShadow = true;
   world.add(arenaFloor);
+  arenaStaticMeshes.push(arenaFloor);
 
   const lineMat = new THREE.MeshStandardMaterial({ color: campusArena.lineColor, roughness: 0.9 });
   function addCourtLine(x, z, w, d) {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, d), lineMat);
     m.position.set(x, 0.07, z);
     world.add(m);
+    arenaStaticMeshes.push(m);
   }
   addCourtLine(ARENA_CX, ARENA_CZ, 0.18, ARENA_D);
   addCourtLine(ARENA_CX, ARENA_CZ - ARENA_D / 2, ARENA_W + 0.18, 0.18);
@@ -823,6 +917,7 @@ const ARENA_D = campusArena.depth;
     post.position.set(px, 1.2, pz);
     post.castShadow = true;
     world.add(post);
+    arenaStaticMeshes.push(post);
   }
 
   // Placa "QUEIMADO"
@@ -833,6 +928,7 @@ const ARENA_D = campusArena.depth;
   signPole.position.set(ARENA_CX, 1.6, ARENA_CZ - ARENA_D / 2 - 1.2);
   signPole.castShadow = true;
   world.add(signPole);
+  arenaStaticMeshes.push(signPole);
 
   const signBoard = new THREE.Mesh(
     new THREE.BoxGeometry(3.8, 1.0, 0.12),
@@ -841,6 +937,9 @@ const ARENA_D = campusArena.depth;
   signBoard.position.set(ARENA_CX, 3.5, ARENA_CZ - ARENA_D / 2 - 1.2);
   signBoard.castShadow = true;
   world.add(signBoard);
+  arenaStaticMeshes.push(signBoard);
+
+  mergeStaticMeshesByMaterial(world, arenaStaticMeshes);
 
   mapFeatures.buildings.push({ x: ARENA_CX, z: ARENA_CZ, width: ARENA_W, depth: ARENA_D, color: campusArena.floorColor, roof: 0xffffff, name: campusArena.name });
 }
@@ -865,6 +964,8 @@ let pokerCamDragX = 0;
 let pokerCamDragY = 0;
 // Resolve a altura do andar do Bloco Telemática (eleva remotos no andar certo).
 let blocoResolveFloorY: ((x: number, z: number, prev: number) => number) | null = null;
+let blocoGetPlayerFloorY: (() => number) | null = null;
+let blocoSetPlayerFloorY: ((value: number) => void) | null = null;
 
 {
   const bloco = buildBlocoTelematica({
@@ -903,9 +1004,12 @@ let blocoResolveFloorY: ((x: number, z: number, prev: number) => number) | null 
       );
       onChessSeatInteract(color);
     },
+    onComputerInteract,
   });
   pokerTable = bloco.poker;
   blocoResolveFloorY = bloco.resolveFloorY;
+  blocoGetPlayerFloorY = bloco.getPlayerFloorY;
+  blocoSetPlayerFloorY = bloco.setPlayerFloorY;
   mapFeatures.buildings.push({
     x: (bloco.bounds.minX + bloco.bounds.maxX) / 2,
     z: (bloco.bounds.minZ + bloco.bounds.maxZ) / 2,
@@ -1061,13 +1165,18 @@ function addRemotePlayer(state) {
     speed: 0,
     activity: state.activity || "idle",
     jumpY: typeof state.jumpY === "number" ? state.jumpY : 0,
+    floorY: typeof state.floorY === "number" ? state.floorY : 0,
+    targetFloorY: typeof state.floorY === "number" ? state.floorY : 0,
     walkPhase: 0,
     ridePhase: 0,
     celebrateTimer: 0,
     celebrateSeed: Math.random() * Math.PI * 2,
     glitchTimer: 0,
-    glitchSeed: Math.random() * Math.PI * 2
+    glitchSeed: Math.random() * Math.PI * 2,
+    ragdollTimer: 0,
+    ragdollSide: getRagdollSide(state.id),
   });
+  applyWorldItems(currentWorldItems, localPlayerIdForItems);
 }
 
 function updateRemotePlayer(state) {
@@ -1082,6 +1191,7 @@ function updateRemotePlayer(state) {
   if (typeof state.speed === "number") r.speed = state.speed;
   if (typeof state.activity === "string") r.activity = state.activity;
   if (typeof state.jumpY === "number") r.jumpY = Math.max(0, state.jumpY);
+  if (typeof state.floorY === "number") r.targetFloorY = THREE.MathUtils.clamp(state.floorY, 0, 64);
 }
 
 function removeRemotePlayer(id) {
@@ -1094,6 +1204,7 @@ function removeRemotePlayer(id) {
     }
   }
   clearChatBubblesFor(id);
+  detachedWorldRenderables.delete(r.group);
   world.remove(r.group);
   disposeObject3D(r.group);
   remotePlayers.delete(id);
@@ -1127,6 +1238,458 @@ function setLocalNick(nick) {
   disposeSprite(localLabel);
   localLabel = createNameLabel(nick || "Você", "#fff8dc", "#62ff9f");
   player.add(localLabel);
+}
+
+const BAT_WORLD_POSITION = new THREE.Vector3(-33.45, pokerTable?.center.y ?? 3.72, 58.2);
+const UMBRELLA_WORLD_POSITION = new THREE.Vector3(1.8, 0, 50.7);
+let localPlayerIdForItems: string | null = null;
+let currentWorldItems: WorldItemState = {
+  batOwnerId: null,
+  umbrellaOwners: [],
+  openUmbrellas: [],
+  biribaBallOwners: [],
+};
+const itemActionTimers = new Map<string, number>();
+const heldUmbrellas = new Map<string, {
+  group: THREE.Group;
+  canopy: THREE.Object3D;
+  targetOpen: boolean;
+  openness: number;
+}>();
+const heldBiribaBalls = new Map<string, THREE.Group>();
+const heldItemWorldPosition = new THREE.Vector3();
+
+function createBatVisual() {
+  const group = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x9a5529, roughness: 0.72 });
+  const grip = new THREE.MeshStandardMaterial({ color: 0x252b31, roughness: 0.9 });
+  // A origem do grupo é o ponto de pega; assim a animação gira o taco pela mão.
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.14, 1.18, 14), wood);
+  body.position.y = 0.76;
+  body.castShadow = true;
+  group.add(body);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.34, 12), grip);
+  handle.position.y = 0.09;
+  handle.castShadow = true;
+  group.add(handle);
+  return group;
+}
+
+function createUmbrellaVisual(open = false) {
+  const group = new THREE.Group();
+  const metal = new THREE.MeshStandardMaterial({ color: 0x66737d, roughness: 0.36, metalness: 0.68 });
+  const fabric = new THREE.MeshStandardMaterial({
+    color: 0x1d7895,
+    roughness: 0.78,
+    side: THREE.DoubleSide,
+  });
+  const stemLength = 1.7;
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.026, stemLength, 8), metal);
+  // A origem também coincide com a empunhadura. A haste é mantida vertical
+  // no espaço do avatar, independentemente da rotação do antebraço.
+  stem.position.y = stemLength / 2;
+  group.add(stem);
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.025, 8, 18, Math.PI * 1.35), metal);
+  handle.position.set(0.07, -0.06, 0);
+  handle.rotation.z = Math.PI * 0.58;
+  group.add(handle);
+  const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.06, 0.36, 18, 1, true), fabric);
+  canopy.position.y = stemLength;
+  canopy.rotation.x = Math.PI;
+  canopy.castShadow = true;
+  canopy.scale.set(open ? 1 : 0.13, 1, open ? 1 : 0.13);
+  group.add(canopy);
+  return { group, canopy, targetOpen: open, openness: open ? 1 : 0 };
+}
+
+function createBiribaBallVisual() {
+  const group = new THREE.Group();
+  const ball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.24, 12, 10),
+    new THREE.MeshStandardMaterial({
+      color: 0x7b36d4,
+      emissive: 0x35106f,
+      emissiveIntensity: 0.55,
+      roughness: 0.48,
+    }),
+  );
+  ball.castShadow = true;
+  group.add(ball);
+  return group;
+}
+
+const batVisual = createBatVisual();
+const batPickupAnchor = new THREE.Group();
+batPickupAnchor.position.copy(BAT_WORLD_POSITION);
+batPickupAnchor.add(batVisual);
+batVisual.position.set(0, 0, 0);
+batVisual.rotation.z = Math.PI / 2;
+world.add(batPickupAnchor);
+
+const umbrellaRack = new THREE.Group();
+const rackPost = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.18, 0.24, 0.72, 12),
+  new THREE.MeshStandardMaterial({ color: 0x394b55, roughness: 0.66, metalness: 0.25 }),
+);
+rackPost.position.y = 0.36;
+rackPost.castShadow = true;
+umbrellaRack.add(rackPost);
+const displayUmbrella = createUmbrellaVisual(false).group;
+displayUmbrella.position.set(0, 0.58, 0);
+displayUmbrella.rotation.z = -0.12;
+umbrellaRack.add(displayUmbrella);
+umbrellaRack.position.copy(UMBRELLA_WORLD_POSITION);
+world.add(umbrellaRack);
+
+interactables.push({
+  kind: "item",
+  label: "Taco escondido",
+  radius: 3.2,
+  position: BAT_WORLD_POSITION.clone(),
+  root: batPickupAnchor,
+  npcDisabled: () => true,
+  isDisabledForPlayer: () => currentWorldItems.batOwnerId !== null,
+  interact: () => onItemPickup("bat"),
+});
+
+interactables.push({
+  kind: "item",
+  label: "Guarda-chuva",
+  radius: 3.5,
+  position: UMBRELLA_WORLD_POSITION.clone(),
+  root: umbrellaRack,
+  npcDisabled: () => true,
+  isDisabledForPlayer: () => !!localPlayerIdForItems && currentWorldItems.umbrellaOwners.includes(localPlayerIdForItems),
+  interact: () => onItemPickup("umbrella"),
+});
+
+function attachItem(group: THREE.Group, target: THREE.Object3D, kind: "bat" | "biriba-ball") {
+  target.add(group);
+  if (kind === "bat") {
+    group.position.set(0, 0, 0);
+    group.rotation.set(-Math.PI / 2, 0.08, -0.24);
+  } else {
+    group.position.set(0, 0, 0.02);
+    group.rotation.set(0, 0, 0);
+  }
+  group.visible = true;
+}
+
+function getItemRig(playerId: string) {
+  if (playerId === localPlayerIdForItems) return playerRig;
+  return remotePlayers.get(playerId)?.rig ?? null;
+}
+
+function applyWorldItems(state: WorldItemState, localId: string | null) {
+  localPlayerIdForItems = localId;
+  currentWorldItems = {
+    batOwnerId: state.batOwnerId,
+    umbrellaOwners: [...state.umbrellaOwners],
+    openUmbrellas: [...state.openUmbrellas],
+    biribaBallOwners: [...state.biribaBallOwners],
+  };
+
+  const batRig = state.batOwnerId ? getItemRig(state.batOwnerId) : null;
+  if (batRig) {
+    attachItem(batVisual, batRig.refs.rightHand, "bat");
+  } else if (!state.batOwnerId) {
+    batPickupAnchor.add(batVisual);
+    batVisual.position.set(0, 0, 0);
+    batVisual.rotation.set(0, 0, Math.PI / 2);
+    batVisual.visible = true;
+  } else {
+    batVisual.visible = false;
+  }
+
+  const owners = new Set(state.umbrellaOwners);
+  for (const [ownerId, entry] of heldUmbrellas) {
+    if (owners.has(ownerId)) continue;
+    entry.group.parent?.remove(entry.group);
+    disposeObject3D(entry.group);
+    heldUmbrellas.delete(ownerId);
+  }
+  for (const ownerId of owners) {
+    const rig = getItemRig(ownerId);
+    if (!rig) continue;
+    let entry = heldUmbrellas.get(ownerId);
+    if (!entry) {
+      entry = createUmbrellaVisual(state.openUmbrellas.includes(ownerId));
+      heldUmbrellas.set(ownerId, entry);
+    }
+    const open = state.openUmbrellas.includes(ownerId);
+    entry.targetOpen = open;
+    rig.group.add(entry.group);
+    entry.group.visible = true;
+  }
+
+  const ballOwners = new Set(state.biribaBallOwners);
+  for (const [ownerId, group] of heldBiribaBalls) {
+    if (ballOwners.has(ownerId)) continue;
+    group.parent?.remove(group);
+    disposeObject3D(group);
+    heldBiribaBalls.delete(ownerId);
+  }
+  for (const ownerId of ballOwners) {
+    const rig = getItemRig(ownerId);
+    if (!rig) continue;
+    let ball = heldBiribaBalls.get(ownerId);
+    if (!ball) {
+      ball = createBiribaBallVisual();
+      heldBiribaBalls.set(ownerId, ball);
+    }
+    attachItem(ball, rig.refs.rightHand, "biriba-ball");
+    ball.visible = state.batOwnerId !== ownerId;
+  }
+}
+
+function playItemAction(event: ItemActionMessage, localId: string | null) {
+  if (event.itemId === "bat" && event.action === "swing") {
+    itemActionTimers.set(event.playerId, 0.68);
+  }
+  if (event.itemId === "umbrella") {
+    const entry = heldUmbrellas.get(event.playerId);
+    if (entry) {
+      const open = event.action === "open";
+      entry.targetOpen = open;
+    }
+  }
+  if (event.itemId === "biriba-ball" && event.action === "throw") {
+    itemActionTimers.set(`${event.playerId}:ball`, 0.34);
+    if (
+      typeof event.x === "number" && typeof event.z === "number" &&
+      typeof event.dx === "number" && typeof event.dz === "number"
+    ) {
+      spawnFunBall(event.x, event.z, event.dx, event.dz);
+    }
+  }
+  if (localId) localPlayerIdForItems = localId;
+}
+
+function findForwardItemTarget(maxDistance: number, minimumFacing: number) {
+  let targetId: string | null = null;
+  let bestScore = Infinity;
+  const forwardX = -Math.sin(player.rotation.y);
+  const forwardZ = -Math.cos(player.rotation.y);
+  const consider = (id: string, position: THREE.Vector3, unavailable = false) => {
+    if (unavailable) return;
+    const dx = position.x - player.position.x;
+    const dz = position.z - player.position.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 0.001 || distance > maxDistance) return;
+    const alignment = (dx * forwardX + dz * forwardZ) / distance;
+    if (alignment < minimumFacing) return;
+    // Favorece quem está de fato na mira, sem ignorar um alvo bem mais perto.
+    const score = distance * (1 + (1 - alignment) * 0.75);
+    if (score >= bestScore) return;
+    bestScore = score;
+    targetId = id;
+  };
+  for (const remote of remotePlayers.values()) {
+    consider(remote.id, remote.group.position, (remote.ragdollTimer || 0) > 0);
+  }
+  for (const npc of npcs) {
+    consider(npc.id, npc.group.position, (npc.ragdollTimer || 0) > 0);
+  }
+  return targetId;
+}
+
+function queueBiribaBallUse() {
+  const localId = localPlayerIdForItems;
+  if (!localId || !currentWorldItems.biribaBallOwners.includes(localId)) return false;
+  const targetId = findForwardItemTarget(18, 0.08);
+  if (!targetId) {
+    speechOverlay.speak("Mire em alguém antes de lançar.", "Bola Errante");
+    return true;
+  }
+  onItemUse("biriba-ball", targetId);
+  return true;
+}
+
+function queueHeldItemUse(preferred?: "umbrella" | "biriba-ball") {
+  const localId = localPlayerIdForItems;
+  if (!localId || playerState.ragdollTimer > 0 || playerState.sitting) return;
+  if (preferred === "umbrella" && currentWorldItems.umbrellaOwners.includes(localId)) {
+    onItemUse("umbrella", null);
+    return;
+  }
+  if (preferred === "biriba-ball") {
+    queueBiribaBallUse();
+    return;
+  }
+  if (currentWorldItems.batOwnerId === localId) {
+    const targetId = findForwardItemTarget(3.05, 0.12);
+    onItemUse("bat", targetId);
+    return;
+  }
+  if (queueBiribaBallUse()) return;
+  if (currentWorldItems.umbrellaOwners.includes(localId)) {
+    onItemUse("umbrella", null);
+  }
+}
+
+function applyRagdoll(targetId: string, duration: number, localId: string | null) {
+  if (targetId === localId) {
+    playerState.ragdollTimer = Math.max(playerState.ragdollTimer, duration);
+    playerState.ragdollSide = getRagdollSide(targetId);
+    playerVelocity.set(0, 0);
+    return;
+  }
+  const remote = remotePlayers.get(targetId);
+  if (remote) {
+    remote.ragdollTimer = Math.max(remote.ragdollTimer || 0, duration);
+    remote.ragdollSide = getRagdollSide(targetId);
+    return;
+  }
+  const npc = npcById.get(targetId);
+  if (npc) {
+    npc.ragdollTimer = Math.max(npc.ragdollTimer || 0, duration);
+    npc.ragdollSide = getRagdollSide(targetId);
+    npc.pose = null;
+    npc.dancing = false;
+  }
+}
+
+function getRagdollSide(id: string | null | undefined) {
+  if (!id) return 1;
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return hash % 2 === 0 ? 1 : -1;
+}
+
+function applyRagdollPose(refs: CharacterRigRefs, time: number) {
+  const settle = Math.sin(time * 5.2) * 0.025;
+  refs.torso.rotation.set(0.12, settle, 0.16);
+  refs.head.rotation.set(0.24, -0.12, -0.28);
+  refs.leftShoulder.rotation.set(0.78, 0.12, 0.72);
+  refs.rightShoulder.rotation.set(-0.52, -0.08, -0.86);
+  refs.leftElbow.rotation.set(0.92, 0, -0.08);
+  refs.rightElbow.rotation.set(0.64, 0, 0.12);
+  refs.leftHip.rotation.set(-0.34, 0, 0.3);
+  refs.rightHip.rotation.set(0.46, 0, -0.28);
+  refs.leftKnee.rotation.x = 0.78;
+  refs.rightKnee.rotation.x = 0.5;
+}
+
+function applyRagdollRoot(group: THREE.Group, side: number, floorY: number, dt: number) {
+  const blend = 1 - Math.exp(-dt * 14);
+  group.rotation.x = THREE.MathUtils.lerp(group.rotation.x, 0.08, blend);
+  group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, side * 1.48, blend);
+  group.position.y = THREE.MathUtils.lerp(group.position.y, floorY + 0.42, blend);
+}
+
+function clearRagdollRoot(group: THREE.Group) {
+  group.rotation.x = 0;
+  group.rotation.z = 0;
+}
+
+function updateHeldItems(dt: number, time: number) {
+  for (const [playerId, timer] of [...itemActionTimers]) {
+    const next = timer - dt;
+    if (next <= 0) itemActionTimers.delete(playerId);
+    else itemActionTimers.set(playerId, next);
+  }
+
+  const applyHeldPose = (
+    playerId: string,
+    rig: ReturnType<typeof createCharacter>,
+    blocked = false,
+  ) => {
+    const refs = rig.refs;
+    const ownsBat = currentWorldItems.batOwnerId === playerId;
+    const ownsUmbrella = currentWorldItems.umbrellaOwners.includes(playerId);
+    const ownsBiribaBall = currentWorldItems.biribaBallOwners.includes(playerId);
+    const umbrella = heldUmbrellas.get(playerId);
+    const biribaBall = heldBiribaBalls.get(playerId);
+    if (ownsBat && batVisual.parent === refs.rightHand) batVisual.visible = !blocked;
+    if (biribaBall) {
+      const throwing = (itemActionTimers.get(`${playerId}:ball`) ?? 0) > 0;
+      biribaBall.visible = !blocked && !ownsBat && !throwing;
+    }
+    if (umbrella) umbrella.group.visible = !blocked;
+    if (blocked) return;
+
+    if (ownsBat) {
+      const timer = itemActionTimers.get(playerId) ?? 0;
+      const progress = timer > 0 ? THREE.MathUtils.clamp(1 - timer / 0.68, 0, 1) : 0;
+      let shoulderX = -0.26;
+      let shoulderY = -0.08;
+      let shoulderZ = -0.22;
+      let elbowX = 0.52;
+      let torsoY = refs.torso.rotation.y * 0.55;
+      let batTwist = -0.24;
+      if (timer > 0 && progress < 0.3) {
+        const t = THREE.MathUtils.smoothstep(progress / 0.3, 0, 1);
+        shoulderX = THREE.MathUtils.lerp(-0.26, 0.58, t);
+        shoulderY = THREE.MathUtils.lerp(-0.08, -0.42, t);
+        shoulderZ = THREE.MathUtils.lerp(-0.22, -0.94, t);
+        elbowX = THREE.MathUtils.lerp(0.52, 1.02, t);
+        torsoY = THREE.MathUtils.lerp(0, 0.34, t);
+        batTwist = THREE.MathUtils.lerp(-0.24, -0.72, t);
+      } else if (timer > 0 && progress < 0.68) {
+        const t = THREE.MathUtils.smoothstep((progress - 0.3) / 0.38, 0, 1);
+        shoulderX = THREE.MathUtils.lerp(0.58, -1.48, t);
+        shoulderY = THREE.MathUtils.lerp(-0.42, 0.48, t);
+        shoulderZ = THREE.MathUtils.lerp(-0.94, 0.58, t);
+        elbowX = THREE.MathUtils.lerp(1.02, 0.28, t);
+        torsoY = THREE.MathUtils.lerp(0.34, -0.42, t);
+        batTwist = THREE.MathUtils.lerp(-0.72, 0.62, t);
+      } else if (timer > 0) {
+        const t = THREE.MathUtils.smoothstep((progress - 0.68) / 0.32, 0, 1);
+        shoulderX = THREE.MathUtils.lerp(-1.48, -0.26, t);
+        shoulderY = THREE.MathUtils.lerp(0.48, -0.08, t);
+        shoulderZ = THREE.MathUtils.lerp(0.58, -0.22, t);
+        elbowX = THREE.MathUtils.lerp(0.28, 0.52, t);
+        torsoY = THREE.MathUtils.lerp(-0.42, 0, t);
+        batTwist = THREE.MathUtils.lerp(0.62, -0.24, t);
+      }
+      refs.rightShoulder.rotation.set(shoulderX, shoulderY, shoulderZ);
+      refs.rightElbow.rotation.x = elbowX;
+      refs.torso.rotation.y = torsoY;
+      batVisual.rotation.set(-Math.PI / 2, 0.08, batTwist);
+    }
+    if (ownsUmbrella) {
+      const open = currentWorldItems.openUmbrellas.includes(playerId);
+      refs.leftShoulder.rotation.x = open ? -0.48 : -0.16;
+      // O ombro esquerdo usa Z negativo para afastar a mão do corpo. O sinal
+      // anterior cruzava o braço na frente da cabeça e colocava a cobertura
+      // dentro da câmera.
+      refs.leftShoulder.rotation.z = open ? -0.42 : -0.24;
+      refs.leftElbow.rotation.x = open ? 0.72 : 0.34;
+      if (umbrella) {
+        refs.leftHand.getWorldPosition(heldItemWorldPosition);
+        rig.group.worldToLocal(heldItemWorldPosition);
+        umbrella.group.position.copy(heldItemWorldPosition);
+        umbrella.group.rotation.set(0, 0, open ? -0.035 : 0.08);
+        const target = umbrella.targetOpen ? 1 : 0;
+        umbrella.openness = THREE.MathUtils.lerp(
+          umbrella.openness,
+          target,
+          1 - Math.exp(-dt * 10),
+        );
+        const eased = umbrella.openness * umbrella.openness * (3 - 2 * umbrella.openness);
+        const radial = THREE.MathUtils.lerp(0.13, 1, eased);
+        umbrella.canopy.scale.set(radial, 1, radial);
+      }
+    }
+    if (ownsBiribaBall && !ownsBat) {
+      const throwTimer = itemActionTimers.get(`${playerId}:ball`) ?? 0;
+      const throwAmount = throwTimer > 0 ? Math.sin((1 - throwTimer / 0.34) * Math.PI) : 0;
+      refs.rightShoulder.rotation.x = -0.42 - throwAmount * 1.35;
+      refs.rightShoulder.rotation.z = -0.08 - throwAmount * 0.22;
+      refs.rightElbow.rotation.x = 0.5 - throwAmount * 0.32;
+    }
+  };
+
+  if (localPlayerIdForItems) {
+    applyHeldPose(
+      localPlayerIdForItems,
+      playerRig,
+      playerState.ragdollTimer > 0 || swimmingMinigame?.isPlayerControlled() === true || playerState.sitting,
+    );
+  }
+  for (const remote of remotePlayers.values()) {
+    applyHeldPose(remote.id, remote.rig, (remote.ragdollTimer || 0) > 0 || remote.activity === "sitting" || remote.activity === "riding" || remote.activity === "swimming");
+  }
 }
 
 const chatBubbles = new Map(); // pid -> [{sprite, ttl, height, group}]
@@ -1329,44 +1892,66 @@ function updateBubbles(dt) {
 
 function updateRemotes(dt, time) {
   for (const r of remotePlayers.values()) {
+    const stepDt = consumeEntityUpdateDelta(r.group, dt);
+    if (stepDt <= 0) continue;
     const jumpY = Math.max(0, r.jumpY || 0);
     // Altura do andar (eleva o avatar no andar superior do Bloco Telemática).
-    const floorY = blocoResolveFloorY
-      ? blocoResolveFloorY(r.targetX, r.targetZ, r.floorY ?? 0)
-      : 0;
-    r.floorY = floorY;
+    const resolvedFloorY = typeof r.targetFloorY === "number"
+      ? r.targetFloorY
+      : blocoResolveFloorY ? blocoResolveFloorY(r.targetX, r.targetZ, r.floorY ?? 0) : 0;
+    r.floorY = THREE.MathUtils.lerp(r.floorY ?? 0, resolvedFloorY, 1 - Math.exp(-stepDt * 14));
+    const floorY = r.floorY;
+    if (r.ragdollTimer && r.ragdollTimer > 0) {
+      r.ragdollTimer = Math.max(0, r.ragdollTimer - stepDt);
+      applyRagdollPose(r.rig.refs, time);
+      applyRagdollRoot(r.group, r.ragdollSide || 1, floorY, stepDt);
+      if (r.ragdollTimer <= 0) {
+        clearRagdollRoot(r.group);
+        resetRigPose(r.rig.refs);
+      }
+      continue;
+    }
     if (r.glitchTimer && r.glitchTimer > 0) {
-      r.glitchTimer -= dt;
+      r.glitchTimer -= stepDt;
       setRestPose(r.rig.refs, time, r.glitchSeed || 0);
       animateGlitch(r.rig.refs, time, 1, r.glitchSeed || 0);
       r.group.position.y = floorY + jumpY + Math.sin(time * 14 + (r.glitchSeed || 0)) * 0.06;
       continue;
     }
     if (r.celebrateTimer && r.celebrateTimer > 0) {
-      r.celebrateTimer -= dt;
+      r.celebrateTimer -= stepDt;
       animateCelebrate(r.rig.refs, time + (r.celebrateSeed || 0), 1);
       r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.celebrateSeed || 0)) * 9)) * 0.08;
       continue;
     }
     if (r.sixSevenTimer && r.sixSevenTimer > 0) {
-      r.sixSevenTimer -= dt;
+      r.sixSevenTimer -= stepDt;
       animateSixSeven(r.rig.refs, time, r.sixSevenSeed || 0);
       r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.sixSevenSeed || 0)) * 4.8)) * 0.025;
       if (r.sixSevenTimer <= 0) resetRigPose(r.rig.refs);
       continue;
     }
     if (r.danceTimer && r.danceTimer > 0) {
-      r.danceTimer -= dt;
+      r.danceTimer -= stepDt;
       animateDance(r.rig.refs, time + (r.phaseOffset || 0));
       r.group.position.y = floorY + jumpY + Math.abs(Math.sin((time + (r.phaseOffset || 0)) * 8)) * 0.08;
       continue;
     }
-    const lerp = Math.min(1, dt * 12);
+    const lerp = Math.min(1, stepDt * 12);
     r.group.position.x += (r.targetX - r.group.position.x) * lerp;
     r.group.position.z += (r.targetZ - r.group.position.z) * lerp;
     r.group.rotation.y = lerpAngle(r.group.rotation.y, r.targetRy, lerp);
+    if (r.activity === "swimming") {
+      r.group.rotation.x = THREE.MathUtils.lerp(r.group.rotation.x, -Math.PI / 2, lerp * 0.55);
+      r.group.rotation.z = THREE.MathUtils.lerp(r.group.rotation.z, Math.sin(time * 5.2) * 0.025, lerp * 0.4);
+      r.group.position.y = floorY + 0.38;
+      applySwimPose(r.rig.refs, time, Math.min(1, Math.max(0.25, r.speed / 7.2)));
+      continue;
+    }
+    r.group.rotation.x = THREE.MathUtils.lerp(r.group.rotation.x, 0, lerp * 0.65);
+    r.group.rotation.z = THREE.MathUtils.lerp(r.group.rotation.z, 0, lerp * 0.65);
     if (r.activity === "sitting") {
-      setSittingPose(r.rig.refs);
+      setSittingPose(r.rig.refs, time);
       r.group.position.y = floorY;
       continue;
     }
@@ -1376,7 +1961,7 @@ function updateRemotes(dt, time) {
       continue;
     }
     if (r.activity === "riding") {
-      r.ridePhase += Math.max(0.85, r.speed * 0.95) * dt;
+      r.ridePhase += Math.max(0.85, r.speed * 0.95) * stepDt;
       applyBikeRidePose(r.rig.refs, r.ridePhase, Math.min(r.speed / 10, 1), 0);
       r.group.position.y = floorY + 0.18 + Math.abs(Math.sin(r.ridePhase)) * 0.02 * Math.min(r.speed / 9, 1);
       continue;
@@ -1385,7 +1970,7 @@ function updateRemotes(dt, time) {
     const speedRef = isRun ? 12.5 : 7.2;
     const intensity = Math.min(r.speed / speedRef, 1);
     if (intensity > 0.06) {
-      r.walkPhase += dt * (isRun ? 9.5 : 5.5 + r.speed * 0.6);
+      r.walkPhase += stepDt * (isRun ? 9.5 : 5.5 + r.speed * 0.6);
       if (isRun) animateRun(r.rig.refs, r.walkPhase, intensity);
       else animateWalk(r.rig.refs, r.walkPhase, intensity);
       r.group.position.y = floorY + jumpY + Math.abs(Math.sin(r.walkPhase)) * 0.05 * intensity;
@@ -1621,9 +2206,17 @@ spawnGlow.position.set(CAMPUS_SPAWN.x, 2.2, CAMPUS_SPAWN.z);
 world.add(spawnGlow);
 
 const pvpBalls: PvpBall[] = [];
+const funBalls: Array<{
+  mesh: THREE.Mesh;
+  x: number;
+  z: number;
+  dx: number;
+  dz: number;
+  life: number;
+}> = [];
 let pvpActiveMatch: { matchId: string; opponentId: string | null; side: "A" | "B" | null } | null = null;
 let pvpThrowCooldown = 0;
-let pvpSavedPosition: { x: number; z: number } | null = null;
+let pvpSavedPosition: { x: number; z: number; floorY: number } | null = null;
 let queuedPvpThrow = false;
 const BALL_SPEED = 11;
 const BALL_LIFE = 2.2;
@@ -1655,6 +2248,11 @@ type PlayerRuntimeState = {
   jumping: boolean;
   jumpY: number;
   jumpVel: number;
+  locomotionPhase: number;
+  landingTimer: number;
+  landingIntensity: number;
+  ragdollTimer: number;
+  ragdollSide: number;
 };
 
 const playerState: PlayerRuntimeState = {
@@ -1676,7 +2274,12 @@ const playerState: PlayerRuntimeState = {
   glitchSeed: 0,
   jumping: false,
   jumpY: 0,
-  jumpVel: 0
+  jumpVel: 0,
+  locomotionPhase: 0,
+  landingTimer: 0,
+  landingIntensity: 0,
+  ragdollTimer: 0,
+  ragdollSide: 1,
 };
 const playerActivitySnapshot = {
   kind: "idle",
@@ -3276,6 +3879,8 @@ type NpcEntity = {
   reactionRadius: number;
   reactionCooldown: number;
   reactionTimer: number;
+  ragdollTimer: number;
+  ragdollSide: number;
   reactionHuman: NpcHumanTarget | null;
   chatterCooldown: number;
   thinkRadius: number;
@@ -3776,6 +4381,8 @@ function createNpc(config) {
     reactionRadius: config.reactionRadius || 7,
     reactionCooldown: rand(0.8, 2.6),
     reactionTimer: 0,
+    ragdollTimer: 0,
+    ragdollSide: getRagdollSide(id),
     reactionHuman: null,
     chatterCooldown: getNpcChatterDelay(config),
     thinkRadius: config.thinkRadius || 44,
@@ -4066,7 +4673,13 @@ const lucas = createNpc({
     { x: 22, z: 18 },
     { x: 2, z: -22 }
   ],
-  lines: ["Preciso terminar meu TCC!"],
+  lines: [
+    "Preciso terminar meu TCC!",
+    "Se eu parar agora, perco o prazo da próxima entrega.",
+    "Estou levando água pro laboratório e depois volto ao texto.",
+    "Meu orientador disse para revisar tudo mais uma vez.",
+    "Quase pronto... ou pelo menos é o que eu repito desde ontem.",
+  ],
   interests: {
     board: 0.4
   },
@@ -4131,9 +4744,10 @@ createNpc({
   ],
   lines: [
     "Eu prefiro ficar perto da mesa, mas posso me aproximar.",
-    "Se o player chega correndo, eu dou espaço.",
+    "Se alguém chega correndo, eu costumo dar espaço.",
     "O gramado está melhor quando a movimentação é leve.",
-    "Tem um quiosque novo ali; vou observar de longe."
+    "Tem um quiosque novo ali; vou observar de longe.",
+    "Oi... tudo certo? Eu estava só olhando o movimento daqui."
   ],
   interests: {
     table: 1.6,
@@ -4169,7 +4783,8 @@ createNpc({
     "Se você vier falar comigo, eu já viro na sua direção.",
     "Esse mapa é ótimo pra achar o ponto de encontro.",
     "Eu sempre paro no carrinho antes de seguir o caminho.",
-    "O player correu? Então eu corro pra acompanhar."
+    "Se você correr, talvez eu tente acompanhar.",
+    "Opa! Quer companhia até o outro bloco?"
   ],
   interests: {
     snack: 1.4,
@@ -4205,7 +4820,8 @@ createNpc({
     "Estou indo e voltando entre a mesa e o painel.",
     "Se eu passar perto de você, é porque estou no meu trajeto.",
     "Os novos objetos deixaram o espaço mais vivo.",
-    "O player chamou atenção? Eu olho, mas continuo andando."
+    "Se alguma coisa chama atenção, eu olho e continuo andando.",
+    "Tudo certo? Hoje meu roteiro está apertado."
   ],
   interests: {
     table: 1.35,
@@ -4238,10 +4854,11 @@ createNpc({
     { x: -14, z: -30 }
   ],
   lines: [
-    "Se o player acelerar, eu já entro na disputa.",
+    "Se você acelerar, eu já entro na disputa.",
     "Bora cruzar o gramado até o bicicletário.",
     "Eu reajo rápido quando alguém passa perto.",
-    "A corrida só começa depois do aviso do painel."
+    "A corrida só começa depois do aviso do painel.",
+    "Preparado para tentar bater meu tempo?"
   ],
   interests: {
     bike: 1.45,
@@ -4274,10 +4891,11 @@ createNpc({
     { x: 2, z: 2 }
   ],
   lines: [
-    "Eu sigo quem estiver mais ativo no gramado.",
-    "Se o player passa por aqui, eu mudo a rota.",
+    "Eu sempre reparo em quem está mais agitado no gramado.",
+    "Se alguém passa por aqui, eu acabo mudando de rota.",
     "Tem muito objeto novo pra explorar.",
-    "A mesa e o quiosque viraram meus pontos favoritos."
+    "A mesa e o quiosque viraram meus pontos favoritos.",
+    "Você de novo? Ótimo, tenho uma novidade pra contar."
   ],
   interests: {
     kiosk: 1.3,
@@ -4311,10 +4929,11 @@ createNpc({
     { x: -30, z: -10 }
   ],
   lines: [
-    "Eu gosto quando o player passa perto e aciona uma conversa.",
+    "Eu gosto quando alguém para um pouco para conversar.",
     "O painel de avisos ficou mais fácil de ler agora.",
     "Tem muita coisa nova no campus hoje.",
-    "Se quiser companhia, eu acompanho até a mesa."
+    "Se quiser companhia, eu acompanho até a mesa.",
+    "Opa! Como foi sua volta pelo campus?"
   ],
   interests: {
     board: 1.5,
@@ -4334,7 +4953,7 @@ createNpc({
   }
 });
 
-const elderEletrico = createNpc({
+createNpc({
   name: "Elder Eletrico",
   start: { x: -6, z: 4 },
   speed: 2.0,
@@ -4349,11 +4968,11 @@ const elderEletrico = createNpc({
     { x: -10, z: -2 }
   ],
   lines: [
-    "Cada passo meu deixa um rastro de energia no gramado.",
-    "Nao chegue muito perto sem isolamento, viu?",
-    "O campus inteiro parece carregar quando eu passo.",
-    "Antigamente eu so ensinava fisica; hoje eu ilumino o caminho.",
-    "Se ouvir estalo no ar, provavelmente fui eu andando."
+    "A eletricidade é mais interessante quando fica no quadro da aula.",
+    "Não esqueça: segurança primeiro em qualquer experimento.",
+    "O laboratório está silencioso hoje, até demais.",
+    "Antigamente eu só ensinava física; ainda ensino, quando deixam.",
+    "Se tiver dúvida sobre circuitos, pode perguntar."
   ],
   interests: {
     fountain: 1.25,
@@ -4372,12 +4991,6 @@ const elderEletrico = createNpc({
     scale: 1.06
   }
 });
-attachElectricAura(elderEletrico);
-if (elderEletrico.marker?.material) {
-  const markerMat = elderEletrico.marker.material as THREE.MeshStandardMaterial;
-  markerMat.emissive.setHex(0x7df9ff);
-  markerMat.emissiveIntensity = 0.55;
-}
 
 function serializeNpcStates() {
   return npcSync.serializeNpcStates(npcs);
@@ -4398,16 +5011,26 @@ function updateNpcFromSnapshot(npc, dt, time) {
   }
 
   const lerp = Math.min(1, dt * 12);
-  const prevX = npc.group.position.x;
-  const prevZ = npc.group.position.z;
   npc.group.position.x += (npc.targetX - npc.group.position.x) * lerp;
   npc.group.position.y += (npc.targetY - npc.group.position.y) * lerp;
   npc.group.position.z += (npc.targetZ - npc.group.position.z) * lerp;
   npc.group.rotation.y = lerpAngle(npc.group.rotation.y, npc.targetRy, lerp);
-  tryNpcElectricMotion(npc, npc.group.position.x - prevX, npc.group.position.z - prevZ, dt);
+
+  if (npc.ragdollTimer > 0) {
+    npc.ragdollTimer = Math.max(0, npc.ragdollTimer - dt);
+    applyRagdollPose(npc.rig.refs, time);
+    applyRagdollRoot(npc.group, npc.ragdollSide, Math.max(0, npc.targetY || 0), dt);
+    if (npc.ragdollTimer <= 0) {
+      clearRagdollRoot(npc.group);
+      resetRigPose(npc.rig.refs);
+    }
+    return;
+  }
+  npc.group.rotation.x = THREE.MathUtils.lerp(npc.group.rotation.x, 0, lerp);
+  npc.group.rotation.z = THREE.MathUtils.lerp(npc.group.rotation.z, 0, lerp);
 
   if (npc.netAnim === "sit") {
-    setSittingPose(npc.rig.refs);
+    setSittingPose(npc.rig.refs, time);
     return;
   }
   if (npc.netAnim === "dance") {
@@ -4513,6 +5136,11 @@ function queueMobileInteract() {
 }
 
 function queueMobileJump() {
+  if (swimmingMinigame?.isPlayerControlled()) {
+    swimmingMinigame.queueStroke();
+    if (readAmbientAudioState().enabled) ensureAmbientAudio();
+    return;
+  }
   jumpQueued = true;
   if (readAmbientAudioState().enabled) ensureAmbientAudio();
 }
@@ -4537,6 +5165,7 @@ let jumpQueued = false;
 let queuedEmoteKind: EmoteKind | null = null;
 const inputBindings = createGameInputBindings({
   cameraController,
+  cameraSurface: sceneCanvas,
   devTools,
   ensureAmbientAudio,
   isAmbientAudioEnabled: () => readAmbientAudioState().enabled,
@@ -4560,7 +5189,10 @@ const inputBindings = createGameInputBindings({
   },
   onQueuePvpThrow: () => {
     if (pvpActiveMatch) queuedPvpThrow = true;
+    else queueBiribaBallUse();
   },
+  onQueueItemUse: () => queueHeldItemUse(),
+  onQueueUmbrellaUse: () => queueHeldItemUse("umbrella"),
   clearKeys: () => keys.clear(),
   isPokerSeated: () => !!pokerSeatedCam && playerState.sitting,
   onPokerCameraDragStart: pokerCamDragStart,
@@ -4588,7 +5220,7 @@ const facing = new THREE.Vector2(0, -1);
 let playerFootstepDistance = 0;
 const playerRadius = 0.55;
 const npcRadius = 0.48;
-const worldLimit = 83;
+const worldLimit = CAMPUS_WALL_LIMIT + 10;
 const { isBlockedAt, clampPointToWorld } = createWorldSpatialHelpers({
   blockers,
   worldLimit,
@@ -4634,6 +5266,9 @@ swimmingMinigame = createSwimmingMinigame({
   removeTreesInArea,
   playPoolSound: playPoolWaterSound,
   playSwimStrokeSound,
+  onNetworkStroke: onSwimStroke,
+  onNetworkQuit: onSwimQuit,
+  getServerNow: () => (getWorldTime?.() ?? Date.now() / 1000) * 1000,
 });
 
 espectroEvent = createEspectroEvent({
@@ -4652,10 +5287,42 @@ espectroEvent = createEspectroEvent({
   setRestPose,
   resetRigPose: () => resetRigPose(playerRig.refs),
   forceDismount: forceDismountCurrentBike,
-  canStartSecret: () => !pvpActiveMatch && !swimmingMinigame?.isActive(),
+  canStartSecret: () =>
+    !pvpActiveMatch &&
+    !swimmingMinigame?.isActive() &&
+    !playerState.sitting &&
+    parkourSystem?.getFloorY?.() == null &&
+    canStartBiribaSecret(),
   onConsumed: onEspectroConsumed,
+  onDuelStart: onEspectroDuelStart,
+  onDuelHit: onEspectroDuelHit,
   onSecretDisconnect,
   playParanormalSound,
+  isBlockedAt,
+  clampPointToWorld,
+  getPlayerFloorY: () => blocoGetPlayerFloorY?.() ?? 0,
+  setPlayerFloorY: (value) => blocoSetPlayerFloorY?.(value),
+  getHumans: () => {
+    const humans = [{
+      id: "__local__",
+      position: player.position,
+      velocity: { x: playerVelocity.x, z: playerVelocity.y },
+    }];
+    for (const remote of remotePlayers.values()) {
+      const dx = remote.targetX - remote.group.position.x;
+      const dz = remote.targetZ - remote.group.position.z;
+      const length = Math.hypot(dx, dz) || 1;
+      humans.push({
+        id: remote.id,
+        position: remote.group.position,
+        velocity: {
+          x: (dx / length) * (remote.speed || 0),
+          z: (dz / length) * (remote.speed || 0),
+        },
+      });
+    }
+    return humans;
+  },
 });
 
 parkourSystem = createParkourCircuit({
@@ -4667,6 +5334,7 @@ parkourSystem = createParkourCircuit({
   interactables: interactables as any,
   container: container as HTMLElement | null,
   isKeyDown: (code) => keys.has(code),
+  isUmbrellaOpen: () => !!localPlayerIdForItems && currentWorldItems.openUmbrellas.includes(localPlayerIdForItems),
 });
 
 function clampPlayerToWorld(radius = playerRadius) {
@@ -4753,6 +5421,20 @@ function updatePlayer(dt, time) {
     return;
   }
 
+  if (playerState.ragdollTimer > 0) {
+    playerState.ragdollTimer = Math.max(0, playerState.ragdollTimer - dt);
+    playerVelocity.set(0, 0);
+    playerFootstepDistance = 0;
+    updatePlayerActivity({ kind: "emoting", label: "caído", detail: "se recuperando de uma queda" });
+    applyRagdollPose(playerRig.refs, time);
+    applyRagdollRoot(player, playerState.ragdollSide, blocoGetPlayerFloorY?.() ?? 0, dt);
+    if (playerState.ragdollTimer <= 0) {
+      clearRagdollRoot(player);
+      resetRigPose(playerRig.refs);
+    }
+    return;
+  }
+
   if (playerState.sitting) {
     interactQueued = false;
     playerFootstepDistance = 0;
@@ -4780,7 +5462,7 @@ function updatePlayer(dt, time) {
       playerState.sitEndMessage = "";
       playerState.sitEndSpeaker = "Banco";
     }
-    setSittingPose(playerRig.refs);
+    setSittingPose(playerRig.refs, time);
     return;
   }
 
@@ -5046,9 +5728,14 @@ function updatePlayer(dt, time) {
   }
 
   if (playerState.jumping) {
-    playerState.jumpVel -= 22 * dt;
+    const umbrellaOpen = !!localPlayerIdForItems && currentWorldItems.openUmbrellas.includes(localPlayerIdForItems);
+    const gravity = umbrellaOpen && playerState.jumpVel < 0 ? 5.8 : 22;
+    playerState.jumpVel -= gravity * dt;
+    if (umbrellaOpen && playerState.jumpVel < -3.7) playerState.jumpVel = -3.7;
     playerState.jumpY += playerState.jumpVel * dt;
     if (playerState.jumpY <= 0) {
+      playerState.landingIntensity = THREE.MathUtils.clamp(Math.abs(playerState.jumpVel) / 9, 0.35, 1);
+      playerState.landingTimer = 0.24;
       playerState.jumpY = 0;
       playerState.jumpVel = 0;
       playerState.jumping = false;
@@ -5062,13 +5749,26 @@ function updatePlayer(dt, time) {
     setCrouchPose(playerRig.refs, time, 1);
     player.position.y = playerState.jumpY - 0.22;
   } else if (intensity > 0.06) {
-    const walkPhase = time * (isRunning ? 9.5 : 5.5) + speed * 0.6;
-    if (isRunning) animateRun(playerRig.refs, walkPhase, intensity);
-    else animateWalk(playerRig.refs, walkPhase, intensity);
-    player.position.y = playerState.jumpY + Math.abs(Math.sin(walkPhase)) * 0.05 * intensity;
+    const cadence = isRunning
+      ? THREE.MathUtils.lerp(7.8, 11.2, intensity)
+      : THREE.MathUtils.lerp(3.8, 7.2, intensity);
+    playerState.locomotionPhase += cadence * dt;
+    if (isRunning) animateRun(playerRig.refs, playerState.locomotionPhase, intensity);
+    else animateWalk(playerRig.refs, playerState.locomotionPhase, intensity);
+    player.position.y = playerState.jumpY + Math.abs(Math.sin(playerState.locomotionPhase)) * 0.034 * intensity;
   } else {
     setRestPose(playerRig.refs, time);
-    player.position.y = playerState.jumpY + Math.sin(time * 1.6) * 0.012;
+    player.position.y = playerState.jumpY + Math.sin(time * 1.6) * 0.006;
+  }
+
+  if (playerState.jumping) {
+    animateJump(playerRig.refs, playerState.jumpVel);
+  } else if (playerState.landingTimer > 0) {
+    playerState.landingTimer = Math.max(0, playerState.landingTimer - dt);
+    animateLanding(
+      playerRig.refs,
+      playerState.landingIntensity * (playerState.landingTimer / 0.24),
+    );
   }
 }
 
@@ -5101,11 +5801,24 @@ function updateRenderableVisibility(
   positionOverride: THREE.Vector3 | null = null
 ) {
   if (devTools.isEnabled()) {
+    if (detachedWorldRenderables.delete(entity)) world.add(entity);
     if (entity.visible !== true) entity.visible = true;
     return true;
   }
   const visible = isWithinCamera(entity, radius, maxDistance, positionOverride);
-  if (entity.visible !== visible) entity.visible = visible;
+  if (visible) {
+    if (detachedWorldRenderables.delete(entity)) world.add(entity);
+    if (entity.visible !== true) entity.visible = true;
+  } else if (entity.parent === world) {
+    // O Three.js ainda percorre e recalcula a arvore de objetos invisiveis.
+    // Tirar temporariamente raizes culled do mundo evita esse custo sem
+    // destruir estado, animacao ou posicao.
+    entity.visible = false;
+    world.remove(entity);
+    detachedWorldRenderables.add(entity);
+  } else if (!detachedWorldRenderables.has(entity) && entity.visible !== false) {
+    entity.visible = false;
+  }
   return visible;
 }
 
@@ -5119,7 +5832,7 @@ function applyNpcPose(npc, time) {
     npc.group.position.lerp(npc.pose.position, 0.12);
     npc.group.rotation.y = lerpAngle(npc.group.rotation.y, npc.pose.rotation, 0.12);
     npc.group.position.y = 0;
-    setSittingPose(npc.rig.refs);
+    setSittingPose(npc.rig.refs, time);
     return;
   }
   setNpcRestState(npc, time);
@@ -5320,8 +6033,6 @@ function moveNpcTowards(npc, target, dt, time, arrivalRadius = 0.3) {
     return "blocked";
   }
 
-  tryNpcElectricStep(npc, true);
-
   npc.group.rotation.y = lerpAngle(npc.group.rotation.y, Math.atan2(dirX, dirZ), 0.18);
 
   if (npc.running) {
@@ -5365,6 +6076,17 @@ function updateNpc(npc, dt, time) {
   npc.reactionCooldown = Math.max(0, npc.reactionCooldown - dt);
   npc.chatterCooldown = Math.max(0, npc.chatterCooldown - dt);
   npc.slowThinkTimer = Math.max(0, npc.slowThinkTimer - dt);
+  if (npc.ragdollTimer > 0) {
+    npc.ragdollTimer = Math.max(0, npc.ragdollTimer - dt);
+    npc.pause = Math.max(npc.pause, npc.ragdollTimer + 0.25);
+    applyRagdollPose(npc.rig.refs, time);
+    applyRagdollRoot(npc.group, npc.ragdollSide, 0, dt);
+    if (npc.ragdollTimer <= 0) {
+      clearRagdollRoot(npc.group);
+      resetRigPose(npc.rig.refs);
+    }
+    return;
+  }
   const playerDistance = getDistance2D(player.position, npc.group.position);
   const human = findNearestHuman(npc.group.position, npc.awarenessRadius);
 
@@ -5625,7 +6347,10 @@ function updateInteractionUI() {
   speechOverlay.clearSpeech();
 }
 
-function syncEntityVisibility() {
+function syncEntityVisibility(dt: number) {
+  visibilitySyncCooldown -= dt;
+  if (visibilitySyncCooldown > 0) return;
+  visibilitySyncCooldown = 0.1;
   for (const npc of npcs) {
     updateRenderableVisibility(npc.group, 1.8, Math.min(npc.renderRadius, ENTITY_CULL_DIST.npc));
   }
@@ -5746,7 +6471,7 @@ function pokerCamZoom(deltaY: number) {
 
 const _pokerCamPos = new THREE.Vector3();
 const _pokerCamLook = new THREE.Vector3();
-function updateCamera() {
+function updateCamera(dt: number) {
   applyPokerSeatedHiding();
   // Câmera orbitando a mesa quando o player está sentado no pôquer.
   // Padrão: atrás do assento, levemente de cima. Arraste gira; scroll zoom.
@@ -5762,11 +6487,24 @@ function updateCamera() {
       center.z + Math.sin(yaw) * cosP * pokerCamDist,
     );
     _pokerCamLook.set(center.x, center.y - 0.05, center.z);
-    camera.position.lerp(_pokerCamPos, 0.15);
+    camera.position.lerp(_pokerCamPos, 1 - Math.exp(-dt * 9.5));
     camera.lookAt(_pokerCamLook);
     return;
   }
-  cameraController.updateCamera(camera, player.position, (id) => remotePlayers.has(id));
+  cameraController.updateCamera(
+    camera,
+    player.position,
+    (id) => remotePlayers.has(id),
+    {
+      dt,
+      speed: playerVelocity.length(),
+      activity: playerActivitySnapshot.kind,
+      swimming: swimmingMinigame?.isPlayerControlled() ?? false,
+      jumping: playerState.jumping,
+      sitting: playerState.sitting,
+      blockers,
+    },
+  );
 }
 
 function resize() {
@@ -5777,48 +6515,143 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 
+function applyRenderQuality(nextQuality: RenderQuality) {
+  if (nextQuality === renderQuality) return;
+  renderQuality = nextQuality;
+  const ratioCap = nextQuality === "high"
+    ? 1.2
+    : nextQuality === "balanced"
+      ? 0.9
+      : nextQuality === "low"
+        ? 0.65
+        : 0.5;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, ratioCap));
+  const shadowsEnabled = nextQuality === "high";
+  renderer.shadowMap.enabled = shadowsEnabled;
+  sun.castShadow = shadowsEnabled;
+  resize();
+}
+
+let qualityWarmup = 4;
+let qualityWindowTime = 0;
+let qualityFrameCount = 0;
+let slowQualityWindows = 0;
+let recoveryQualityWindows = 0;
+function updateAdaptiveQuality(rawDt: number) {
+  if (document.hidden || rawDt <= 0 || rawDt > 0.25) {
+    qualityWindowTime = 0;
+    qualityFrameCount = 0;
+    return;
+  }
+  if (qualityWarmup > 0) {
+    qualityWarmup -= rawDt;
+    return;
+  }
+  qualityWindowTime += rawDt;
+  qualityFrameCount += 1;
+  if (qualityWindowTime < 2) return;
+
+  const fps = qualityFrameCount / qualityWindowTime;
+  qualityWindowTime = 0;
+  qualityFrameCount = 0;
+  const slowThreshold = renderQuality === "high" ? 48 : 34;
+  if (fps < slowThreshold) {
+    slowQualityWindows += 1;
+    recoveryQualityWindows = 0;
+  } else {
+    slowQualityWindows = 0;
+    const recoveryThreshold = renderQuality === "performance"
+      ? 42
+      : renderQuality === "low"
+        ? 50
+        : 58;
+    recoveryQualityWindows = fps >= recoveryThreshold ? recoveryQualityWindows + 1 : 0;
+  }
+
+  if (slowQualityWindows >= 2) {
+    slowQualityWindows = 0;
+    recoveryQualityWindows = 0;
+    if (renderQuality === "high") applyRenderQuality("balanced");
+    else if (renderQuality === "balanced") applyRenderQuality("low");
+    else if (renderQuality === "low") applyRenderQuality("performance");
+  } else if (recoveryQualityWindows >= 5) {
+    recoveryQualityWindows = 0;
+    if (renderQuality === "performance") applyRenderQuality("low");
+    else if (renderQuality === "low") applyRenderQuality("balanced");
+    else if (renderQuality === "balanced" && !lowPowerHint) applyRenderQuality("high");
+  }
+}
+
 const resizeHandler = () => resize();
 window.addEventListener("resize", resizeHandler);
 resize();
+
+scene.updateMatrix();
+scene.matrixAutoUpdate = false;
+world.updateMatrix();
+world.matrixAutoUpdate = false;
 
 let rafId = 0;
 let running = true;
 let netAccumulator = 0;
 let minimapTimer = 0;
+let atmosphereVisualCooldown = 0;
+let interactionUiCooldown = 0;
+let sunAnchorCooldown = 0;
 const NET_INTERVAL = 0.08; // ~12.5 Hz
 
 function tick() {
   if (!running) return;
-  const dt = Math.min(clock.getDelta(), 0.033);
+  const rawDt = clock.getDelta();
+  const dt = Math.min(rawDt, 0.033);
+  updateAdaptiveQuality(rawDt);
   const time = getWorldTime ? getWorldTime() : clock.elapsedTime;
   const atmosphereState = getAtmosphereState(time);
-  applyAtmosphere(atmosphereState);
+  atmosphereVisualCooldown -= dt;
+  if (atmosphereVisualCooldown <= 0) {
+    atmosphereVisualCooldown = 0.1;
+    applyAtmosphere(atmosphereState);
+    noticeTexture.update(time, atmosphereState);
+  }
   weatherSystem.update(dt, time, atmosphereState);
-  noticeTexture.update(time, atmosphereState);
   updateAmbientAudio(time, atmosphereState);
 
   speechOverlay.releaseSpeechLock(dt);
   updatePlayer(dt, time);
+  if (renderQuality === "high") {
+    sunAnchorCooldown -= dt;
+    if (sunAnchorCooldown <= 0) {
+      sunAnchorCooldown = 1 / 30;
+      updateSunAnchor(atmosphereState);
+    }
+  }
   parkourSystem?.postUpdatePlayer(dt);
+  // Atualiza pisos/escadas antes de medir a proximidade. O Bloco 3 aplica
+  // aqui o deslocamento vertical do andar atual, evitando interações pelo teto.
+  for (const item of interactables) {
+    if (!item.update) continue;
+    const updateRoot = item.root || item.group;
+    const itemDt = item.kind !== "bloco-telematica" && updateRoot instanceof THREE.Object3D
+      ? consumeEntityUpdateDelta(updateRoot, dt)
+      : dt;
+    if (itemDt > 0) item.update(itemDt, time);
+  }
   handleInteraction();
 
   for (const npc of npcs) {
-    if (npcSync.isNpcAuthorityActive()) updateNpc(npc, dt, time);
-    else updateNpcFromSnapshot(npc, dt, time);
+    const npcDt = consumeEntityUpdateDelta(npc.group, dt);
+    if (npcDt <= 0) continue;
+    if (npcSync.isNpcAuthorityActive()) updateNpc(npc, npcDt, time);
+    else updateNpcFromSnapshot(npc, npcDt, time);
   }
-  tickElectricCooldowns(npcs, dt);
-  updateElectricEffects(dt);
-
   for (const duck of ducks) {
-    updateDuck(duck, dt, time);
+    const duckDt = consumeEntityUpdateDelta(duck.group, dt);
+    if (duckDt > 0) updateDuck(duck, duckDt, time);
   }
 
   for (const pigeon of pigeons) {
-    updatePigeon(pigeon, dt, time);
-  }
-
-  for (const item of interactables) {
-    item.update?.(dt, time);
+    const pigeonDt = consumeEntityUpdateDelta(pigeon.group, dt);
+    if (pigeonDt > 0) updatePigeon(pigeon, pigeonDt, time);
   }
 
   for (const prop of decorativeProps) {
@@ -5826,6 +6659,7 @@ function tick() {
   }
 
   updateRemotes(dt, time);
+  updateHeldItems(dt, time);
   updateBubbles(dt);
   updatePvpBalls(dt);
   espectroEvent?.update(dt, time);
@@ -5841,6 +6675,7 @@ function tick() {
       speed: playerVelocity.length(),
       activity: playerActivitySnapshot.kind,
       jumpY: playerState.jumpY,
+      floorY: parkourSystem?.getFloorY?.() ?? blocoGetPlayerFloorY?.() ?? 0,
     });
     if (npcSync.isNpcAuthorityActive()) {
       onNpcState(serializeNpcStates());
@@ -5855,13 +6690,24 @@ function tick() {
     }
   }
 
-  updateInteractionUI();
-  updateCamera();
+  interactionUiCooldown -= dt;
+  if (interactionUiCooldown <= 0) {
+    interactionUiCooldown = 0.1;
+    updateInteractionUI();
+  }
+  updateCamera(dt);
   refreshCameraFrustum();
-  syncEntityVisibility();
+  syncEntityVisibility(dt);
   devTools.updateSelectionBox();
   minimapTimer += dt;
-  if (minimapTimer >= 0.1) {
+  const minimapInterval = renderQuality === "high"
+    ? 0.1
+    : renderQuality === "balanced"
+      ? 0.14
+      : renderQuality === "low"
+        ? 0.2
+        : 0.3;
+  if (minimapTimer >= minimapInterval) {
     minimapTimer = 0;
     drawMinimap();
   }
@@ -5891,6 +6737,16 @@ function spawnBall(x, z, dx, dz, matchId, isLocal) {
   mesh.position.set(x, 0.9, z);
   world.add(mesh);
   pvpBalls.push({ mesh, x, z, dx, dz, life: BALL_LIFE, matchId, isLocal });
+}
+
+function spawnFunBall(x: number, z: number, dx: number, dz: number) {
+  const mesh = createBallMesh();
+  const material = mesh.material as THREE.MeshStandardMaterial;
+  material.color.setHex(0x7b36d4);
+  material.emissive.setHex(0x35106f);
+  mesh.position.set(x, 0.92, z);
+  world.add(mesh);
+  funBalls.push({ mesh, x, z, dx, dz, life: 1.65 });
 }
 
 function doLocalPvpThrow() {
@@ -5944,6 +6800,23 @@ function updatePvpBalls(dt) {
       }
     }
   }
+
+  for (let i = funBalls.length - 1; i >= 0; i -= 1) {
+    const ball = funBalls[i];
+    ball.life -= dt;
+    if (ball.life <= 0) {
+      world.remove(ball.mesh);
+      ball.mesh.geometry.dispose();
+      (ball.mesh.material as THREE.Material).dispose();
+      funBalls.splice(i, 1);
+      continue;
+    }
+    ball.x += ball.dx * 12 * dt;
+    ball.z += ball.dz * 12 * dt;
+    ball.mesh.rotation.x += dt * 8;
+    ball.mesh.rotation.z += dt * 11;
+    ball.mesh.position.set(ball.x, 0.92 + Math.sin(ball.life * 7) * 0.06, ball.z);
+  }
 }
 
 function pvpSetMatch(match) {
@@ -5961,6 +6834,7 @@ function pvpSetMatch(match) {
 
 function pvpShowThrow(matchId, fromId, x, z, dx, dz) {
   if (!pvpActiveMatch || pvpActiveMatch.matchId !== matchId) return;
+  if (fromId === localPlayerIdForItems) return;
   spawnBall(x, z, dx, dz, matchId, false);
 }
 
@@ -5985,7 +6859,12 @@ function pvpShowHit(victimId) {
 
 function pvpTeleportToArena(side) {
   forceDismountCurrentBike();
-  pvpSavedPosition = { x: player.position.x, z: player.position.z };
+  pvpSavedPosition = {
+    x: player.position.x,
+    z: player.position.z,
+    floorY: blocoGetPlayerFloorY?.() ?? 0,
+  };
+  blocoSetPlayerFloorY?.(0);
   const spawnX = side === "A" ? ARENA_CX - 7.5 : ARENA_CX + 7.5;
   const facingY = side === "A" ? 0 : Math.PI;
   player.position.set(spawnX, 0, ARENA_CZ);
@@ -5995,6 +6874,7 @@ function pvpTeleportToArena(side) {
 
 function pvpReturnFromArena() {
   if (pvpSavedPosition) {
+    blocoSetPlayerFloorY?.(pvpSavedPosition.floorY);
     player.position.set(pvpSavedPosition.x, 0, pvpSavedPosition.z);
     pvpSavedPosition = null;
   }
@@ -6002,6 +6882,7 @@ function pvpReturnFromArena() {
 
 function queueMobilePvpThrow() {
   if (pvpActiveMatch) queuedPvpThrow = true;
+  else queueBiribaBallUse();
 }
 
 // ── end PvP ──────────────────────────────────────────────────────────────────
@@ -6009,16 +6890,19 @@ function queueMobilePvpThrow() {
 function destroy() {
   running = false;
   if (rafId) cancelAnimationFrame(rafId);
+  for (const object of detachedWorldRenderables) world.add(object);
+  detachedWorldRenderables.clear();
   destroyGameAudio();
   inputBindings.destroy();
   window.removeEventListener("resize", resizeHandler);
   window.removeEventListener("error", errorHandler);
   gateCheckpoint?.destroy?.();
   swimmingMinigame?.destroy?.();
+  parkourSystem?.destroy?.();
   espectroEvent?.destroy?.();
   weatherSystem.destroy();
-  clearElectricEffects();
   swimmingMinigame = null;
+  parkourSystem = null;
   espectroEvent = null;
   devTools.destroy();
   disposeObject3D(scene);
@@ -6045,6 +6929,8 @@ function destroy() {
     setMobileInput,
     queueMobileInteract,
     queueMobileJump,
+    queueMobileItemUse: () => queueHeldItemUse(),
+    queueMobileUmbrellaUse: () => queueHeldItemUse("umbrella"),
     toggleCameraMode: cameraController.toggleMode,
     pvpSetMatch,
     pvpShowThrow,
@@ -6054,6 +6940,13 @@ function destroy() {
     queueMobilePvpThrow,
     espectroSpawn: (payload) => espectroEvent?.spawn(payload),
     espectroDespawn: () => espectroEvent?.despawn(),
+    swimStartNetwork: (config) => swimmingMinigame?.startNetworkRace(config),
+    swimApplyNetworkProgress: (matchId, scores, localId) =>
+      swimmingMinigame?.applyNetworkProgress(matchId, scores, localId),
+    swimEndNetwork: (matchId) => swimmingMinigame?.endNetworkRace(matchId),
+    applyWorldItems,
+    playItemAction,
+    applyRagdoll,
     exitSit,
     updatePoker: (
       state: PokerStateLite | null,

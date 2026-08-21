@@ -2,6 +2,12 @@ import { z } from "zod";
 
 export const AvatarVersion = 1 as const;
 
+export const hairStyleSchema = z.enum(["short", "curly", "mohawk", "bun"]);
+export const outfitStyleSchema = z.enum(["classic", "jacket", "sport"]);
+export const faceStyleSchema = z.enum(["classic", "freckles", "smile"]);
+export const headShapeSchema = z.enum(["round", "oval", "wide"]);
+export const accessoryStyleSchema = z.enum(["none", "headphones", "cap", "beanie"]);
+
 const hexColorSchema = z
   .string()
   .trim()
@@ -18,6 +24,12 @@ export const avatarSchema = z
     hair: hexColorSchema,
     backpackEnabled: z.boolean(),
     glasses: z.boolean(),
+    accent: hexColorSchema.default("#f6b94b"),
+    hairStyle: hairStyleSchema.default("short"),
+    outfitStyle: outfitStyleSchema.default("classic"),
+    faceStyle: faceStyleSchema.default("classic"),
+    headShape: headShapeSchema.default("round"),
+    accessory: accessoryStyleSchema.default("none"),
   })
   .strict();
 
@@ -40,6 +52,12 @@ export const DEFAULT_AVATAR: Avatar = {
   hair: "#3a2516",
   backpackEnabled: true,
   glasses: false,
+  accent: "#f6b94b",
+  hairStyle: "short",
+  outfitStyle: "classic",
+  faceStyle: "classic",
+  headShape: "round",
+  accessory: "none",
 };
 
 function parseHexColor(value: unknown, fallback: string) {
@@ -59,6 +77,22 @@ export function normalizeAvatar(input: unknown): Avatar {
     hair: parseHexColor(source.hair, DEFAULT_AVATAR.hair),
     backpackEnabled: source.backpackEnabled !== false,
     glasses: source.glasses === true,
+    accent: parseHexColor(source.accent, DEFAULT_AVATAR.accent),
+    hairStyle: hairStyleSchema.safeParse(source.hairStyle).success
+      ? hairStyleSchema.parse(source.hairStyle)
+      : DEFAULT_AVATAR.hairStyle,
+    outfitStyle: outfitStyleSchema.safeParse(source.outfitStyle).success
+      ? outfitStyleSchema.parse(source.outfitStyle)
+      : DEFAULT_AVATAR.outfitStyle,
+    faceStyle: faceStyleSchema.safeParse(source.faceStyle).success
+      ? faceStyleSchema.parse(source.faceStyle)
+      : DEFAULT_AVATAR.faceStyle,
+    headShape: headShapeSchema.safeParse(source.headShape).success
+      ? headShapeSchema.parse(source.headShape)
+      : DEFAULT_AVATAR.headShape,
+    accessory: accessoryStyleSchema.safeParse(source.accessory).success
+      ? accessoryStyleSchema.parse(source.accessory)
+      : DEFAULT_AVATAR.accessory,
   }
 }
 
@@ -78,7 +112,10 @@ export function parseStoredAvatar(raw: string | null | undefined): Avatar {
       return { ...wrapped.data.avatar };
     }
 
-    return normalizeAvatar(parsed);
+    const source = parsed && typeof parsed === "object" && "avatar" in parsed
+      ? (parsed as { avatar: unknown }).avatar
+      : parsed;
+    return normalizeAvatar(source);
   } catch {
     return createDefaultAvatar();
   }
