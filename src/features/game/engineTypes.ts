@@ -21,10 +21,18 @@ export interface BootGameOptions {
   onPlayerStateChange?: (state: PlayerStatusState) => void;
   onEmote?: (emote: { kind: EmoteKind; duration: number }) => void;
   onMediaBoothInteract?: () => void;
+  onComputerInteract?: (computerId: string) => void;
+  onItemPickup?: (itemId: "bat" | "umbrella" | "biriba-ball") => void;
+  onItemUse?: (itemId: "bat" | "umbrella" | "biriba-ball", targetId?: string | null) => void;
+  onSwimStroke?: (matchId: string) => void;
+  onSwimQuit?: (matchId: string) => void;
   onPvpThrow?: (matchId: string, dx: number, dz: number, x: number, z: number) => void;
   onPvpHit?: (matchId: string, victimId: string) => void;
-  onEspectroConsumed?: (seed: number) => void;
+  onEspectroConsumed?: (seed: string | number, outcome?: "lost" | "won") => void;
+  onEspectroDuelStart?: (seed: string | number) => void;
+  onEspectroDuelHit?: (seed: string | number, sequence: number) => void;
   onSecretDisconnect?: () => void;
+  canStartBiribaSecret?: () => boolean;
   onPokerSeatInteract?: (seatIndex: number) => void;
   onChessSeatInteract?: (color: "w" | "b") => void;
   // anchor opcional usado pelo engine pra sentar visualmente

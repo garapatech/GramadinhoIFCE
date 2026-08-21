@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 import { createWindowTexture } from "@/game/campusTextures";
+import { mergeStaticMeshesByMaterial } from "@/game/mergeStaticMeshes";
 
 import {
   BLOCO_TELEMATICA_PLACEMENT,
@@ -108,6 +109,8 @@ export type BlocoTelematicaScene = {
   // Altura do andar (Y) numa posição mundial — usado pra elevar avatares
   // remotos no andar correto. prevFloorY dá snap estável entre níveis.
   resolveFloorY(worldX: number, worldZ: number, prevFloorY: number): number;
+  getPlayerFloorY(): number;
+  setPlayerFloorY(value: number): void;
   dispose(): void;
 };
 
@@ -124,6 +127,7 @@ export type BlocoTelematicaOptions = {
     color: "w" | "b",
     anchor: { position: THREE.Vector3; rotation: number },
   ) => void;
+  onComputerInteract?: (computerId: string) => void;
 };
 
 function makeLabelSprite(text: string) {
@@ -465,7 +469,7 @@ export type PokerTableView = {
 };
 
 export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTelematicaScene {
-  const { parent, createBlocker, interactables, getPlayerPosition } = options;
+  const { parent, createBlocker, interactables, getPlayerPosition, onComputerInteract } = options;
   const group = new THREE.Group();
   group.name = "blocoTelematica";
 
@@ -473,6 +477,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   // Preenchido quando a mesa de pôquer do LATIM é construída.
   let pokerView: PokerTableView | null = null;
+  let playerFloorY = 0;
 
   // Resolve a altura do andar (Y) para uma posição mundial, com memória do
   // andar anterior pra dar snap estável entre térreo e superior. Usado tanto
@@ -642,6 +647,13 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
       halfW - WALL_THICKNESS / 2, y, 0, story);
   }
 
+  const mergedOuterTerreo = mergeStaticMeshesByMaterial(group, outerMeshesTerreo);
+  outerMeshesTerreo.length = 0;
+  outerMeshesTerreo.push(...mergedOuterTerreo);
+  const mergedOuterSuperior = mergeStaticMeshesByMaterial(group, outerMeshesSuperior);
+  outerMeshesSuperior.length = 0;
+  outerMeshesSuperior.push(...mergedOuterSuperior);
+
   // -------- Classificacao + mobiliario por sala --------
   type RoomType =
     | "classroom" | "lab" | "office" | "meeting"
@@ -665,6 +677,8 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   }
 
   type RoomBounds = { xMin: number; xMax: number; zMin: number; zMax: number };
+  let interactiveComputerCount = 0;
+  const interactiveLabs = new Set<string>();
 
   function placeFurniture(
     parent: THREE.Object3D,
@@ -672,6 +686,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     b: RoomBounds,
     storyY: number,
     rowFacing: Row, // direcao do corredor (norte→sul=rowFacing=='north' significa porta no sul da sala)
+    roomLabel: string,
   ) {
     const cx = (b.xMin + b.xMax) / 2;
     const cz = (b.zMin + b.zMax) / 2;
@@ -684,7 +699,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     const addMesh = (geom: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number) => {
       const m = new THREE.Mesh(geom, mat);
       m.position.set(x, y + storyY, z);
-      m.castShadow = true;
+      m.castShadow = false;
       m.receiveShadow = true;
       parent.add(m);
       return m;
@@ -719,6 +734,22 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         }
       }
     } else if (type === "lab") {
+      const ceilingPanel = addMesh(
+        new THREE.BoxGeometry(Math.min(2.4, roomW * 0.5), 0.035, 0.42),
+        new THREE.MeshStandardMaterial({
+          color: 0xf2fbff,
+          emissive: 0xb9e8ff,
+          emissiveIntensity: 0.75,
+          roughness: 0.32,
+        }),
+        cx,
+        STORY_HEIGHT - 0.2,
+        cz,
+      );
+      ceilingPanel.castShadow = false;
+      const labLight = new THREE.PointLight(0xcbeeff, 2.2, Math.max(5.5, Math.min(8, roomW)), 2);
+      labLight.position.set(cx, storyY + STORY_HEIGHT - 0.42, cz);
+      parent.add(labLight);
       // Bancadas em U com computadores
       const benchH = 0.75;
       const monitorW = 0.55, monitorH = 0.4, monitorD = 0.06;
@@ -733,11 +764,44 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const mx = x - Math.cos(facing) * 0.15;
         const monBack = addMesh(new THREE.BoxGeometry(monitorW, monitorH, monitorD), monitorMat, mx, benchH + 0.05 + monitorH / 2, mz);
         ry(monBack, facing);
-        const monScreen = addMesh(new THREE.BoxGeometry(monitorW - 0.06, monitorH - 0.06, 0.01), screenMat, mx, benchH + 0.05 + monitorH / 2, mz);
+        const canRegister =
+          !!interactables &&
+          !!onComputerInteract &&
+          interactiveComputerCount < 5 &&
+          !interactiveLabs.has(roomLabel);
+        const activeScreenMat = canRegister
+          ? new THREE.MeshStandardMaterial({
+              color: 0x67d9ec,
+              emissive: 0x147f9b,
+              emissiveIntensity: 1.05,
+              roughness: 0.24,
+            })
+          : screenMat;
+        const monScreen = addMesh(new THREE.BoxGeometry(monitorW - 0.06, monitorH - 0.06, 0.01), activeScreenMat, mx, benchH + 0.05 + monitorH / 2, mz);
         ry(monScreen, facing);
         monScreen.translateZ(monitorD / 2 + 0.005);
         // cpu box
         addMesh(new THREE.BoxGeometry(0.16, 0.36, 0.32), pcCaseMat, x + 0.3, benchH + 0.18, z + 0.1);
+        if (canRegister) {
+          const computerId = `pc-${++interactiveComputerCount}`;
+          interactiveLabs.add(roomLabel);
+          const worldPosition = new THREE.Vector3(centerX + x, storyY, centerZ + z);
+          interactables.push({
+            kind: "computer",
+            label: `${roomLabel} · terminal ${computerId.slice(3)}`,
+            radius: 2.25,
+            position: worldPosition,
+            cullPosition: worldPosition.clone(),
+            cullRadius: 1.2,
+            cullDistance: 54,
+            root: monScreen,
+            npcDisabled: () => true,
+            interact: () => onComputerInteract(computerId),
+            update: (_dt, time) => {
+              activeScreenMat.emissiveIntensity = 0.9 + Math.sin(time * 2.4 + interactiveComputerCount) * 0.14;
+            },
+          });
+        }
       };
       // 4-6 PCs em linha contra a parede de fundo
       const numPcs = Math.max(3, Math.min(6, Math.floor(roomW / 1.2)));
@@ -1015,7 +1079,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
             zMin: Math.min(corridorEdgeZ, outerEdgeZ) + 0.3,
             zMax: Math.max(corridorEdgeZ, outerEdgeZ) - 0.3,
           };
-          placeFurniture(storyGroup, type, bounds, storyY, row);
+          placeFurniture(storyGroup, type, bounds, storyY, row, r.label.text);
         }
       }
     }
@@ -1880,6 +1944,16 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
 
   const terreoBlockers = buildStoryRooms(buildRoomList(terreoPlanta), 0, terreoStoryGroup);
   const superiorBlockers = buildStoryRooms(transformSuperior(buildRoomList(superiorPlanta)), STORY_HEIGHT, superiorStoryGroup);
+  for (const storyGroup of [terreoStoryGroup, superiorStoryGroup]) {
+    const interactiveRoots = new Set(interactables?.map((item) => item.root) ?? []);
+    const staticMeshes = storyGroup.children.filter(
+      (object): object is THREE.Mesh => object instanceof THREE.Mesh && !interactiveRoots.has(object),
+    );
+    mergeStaticMeshesByMaterial(storyGroup, staticMeshes);
+    storyGroup.traverse((object) => {
+      if (object instanceof THREE.Mesh) object.castShadow = false;
+    });
+  }
 
   // -------- Laje intermediaria + teto --------
   // Laje cobre todo o footprint menos o vao da escada (no canto NE).
@@ -2038,13 +2112,6 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   group.position.set(centerX, 0, centerZ);
   parent.add(group);
 
-  // Desativa frustum culling em tudo do bloco. Algumas combinacoes de
-  // posicao da camera + transparencia das paredes faziam o bloco "sumir"
-  // antes do fim do corredor. Forcar render evita esse comportamento.
-  group.traverse((obj: THREE.Object3D) => {
-    obj.frustumCulled = false;
-  });
-
   const bounds = {
     minX: centerX - BLOCO_WIDTH / 2,
     maxX: centerX + BLOCO_WIDTH / 2,
@@ -2082,17 +2149,14 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
   if (interactables && getPlayerPosition) {
     // Nao usamos mais fade — paredes externas alternam .visible.
     const fadeMats: Array<{ mat: THREE.MeshStandardMaterial; target: number }> = [];
-    let playerFloorY = 0;
-
     interactables.push({
       kind: "bloco-telematica",
       label: "Bloco 3",
       radius: 0,
-      // Sphere de culling grande pra cobrir o bloco inteiro (90x16x7m).
-      // Sem isso o engine escondia o grupo quando o centro do bloco
-      // saia do frustum (player no fim do corredor).
-      cullRadius: 60,
-      cullDistance: 600,
+      // A esfera cobre o exterior inteiro; os detalhes internos possuem
+      // visibilidade separada para o prédio não desaparecer à distância.
+      cullRadius: Math.hypot(BLOCO_WIDTH / 2, BLOCO_DEPTH / 2, TOTAL_HEIGHT),
+      cullDistance: 190,
       position: new THREE.Vector3(centerX, 0, centerZ),
       root: group,
       npcDisabled: () => true,
@@ -2106,6 +2170,7 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         const insideFootprint =
           Math.abs(localX) < BLOCO_WIDTH / 2 &&
           Math.abs(localZ) < BLOCO_DEPTH / 2;
+        const nearInterior = insideFootprint || localX * localX + localZ * localZ < 28 * 28;
 
         // Atualiza Y do andar conforme o jogador caminha (escada = rampa).
         playerFloorY = resolveBlocoFloorY(p.x, p.z, playerFloorY);
@@ -2128,11 +2193,11 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // escada (entre andares), os dois ficam visiveis pra transicao
         // suave nao "piscar".
         const onStair = inStairZone;
-        terreoStoryGroup.visible = onStair || !onSuperior;
-        superiorStoryGroup.visible = onStair || onSuperior;
+        terreoStoryGroup.visible = nearInterior && (onStair || !onSuperior);
+        superiorStoryGroup.visible = nearInterior && (onStair || onSuperior);
 
         // Laje (Group): invisivel no terreo, visivel no superior/escada.
-        slab.visible = onSuperior || onStair;
+        slab.visible = nearInterior && (onSuperior || onStair);
         // Teto: invisivel quando o player esta dentro (deixa a camera
         // ver pro chao). Aparece de fora.
         roof.visible = !insideFootprint;
@@ -2145,8 +2210,8 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
         // O piso de cada andar so aparece se faz sentido visualmente.
         // O piso do superior visto de baixo seria "teto" — entao some
         // quando o player esta no terreo dentro do bloco.
-        floorSuperiorMesh.visible = !insideFootprint || onSuperior || onStair;
-        floorTerreoMesh.visible = !insideFootprint || !onSuperior || onStair;
+        floorSuperiorMesh.visible = nearInterior && (!insideFootprint || onSuperior || onStair);
+        floorTerreoMesh.visible = nearInterior && (!insideFootprint || !onSuperior || onStair);
 
         // Transparencia
         const targetFactor = insideFootprint ? 1 : 0;
@@ -2159,11 +2224,24 @@ export function buildBlocoTelematica(options: BlocoTelematicaOptions): BlocoTele
     });
   }
 
+  // O bloco e seus andares nao mudam de transformacao durante o jogo. Manter
+  // as matrizes locais congeladas evita recalcular centenas delas por frame;
+  // visibilidade e materiais continuam podendo ser atualizados normalmente.
+  group.updateMatrixWorld(true);
+  group.traverse((object) => {
+    object.updateMatrix();
+    object.matrixAutoUpdate = false;
+  });
+
   return {
     group,
     bounds,
     poker: pokerView,
     resolveFloorY: resolveBlocoFloorY,
+    getPlayerFloorY: () => playerFloorY,
+    setPlayerFloorY: (value) => {
+      playerFloorY = THREE.MathUtils.clamp(value, 0, SUPERIOR_VISUAL_Y);
+    },
     dispose() {
       parent.remove(group);
       group.traverse((obj) => {

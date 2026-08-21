@@ -36,6 +36,30 @@ export function decorateChatMessage(message: ChatMessageLike): GameChatMessage {
   };
 }
 
+export function makeChatMessageKeyUnique(
+  message: GameChatMessage,
+  existingKeys: ReadonlySet<string>
+) {
+  if (!existingKeys.has(message.key)) return message;
+
+  let occurrence = 2;
+  let key = `${message.key}#${occurrence}`;
+  while (existingKeys.has(key)) {
+    occurrence += 1;
+    key = `${message.key}#${occurrence}`;
+  }
+  return { ...message, key };
+}
+
+export function decorateChatHistory(messages: ChatMessageLike[]) {
+  const keys = new Set<string>();
+  return messages.map((message) => {
+    const decorated = makeChatMessageKeyUnique(decorateChatMessage(message), keys);
+    keys.add(decorated.key);
+    return decorated;
+  });
+}
+
 export function bumpChatLikeCount(messages: GameChatMessage[], key: string) {
   let changed = false;
 

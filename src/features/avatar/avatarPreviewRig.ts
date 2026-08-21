@@ -55,6 +55,12 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
     hairColor,
     backpack,
     glasses,
+    accentColor,
+    hairStyle,
+    outfitStyle,
+    faceStyle,
+    headShape,
+    accessory,
   } = appearance;
 
   const root = new THREE.Group();
@@ -74,6 +80,7 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
     transparent: true,
     opacity: 0.55,
   });
+  const accentMat = new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.76 });
 
   const torso = new THREE.Group();
   torso.position.set(0, 1.0, 0);
@@ -94,6 +101,18 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   );
   shirtFront.position.set(0, 0.48, 0.33);
   torso.add(shirtFront);
+  if (outfitStyle === "sport") {
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.64, 0.045), accentMat);
+    stripe.position.set(0, 0.48, 0.36);
+    torso.add(stripe);
+  } else if (outfitStyle === "jacket") {
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.58, 0.045), accentMat);
+      lapel.position.set(side * 0.13, 0.5, 0.365);
+      lapel.rotation.z = side * 0.16;
+      torso.add(lapel);
+    }
+  }
 
   const collar = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.035, 8, 18), shirtMat);
   collar.position.y = 0.92;
@@ -125,7 +144,9 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   torso.add(head);
 
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.39, 26, 24), skinMat);
-  skull.scale.set(1.02, 1.08, 0.95);
+  if (headShape === "oval") skull.scale.set(0.94, 1.18, 0.92);
+  else if (headShape === "wide") skull.scale.set(1.13, 1.02, 0.96);
+  else skull.scale.set(1.02, 1.08, 0.95);
   skull.castShadow = true;
   head.add(skull);
 
@@ -135,11 +156,13 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   );
   hair.position.set(0, 0.15, -0.035);
   hair.scale.set(1.04, 0.78, 1.02);
+  hair.visible = hairStyle === "short" || hairStyle === "bun";
   head.add(hair);
 
   const hairBack = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), hairMat);
   hairBack.position.set(0, -0.08, -0.27);
   hairBack.scale.set(1.18, 1.08, 0.82);
+  hairBack.visible = hairStyle === "short" || hairStyle === "bun";
   head.add(hairBack);
 
   const bangGeo = new THREE.SphereGeometry(0.075, 10, 8);
@@ -154,7 +177,26 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
     bang.scale.set(1.18, 0.62, 0.55);
     bang.rotation.z = rz;
     bang.rotation.x = rx;
+    bang.visible = hairStyle === "short" || hairStyle === "bun";
     head.add(bang);
+  }
+
+  if (hairStyle === "curly") {
+    for (const [x, y, z] of [[-0.27, .2, 0], [-.12, .33, .02], [.05, .35, 0], [.22, .28, 0], [.3, .09, -.05], [-.3, .05, -.05], [0, .27, -.28]]) {
+      const curl = new THREE.Mesh(new THREE.SphereGeometry(.135, 12, 10), hairMat);
+      curl.position.set(x, y, z);
+      head.add(curl);
+    }
+  } else if (hairStyle === "mohawk") {
+    for (let index = 0; index < 5; index += 1) {
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(.1, .3, 10), hairMat);
+      spike.position.set(0, .37, -.2 + index * .1);
+      head.add(spike);
+    }
+  } else if (hairStyle === "bun") {
+    const bun = new THREE.Mesh(new THREE.SphereGeometry(.19, 16, 14), hairMat);
+    bun.position.set(0, .2, -.36);
+    head.add(bun);
   }
 
   const leftEyeWhite = new THREE.Mesh(new THREE.SphereGeometry(0.075, 14, 12), eyeWhiteMat);
@@ -190,7 +232,16 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   mouth.position.set(0, -0.135, 0.392);
   mouth.rotation.x = -0.08;
   mouth.scale.y = 0.72;
+  if (faceStyle === "smile") mouth.scale.set(1.28, .9, 1);
   head.add(mouth);
+  if (faceStyle === "freckles") {
+    const freckleMat = new THREE.MeshBasicMaterial({ color: 0x8a573f });
+    for (const side of [-1, 1]) for (let index = 0; index < 3; index += 1) {
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(.012, 6, 5), freckleMat);
+      dot.position.set(side * (.13 + index * .035), -.05 + (index % 2) * .025, .385);
+      head.add(dot);
+    }
+  }
 
   const leftCheek = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), cheekMat);
   leftCheek.position.set(-0.225, -0.075, 0.335);
@@ -241,6 +292,32 @@ function buildCharacter(appearance: ReturnType<typeof avatarToGameAppearance>): 
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.012, 0.012), frameMat);
   bridge.position.set(0, 0.06, 0.365);
   glassesGroup.add(bridge);
+
+  if (accessory === "headphones") {
+    const band = new THREE.Mesh(new THREE.TorusGeometry(.36, .035, 8, 24, Math.PI), accentMat);
+    band.position.set(0, .08, -.02);
+    band.rotation.z = Math.PI;
+    head.add(band);
+    for (const side of [-1, 1]) {
+      const cup = new THREE.Mesh(new THREE.CylinderGeometry(.11, .11, .07, 14), accentMat);
+      cup.position.set(side * .37, 0, 0);
+      cup.rotation.z = Math.PI / 2;
+      head.add(cup);
+    }
+  } else if (accessory === "cap") {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(.415, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), accentMat);
+    cap.position.y = .18;
+    cap.scale.y = .62;
+    head.add(cap);
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(.34, .035, .22), accentMat);
+    brim.position.set(0, .2, .36);
+    head.add(brim);
+  } else if (accessory === "beanie") {
+    const beanie = new THREE.Mesh(new THREE.SphereGeometry(.42, 20, 14, 0, Math.PI * 2, 0, Math.PI / 1.7), accentMat);
+    beanie.position.y = .18;
+    beanie.scale.y = .8;
+    head.add(beanie);
+  }
 
   function buildArm(side: "left" | "right") {
     const sign = side === "left" ? -1 : 1;

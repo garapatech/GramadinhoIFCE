@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { CAMPUS_ENTRY_X, CAMPUS_ENTRY_Z } from "@/game/world/campusLayout";
+import { disposeObject3D } from "@/game/disposeObject3D";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -12,7 +14,8 @@ type PlatformDef = {
 };
 
 type PlatformRuntime = PlatformDef & {
-  mesh: THREE.Mesh;
+  instanceMesh: THREE.InstancedMesh;
+  instanceIndex: number;
   currentX: number; currentZ: number; currentY: number;
 };
 
@@ -46,6 +49,7 @@ export type ParkourOptions = {
   interactables: ParkourInteractable[];
   container?: HTMLElement | null;
   isKeyDown?: (code: string) => boolean;
+  isUmbrellaOpen?: () => boolean;
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -477,30 +481,76 @@ export function createParkourCircuit(opts: ParkourOptions) {
 
   // Build platforms
   const defs = parsePlatforms();
-  const platforms: PlatformRuntime[] = defs.map((def) => {
-    const mat = new THREE.MeshStandardMaterial({
-      color: platformColor(def),
-      roughness: 0.88,
-      metalness: 0.04,
-    });
-    if (def.isCheckpoint) {
-      mat.emissive = new THREE.Color(0x906000);
-      mat.emissiveIntensity = 0.25;
-    }
-
-    // Plataformas estáticas: coluna sólida do chão até a superfície (evita flutuar)
-    // Plataformas móveis: caixa fina (se movem, não podem ter coluna)
-    const isStatic    = def.moveAxis === null;
-    const meshH       = isStatic ? def.baseY : 0.4;
-    const meshCenterY = isStatic ? def.baseY / 2 : def.baseY - 0.2;
-
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(def.w, meshH, def.d), mat);
-    mesh.position.set(def.baseX, meshCenterY, def.baseZ);
+  const platformGeometry = new THREE.BoxGeometry(1, 1, 1);
+  const regularPlatformMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    roughness: 0.88,
+    metalness: 0.04,
+  });
+  const checkpointPlatformMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf0c040,
+    emissive: 0x906000,
+    emissiveIntensity: 0.25,
+    roughness: 0.88,
+    metalness: 0.04,
+  });
+  const regularPlatformMesh = new THREE.InstancedMesh(
+    platformGeometry,
+    regularPlatformMaterial,
+    defs.filter((def) => !def.isCheckpoint).length,
+  );
+  const checkpointPlatformMesh = new THREE.InstancedMesh(
+    platformGeometry,
+    checkpointPlatformMaterial,
+    defs.filter((def) => def.isCheckpoint).length,
+  );
+  for (const mesh of [regularPlatformMesh, checkpointPlatformMesh]) {
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
     world.add(mesh);
-    return { ...def, mesh, currentX: def.baseX, currentZ: def.baseZ, currentY: def.baseY };
+    mesh.updateMatrix();
+    mesh.matrixAutoUpdate = false;
+  }
+
+  const platformTransform = new THREE.Object3D();
+  function writePlatformMatrix(platform: PlatformRuntime) {
+    const isStatic = platform.moveAxis === null;
+    const height = isStatic ? platform.baseY : 0.4;
+    platformTransform.position.set(
+      platform.currentX,
+      isStatic ? platform.baseY / 2 : platform.currentY - 0.2,
+      platform.currentZ,
+    );
+    platformTransform.scale.set(platform.w, height, platform.d);
+    platformTransform.updateMatrix();
+    platform.instanceMesh.setMatrixAt(platform.instanceIndex, platformTransform.matrix);
+  }
+
+  let regularPlatformIndex = 0;
+  let checkpointPlatformIndex = 0;
+  const platforms: PlatformRuntime[] = defs.map((def) => {
+    const instanceMesh = def.isCheckpoint ? checkpointPlatformMesh : regularPlatformMesh;
+    const instanceIndex = def.isCheckpoint ? checkpointPlatformIndex++ : regularPlatformIndex++;
+    const platform: PlatformRuntime = {
+      ...def,
+      instanceMesh,
+      instanceIndex,
+      currentX: def.baseX,
+      currentZ: def.baseZ,
+      currentY: def.baseY,
+    };
+    writePlatformMatrix(platform);
+    if (!def.isCheckpoint) {
+      regularPlatformMesh.setColorAt(instanceIndex, new THREE.Color(platformColor(def)));
+    }
+    return platform;
   });
+  regularPlatformMesh.instanceMatrix.needsUpdate = true;
+  checkpointPlatformMesh.instanceMatrix.needsUpdate = true;
+  if (regularPlatformMesh.instanceColor) regularPlatformMesh.instanceColor.needsUpdate = true;
 
   // Rampa de entrada
   const rampMesh = buildRamp(world);
@@ -529,6 +579,9 @@ export function createParkourCircuit(opts: ParkourOptions) {
   // Desativa frustum culling para o avião não sumir durante o voo
   airplaneGroup.traverse((obj) => { obj.frustumCulled = false; });
   const propPivot = airplaneGroup.children.find((c) => c instanceof THREE.Group) as THREE.Group;
+  const airplaneNavLight = airplaneGroup.children.find(
+    (c) => c instanceof THREE.PointLight,
+  ) as THREE.PointLight | undefined;
 
   // ── DOM: botão Sair do Parkour ─────────────────────────────────────────────
 
@@ -712,8 +765,8 @@ export function createParkourCircuit(opts: ParkourOptions) {
     playerState.jumpY   = 0;
     playerState.jumpVel = 0;
     // Teleporta de volta para a entrada do campus
-    player.position.x = -34;
-    player.position.z = -73.5;
+    player.position.x = CAMPUS_ENTRY_X;
+    player.position.z = CAMPUS_ENTRY_Z + 1.5;
     exitBtn.style.display = "none";
     speak("Você saiu do parkour.", "Parkour");
   }
@@ -801,13 +854,6 @@ export function createParkourCircuit(opts: ParkourOptions) {
       }
       startRiding();
     },
-    update(dt: number, _time: number) {
-      if (!state.isRiding) {
-        if (propPivot) propPivot.rotation.x += dt * 4;
-        const navL = airplaneGroup.children.find((c) => c instanceof THREE.PointLight) as THREE.PointLight | undefined;
-        if (navL) navL.intensity = 0.7 + Math.sin(_time * 4.0) * 0.4;
-      }
-    },
   };
   interactables.push(airplaneInteractable);
 
@@ -817,9 +863,30 @@ export function createParkourCircuit(opts: ParkourOptions) {
     return state.active;
   }
 
+  let parkourVisualsNearby = true;
+  let parkourUiVisible = false;
+
   function update(dt: number, time: number) {
+    const shouldAnimateVisuals =
+      state.active ||
+      state.isRiding ||
+      Math.max(Math.abs(player.position.x), Math.abs(player.position.z)) >= 58;
+    if (shouldAnimateVisuals !== parkourVisualsNearby) {
+      parkourVisualsNearby = shouldAnimateVisuals;
+      if (shouldAnimateVisuals) {
+        if (flag.group.parent !== world) world.add(flag.group);
+        for (const pigeon of parkourPigeons) {
+          if (pigeon.group.parent !== world) world.add(pigeon.group);
+        }
+      } else {
+        world.remove(flag.group);
+        for (const pigeon of parkourPigeons) world.remove(pigeon.group);
+      }
+    }
     // Plataformas móveis
-    for (const p of platforms) {
+    let regularPlatformsChanged = false;
+    let checkpointPlatformsChanged = false;
+    if (shouldAnimateVisuals) for (const p of platforms) {
       if (!p.moveAxis) {
         p.currentX = p.baseX; p.currentZ = p.baseZ; p.currentY = p.baseY;
         continue;
@@ -829,12 +896,16 @@ export function createParkourCircuit(opts: ParkourOptions) {
       else if (p.moveAxis === "z") { p.currentX = p.baseX;          p.currentZ = p.baseZ + offset; p.currentY = p.baseY; }
       else                          { p.currentX = p.baseX;          p.currentZ = p.baseZ;          p.currentY = p.baseY + Math.abs(offset); }
       // Centro visual da plataforma móvel (caixa fina 0.4): topo está em currentY, centro em currentY-0.2
-      p.mesh.position.set(p.currentX, p.currentY - 0.2, p.currentZ);
+      writePlatformMatrix(p);
+      if (p.isCheckpoint) checkpointPlatformsChanged = true;
+      else regularPlatformsChanged = true;
     }
+    if (regularPlatformsChanged) regularPlatformMesh.instanceMatrix.needsUpdate = true;
+    if (checkpointPlatformsChanged) checkpointPlatformMesh.instanceMatrix.needsUpdate = true;
 
     // Animar bandeira
     const { cloth, basePositions } = flag;
-    if (cloth && basePositions) {
+    if (shouldAnimateVisuals && cloth && basePositions) {
       const pos = cloth.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         const idx  = i * 3;
@@ -850,18 +921,19 @@ export function createParkourCircuit(opts: ParkourOptions) {
     if (state.voidCooldown > 0) state.voidCooldown -= dt;
 
     // ── Aviãozinho: hélice e luz (posição controlada em postUpdatePlayer) ────
-    if (state.isRiding) {
-      if (propPivot) propPivot.rotation.x += dt * 22;
-    } else {
-      if (propPivot) propPivot.rotation.x += dt * 4;
+    if (shouldAnimateVisuals) {
+      if (propPivot) propPivot.rotation.x += dt * (state.isRiding ? 22 : 4);
+      if (airplaneNavLight) airplaneNavLight.intensity = 0.7 + Math.sin(time * 4.0) * 0.4;
     }
-    const navL = airplaneGroup.children.find((c) => c instanceof THREE.PointLight) as THREE.PointLight | undefined;
-    if (navL) navL.intensity = 0.7 + Math.sin(time * 4.0) * 0.4;
+    if (airplaneNavLight) airplaneNavLight.visible = shouldAnimateVisuals;
 
     // Botão e timer: visíveis só no parkour normal (não durante o voo)
     const inParkourUI = state.active && !state.isRiding;
-    exitBtn.style.display = inParkourUI ? "flex" : "none";
-    timerEl.style.display = inParkourUI ? "block" : "none";
+    if (inParkourUI !== parkourUiVisible) {
+      parkourUiVisible = inParkourUI;
+      exitBtn.style.display = inParkourUI ? "flex" : "none";
+      timerEl.style.display = inParkourUI ? "block" : "none";
+    }
 
     // Conta o tempo enquanto ativo e não voando
     if (inParkourUI && state.voidCooldown <= 0) {
@@ -877,6 +949,7 @@ export function createParkourCircuit(opts: ParkourOptions) {
     }
 
     // Animar pombos patrulheiros
+    if (!shouldAnimateVisuals) return;
     for (const p of parkourPigeons) {
       p.phase     += p.angSpeed * dt;
       p.flapPhase += dt * 12;
@@ -1063,7 +1136,9 @@ export function createParkourCircuit(opts: ParkourOptions) {
       landOn(platY, px, pz);
     } else if (!playerState.jumping && (platY === null || currentAbsY > platY + LAND_TOL + 0.1)) {
       // Cair (sem plataforma abaixo ou plataforma abaixo mas muito longe)
-      state.fallVel -= FALL_GRAVITY * dt;
+      const umbrellaOpen = opts.isUmbrellaOpen?.() === true;
+      state.fallVel -= (umbrellaOpen ? 6.2 : FALL_GRAVITY) * dt;
+      if (umbrellaOpen) state.fallVel = Math.max(state.fallVel, -3.7);
       state.floorY  += state.fallVel * dt;
 
       // Pousar enquanto caindo
@@ -1079,7 +1154,7 @@ export function createParkourCircuit(opts: ParkourOptions) {
     }
 
     // Saída automática ao passar pela porta de entrada
-    if (pz > -72 && Math.abs(px - (-34)) < 8 && state.floorY < 1.0 && !playerState.jumping) {
+    if (pz > CAMPUS_ENTRY_Z - 2 && Math.abs(px - CAMPUS_ENTRY_X) < 8 && state.floorY < 1.0 && !playerState.jumping) {
       exitParkour();
       player.position.y = playerState.jumpY + bobVal;
       state.prevAbsY    = playerState.jumpY;
@@ -1097,16 +1172,27 @@ export function createParkourCircuit(opts: ParkourOptions) {
   function destroy() {
     exitBtn.remove();
     timerEl.remove();
-    for (const p of parkourPigeons) world.remove(p.group);
+    for (const p of parkourPigeons) {
+      world.remove(p.group);
+      disposeObject3D(p.group);
+    }
     world.remove(rampMesh);
     world.remove(flag.group);
     world.remove(airplaneGroup);
-    for (const p of platforms) {
-      world.remove(p.mesh);
-      p.mesh.geometry.dispose();
-      (p.mesh.material as THREE.Material).dispose();
-    }
+    disposeObject3D(rampMesh);
+    disposeObject3D(flag.group);
+    disposeObject3D(airplaneGroup);
+    world.remove(regularPlatformMesh, checkpointPlatformMesh);
+    platformGeometry.dispose();
+    regularPlatformMaterial.dispose();
+    checkpointPlatformMaterial.dispose();
   }
 
-  return { update, postUpdatePlayer, isInParkourZone, destroy };
+  return {
+    update,
+    postUpdatePlayer,
+    isInParkourZone,
+    getFloorY: () => state.active ? THREE.MathUtils.clamp(state.floorY, 0, 64) : null,
+    destroy,
+  };
 }

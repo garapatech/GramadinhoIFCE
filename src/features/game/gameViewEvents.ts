@@ -3,7 +3,9 @@ import {
   createIncomingPvpState,
   createStartedPvpState,
   createLocalOnlinePlayer as buildLocalOnlinePlayer,
+  decorateChatHistory,
   decorateChatMessage,
+  makeChatMessageKeyUnique,
   bumpChatLikeCount,
   normalizeOnlinePlayer,
   patchOnlinePlayer,
@@ -31,6 +33,8 @@ type PokerCardPayload = PokerHoleMessage["cards"][number];
 
 type ChessStateMessage = Extract<SocketInboundMessage, { type: "chess-state" }>;
 type ChessStatePayload = ChessStateMessage["state"];
+type MediaStatePayload = Extract<SocketInboundMessage, { type: "media-state" }>["state"];
+type WorldItemStatePayload = Extract<SocketInboundMessage, { type: "item-state" }>["state"];
 
 type MutableRef<T> = { current: T };
 type NpcStateList = Extract<SocketInboundMessage, { type: "npc-state" }>["npcs"];
@@ -61,6 +65,9 @@ type GameApi = {
   setNpcAuthority?: (value: boolean) => void;
   pushChatBubble?: (target: string, text: string) => void;
   exitSit?: () => void;
+  applyWorldItems?: (state: WorldItemStatePayload, localId: string | null) => void;
+  playItemAction?: (event: Extract<SocketInboundMessage, { type: "item-action" }>, localId: string | null) => void;
+  applyRagdoll?: (targetId: string, duration: number, localId: string | null) => void;
 };
 
 type VoiceApi = {
@@ -98,6 +105,9 @@ type GameViewEventContext = {
   setPokerError: (value: string | null) => void;
   setChessState: (value: ChessStatePayload | null) => void;
   setChessError: (value: string | null) => void;
+  setMediaState: (value: MediaStatePayload) => void;
+  setWorldItemState: (value: WorldItemStatePayload) => void;
+  onGameplayEvent: (event: SocketInboundMessage) => void;
 };
 
 function createPvpMatchUpdate(matchId: string, opponentId: string | null, side: "A" | "B" | null) {
@@ -109,7 +119,11 @@ function appendChatMessage(
   message: ChatMessage
 ) {
   setChatMessages((prev) => {
-    const next = [...prev, decorateChatMessage(message)];
+    const decorated = makeChatMessageKeyUnique(
+      decorateChatMessage(message),
+      new Set(prev.map((entry) => entry.key))
+    );
+    const next = [...prev, decorated];
     return next.length > 80 ? next.slice(next.length - 80) : next;
   });
 }
@@ -132,10 +146,12 @@ function handleEspectroSpawn(context: GameViewEventContext, event: SpectroSpawnM
   appendChatMessage(context.setChatMessages, {
     id: "__system__",
     nick: "sistema",
-    text: "biriba está no campus",
+    text: event.espectro.mode === "bike" ? "Biriba passou de bicicleta pelo campus" : "Biriba está no campus",
     ts: Date.now(),
   });
-  context.setEspectroNotice("biriba está no campus");
+  context.setEspectroNotice(
+    event.espectro.mode === "bike" ? "Biriba está de bicicleta!" : "Biriba está no campus",
+  );
   if (context.espectroNoticeTimerRef.current) clearTimeout(context.espectroNoticeTimerRef.current);
   context.espectroNoticeTimerRef.current = setTimeout(() => {
     context.setEspectroNotice("");
@@ -200,6 +216,8 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
         typeof event.npcAuthority === "string" ? event.npcAuthority : null;
       context.npcSnapshotRef.current = Array.isArray(event.npcs) ? event.npcs : [];
       context.espectroSnapshotRef.current = event.espectro || null;
+      context.setMediaState(event.media);
+      context.setWorldItemState(event.items);
       if (typeof event.serverNow === "number") {
         context.serverNowRef.current = event.serverNow;
         context.serverSyncedAtRef.current = Date.now();
@@ -207,7 +225,7 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
       voice?.setLocalId?.(event.you);
       voice?.syncPlayers?.(event.players || []);
       if (event.history) {
-        context.setChatMessages(() => event.history.map((message) => decorateChatMessage(message)));
+        context.setChatMessages(() => decorateChatHistory(event.history));
       }
       if (game && event.players) {
         for (const player of event.players) {
@@ -225,6 +243,7 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
       if (game) {
         game.setNpcAuthority?.(context.npcAuthorityIdRef.current === event.you);
         game.applyNpcSnapshots?.(context.npcSnapshotRef.current);
+        game.applyWorldItems?.(event.items, event.you);
       }
       return;
     }
@@ -327,6 +346,16 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
       context.pvpCountdown.clear();
       context.setPvpState(null);
       game?.pvpSetMatch?.(null);
+      if (event.type === "pvp-cancelled" && event.reason) {
+        context.setEspectroNotice(event.reason);
+        if (context.espectroNoticeTimerRef.current) {
+          clearTimeout(context.espectroNoticeTimerRef.current);
+        }
+        context.espectroNoticeTimerRef.current = setTimeout(() => {
+          context.setEspectroNotice("");
+          context.espectroNoticeTimerRef.current = null;
+        }, 4_500);
+      }
       return;
     }
 
@@ -353,6 +382,48 @@ export function createGameViewEventHandler(context: GameViewEventContext) {
     if (event.type === "espectro-despawn") {
       context.espectroSnapshotRef.current = null;
       game?.espectroDespawn?.();
+      return;
+    }
+
+    if (event.type === "media-state") {
+      context.setMediaState(event.state);
+      return;
+    }
+
+    if (event.type === "item-state") {
+      context.setWorldItemState(event.state);
+      game?.applyWorldItems?.(event.state, context.localIdRef.current);
+      return;
+    }
+
+    if (event.type === "item-action") {
+      game?.playItemAction?.(event, context.localIdRef.current);
+      return;
+    }
+
+    if (event.type === "ragdoll") {
+      game?.applyRagdoll?.(event.targetId, event.duration, context.localIdRef.current);
+      return;
+    }
+
+    if (
+      event.type === "swim-challenge" ||
+      event.type === "swim-start" ||
+      event.type === "swim-progress" ||
+      event.type === "swim-end" ||
+      event.type === "swim-declined" ||
+      event.type === "swim-cancelled" ||
+      event.type === "typing-challenge" ||
+      event.type === "typing-room-state" ||
+      event.type === "typing-lobby" ||
+      event.type === "typing-start" ||
+      event.type === "typing-progress" ||
+      event.type === "typing-end" ||
+      event.type === "typing-declined" ||
+      event.type === "typing-cancelled" ||
+      event.type === "gameplay-error"
+    ) {
+      context.onGameplayEvent(event);
       return;
     }
 

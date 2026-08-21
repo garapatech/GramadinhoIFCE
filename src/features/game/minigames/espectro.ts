@@ -162,7 +162,60 @@ type EspectroSpawnPayload = {
   seed?: string | number;
   spawnIndex?: number;
   expiresAt?: number;
+  mode?: "foot" | "bike";
 };
+
+function createBiribaBike() {
+  const group = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2f8b72, roughness: 0.52, metalness: 0.28 });
+  const tireMat = new THREE.MeshStandardMaterial({ color: 0x17191c, roughness: 0.92 });
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0xaeb9bf, roughness: 0.32, metalness: 0.72 });
+  const wheels: THREE.Mesh[] = [];
+  for (const z of [-0.72, 0.72]) {
+    const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.36, 0.045, 8, 22), tireMat);
+    wheel.position.set(0, 0.37, z);
+    wheel.rotation.y = Math.PI / 2;
+    wheel.castShadow = true;
+    group.add(wheel);
+    wheels.push(wheel);
+  }
+  const addTube = (length: number, x: number, y: number, z: number, rx: number, rz = 0) => {
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, length, 8), frameMat);
+    tube.position.set(x, y, z);
+    tube.rotation.set(rx, 0, rz);
+    tube.castShadow = true;
+    group.add(tube);
+  };
+  addTube(1.08, 0, 0.57, 0, Math.PI / 2, 0);
+  addTube(0.8, 0, 0.63, -0.33, 0.75, 0);
+  addTube(0.82, 0, 0.63, 0.3, -0.72, 0);
+  const handlebar = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.62, 8), metalMat);
+  handlebar.position.set(0, 0.96, -0.68);
+  handlebar.rotation.z = Math.PI / 2;
+  group.add(handlebar);
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.07, 0.18), tireMat);
+  seat.position.set(0, 0.9, 0.18);
+  group.add(seat);
+  const crank = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.06, 10), metalMat);
+  crank.position.set(0, 0.5, 0);
+  crank.rotation.z = Math.PI / 2;
+  group.add(crank);
+  return { group, wheels, crank };
+}
+
+function applyBiribaBikePose(refs, phase: number, intensity: number) {
+  const pedal = Math.sin(phase) * 0.58 * intensity;
+  refs.leftShoulder.rotation.set(-0.78, 0, 0.12);
+  refs.rightShoulder.rotation.set(-0.78, 0, -0.12);
+  refs.leftElbow.rotation.x = 0.58;
+  refs.rightElbow.rotation.x = 0.58;
+  refs.leftHip.rotation.x = -1.08 + pedal;
+  refs.rightHip.rotation.x = -1.08 - pedal;
+  refs.leftKnee.rotation.x = 1.34 + Math.max(0, -pedal) * 0.5;
+  refs.rightKnee.rotation.x = 1.34 + Math.max(0, pedal) * 0.5;
+  refs.torso.rotation.x = 0.16;
+  refs.head.rotation.x = -0.05;
+}
 
 export function createEspectroEvent({
   world,
@@ -182,8 +235,15 @@ export function createEspectroEvent({
   forceDismount,
   canStartSecret,
   onConsumed,
+  onDuelStart,
+  onDuelHit,
   onSecretDisconnect,
   playParanormalSound,
+  isBlockedAt,
+  clampPointToWorld,
+  getHumans,
+  getPlayerFloorY,
+  setPlayerFloorY,
 }) {
   let secretCourt: ReturnType<typeof createSecretCourt> | null = null;
   const veil = document.createElement("div");
@@ -226,7 +286,7 @@ export function createEspectroEvent({
 
   function makeEspectroRig(appearance = state.appearance || createRandomAppearance(Math.random)) {
     const rig = createCharacter(appearance);
-    const label = createNameLabel("biriba", "#fff8dc", "#9ca3af");
+    const label = createNameLabel("Biriba", "#fff8dc", "#9ca3af");
     rig.group.add(label);
     return { rig, label };
   }
@@ -249,14 +309,115 @@ export function createEspectroEvent({
   }
 
   function pickWanderTarget(origin, rng = state.rng) {
-    for (let i = 0; i < 10; i += 1) {
+    for (let i = 0; i < 18; i += 1) {
       const angle = randomBetween(rng, 0, Math.PI * 2);
-      const radius = randomBetween(rng, 1.8, 6.2);
-      const x = THREE.MathUtils.clamp(origin.x + Math.cos(angle) * radius, -66, 66);
-      const z = THREE.MathUtils.clamp(origin.z + Math.sin(angle) * radius, -66, 66);
-      return new THREE.Vector3(x, 0, z);
+      const radius = randomBetween(rng, 3.2, 13.5);
+      const candidate = new THREE.Vector3(
+        origin.x + Math.cos(angle) * radius,
+        0,
+        origin.z + Math.sin(angle) * radius,
+      );
+      clampPointToWorld?.(candidate, 0.58);
+      if (!isBlockedAt?.(candidate.x, candidate.z, 0.58)) return candidate;
     }
     return origin.clone();
+  }
+
+  function chooseHuman(espectro) {
+    const humans = getHumans?.() || [{
+      id: "__local__",
+      position: player.position,
+      velocity: { x: playerVelocity.x || 0, z: playerVelocity.y || 0 },
+    }];
+    let best: any = null;
+    let bestScore = Infinity;
+    for (const human of humans) {
+      if (!human?.position) continue;
+      const distance = Math.hypot(
+        human.position.x - espectro.group.position.x,
+        human.position.z - espectro.group.position.z,
+      );
+      const samePenalty = human.id === espectro.lastHumanId ? 1.4 : 0;
+      const noise = randomBetween(state.rng, -1.3, 1.3);
+      const score = distance + samePenalty + noise;
+      if (score < bestScore) {
+        best = { ...human, distance };
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  function predictHumanPoint(human, leadSeconds: number) {
+    const velocity = human?.velocity || { x: 0, z: 0 };
+    const point = new THREE.Vector3(
+      human.position.x + velocity.x * leadSeconds,
+      0,
+      human.position.z + velocity.z * leadSeconds,
+    );
+    clampPointToWorld?.(point, 0.58);
+    return point;
+  }
+
+  function chooseStrategy(espectro) {
+    const human = chooseHuman(espectro);
+    espectro.human = human;
+    espectro.decisionTimer = randomBetween(state.rng, 1.6, 3.8);
+    espectro.strategyAge = 0;
+    if (!human) {
+      espectro.strategy = "wander";
+      espectro.target.copy(pickWanderTarget(espectro.home, state.rng));
+      return;
+    }
+
+    const roll = state.rng();
+    const movingSpeed = Math.hypot(human.velocity?.x || 0, human.velocity?.z || 0);
+    if (human.distance < 15 && roll < 0.5) {
+      espectro.strategy = "intercept";
+      const lead = THREE.MathUtils.clamp(human.distance / (espectro.speed + 2.5), 0.35, 1.45);
+      espectro.target.copy(predictHumanPoint(human, lead + movingSpeed * 0.025));
+    } else if (human.distance < 25 && roll < 0.82) {
+      espectro.strategy = "stalk";
+      const dx = espectro.group.position.x - human.position.x;
+      const dz = espectro.group.position.z - human.position.z;
+      const length = Math.hypot(dx, dz) || 1;
+      const side = state.rng() < 0.5 ? -1 : 1;
+      espectro.target.set(
+        human.position.x + (dx / length) * randomBetween(state.rng, 3.3, 5.8) + (dz / length) * side * 2.2,
+        0,
+        human.position.z + (dz / length) * randomBetween(state.rng, 3.3, 5.8) - (dx / length) * side * 2.2,
+      );
+      clampPointToWorld?.(espectro.target, 0.58);
+    } else {
+      espectro.strategy = "wander";
+      espectro.target.copy(pickWanderTarget(espectro.group.position, state.rng));
+    }
+    espectro.lastHumanId = human.id;
+  }
+
+  function chooseSteeredStep(espectro, desiredX: number, desiredZ: number, distance: number, step: number) {
+    const baseAngle = Math.atan2(desiredX, desiredZ);
+    const probe = Math.max(0.72, step * 2.4);
+    const offsets = [0, 0.42, -0.42, 0.82, -0.82, 1.25, -1.25, Math.PI];
+    let best: any = null;
+    let bestScore = Infinity;
+    for (const offset of offsets) {
+      const angle = baseAngle + offset;
+      const nx = Math.sin(angle);
+      const nz = Math.cos(angle);
+      const testX = espectro.group.position.x + nx * probe;
+      const testZ = espectro.group.position.z + nz * probe;
+      if (isBlockedAt?.(testX, testZ, 0.58)) continue;
+      const remaining = Math.hypot(espectro.target.x - testX, espectro.target.z - testZ);
+      const turnCost = Math.abs(offset) * (espectro.mode === "bike" ? 1.5 : 0.65);
+      const score = remaining + turnCost;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { nx, nz, angle };
+      }
+    }
+    if (!best && distance > 0.001) return { nx: desiredX / distance, nz: desiredZ / distance, angle: baseAngle };
+    return best;
   }
 
   function spawnEspectro(payload: EspectroSpawnPayload = {}) {
@@ -268,6 +429,9 @@ export function createEspectroEvent({
     state.appearance = createRandomAppearance(rng);
     const { rig } = makeEspectroRig(state.appearance);
     const group = rig.group;
+    const mode = payload.mode === "bike" ? "bike" : "foot";
+    const bike = mode === "bike" ? createBiribaBike() : null;
+    if (bike) group.add(bike.group);
     group.position.set(spawn.x + randomBetween(rng, -0.8, 0.8), 0, spawn.z + randomBetween(rng, -0.8, 0.8));
     group.rotation.y = randomBetween(rng, -Math.PI, Math.PI);
     world.add(group);
@@ -286,7 +450,19 @@ export function createEspectroEvent({
       turnTimer: randomBetween(rng, 0.5, 1.5),
       fakeMoveTimer: randomBetween(rng, 1.0, 2.2),
       expiresAt: payload.expiresAt,
-      speed: randomBetween(rng, 0.75, 1.4),
+      speed: mode === "bike" ? randomBetween(rng, 4.4, 6.1) : randomBetween(rng, 1.25, 2.45),
+      mode,
+      bike,
+      pedalPhase: randomBetween(rng, 0, Math.PI * 2),
+      strategy: "wander",
+      strategyAge: 0,
+      decisionTimer: randomBetween(rng, 0.3, 1.1),
+      human: null,
+      lastHumanId: null,
+      stuckTimer: 0,
+      noProgressTimer: 0,
+      lastPosition: group.position.clone(),
+      recoverySide: rng() < 0.5 ? -1 : 1,
     };
   }
 
@@ -298,10 +474,14 @@ export function createEspectroEvent({
       return;
     }
 
-    const distance = Math.hypot(player.position.x - espectro.group.position.x, player.position.z - espectro.group.position.z);
+    const distance = Math.hypot(
+      player.position.x - espectro.group.position.x,
+      player.position.y - espectro.group.position.y,
+      player.position.z - espectro.group.position.z,
+    );
     state.veilPower = Math.max(state.veilPower, clamp01(1 - distance / 9) * 0.32);
 
-    const canPullPlayer = canStartSecret?.() !== false;
+    const canPullPlayer = espectro.mode !== "bike" && canStartSecret?.() !== false;
     if (distance < 3.4 && canPullPlayer) {
       state.nearTimer += dt;
       if (!state.spoken) {
@@ -318,43 +498,113 @@ export function createEspectroEvent({
       return;
     }
 
-    espectro.turnTimer -= dt;
+    espectro.decisionTimer -= dt;
+    espectro.strategyAge += dt;
     espectro.fakeMoveTimer -= dt;
-    if (espectro.turnTimer <= 0) {
-      espectro.turnTimer = randomBetween(state.rng, 0.5, 1.8);
-      espectro.group.rotation.y += randomBetween(state.rng, -0.95, 0.95);
+    if (espectro.decisionTimer <= 0 || espectro.strategyAge > 6.5) {
+      chooseStrategy(espectro);
     }
     if (espectro.fakeMoveTimer <= 0) {
-      espectro.fakeMoveTimer = randomBetween(state.rng, 1.1, 2.8);
-      espectro.pause = randomBetween(state.rng, 0.15, 0.9);
+      espectro.fakeMoveTimer = randomBetween(state.rng, 2.2, 5.4);
+      if (state.rng() < (espectro.mode === "bike" ? 0.12 : 0.34)) {
+        espectro.pause = randomBetween(state.rng, 0.12, espectro.mode === "bike" ? 0.28 : 0.72);
+      } else if (state.rng() < 0.45) {
+        chooseStrategy(espectro);
+      }
+    }
+
+    if (espectro.strategy === "intercept" && espectro.human?.position) {
+      espectro.turnTimer -= dt;
+      if (espectro.turnTimer <= 0) {
+        espectro.turnTimer = randomBetween(state.rng, 0.28, 0.55);
+        const human = chooseHuman(espectro) || espectro.human;
+        espectro.human = human;
+        const lead = THREE.MathUtils.clamp(human.distance / Math.max(2.5, espectro.speed), 0.3, 1.25);
+        espectro.target.copy(predictHumanPoint(human, lead));
+      }
     }
 
     if (espectro.pause > 0) {
       espectro.pause -= dt;
       setRestPose(espectro.rig.refs, time, seedToNumber(state.seed) * 0.001);
-      if (state.rng() < 0.025) {
-        espectro.group.position.x += randomBetween(state.rng, -0.025, 0.025);
-        espectro.group.position.z += randomBetween(state.rng, -0.025, 0.025);
-      }
+      if (espectro.bike) applyBiribaBikePose(espectro.rig.refs, espectro.pedalPhase, 0.05);
       return;
     }
 
     const dx = espectro.target.x - espectro.group.position.x;
     const dz = espectro.target.z - espectro.group.position.z;
     const dist = Math.hypot(dx, dz);
-    if (dist < 0.28 || state.rng() < 0.003) {
-      espectro.target = pickWanderTarget(espectro.home, state.rng);
-      espectro.pause = randomBetween(state.rng, 0.12, 0.55);
+    if (dist < 0.38) {
+      chooseStrategy(espectro);
+      espectro.pause = randomBetween(state.rng, 0.08, espectro.mode === "bike" ? 0.2 : 0.48);
       return;
     }
-    const step = Math.min(dist, espectro.speed * dt);
-    const nx = dx / dist;
-    const nz = dz / dist;
-    espectro.group.position.x += nx * step;
-    espectro.group.position.z += nz * step;
-    espectro.group.rotation.y = espectro.group.rotation.y + ((((Math.atan2(nx, nz) - espectro.group.rotation.y) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI) * 0.08;
-    animateWalk(espectro.rig.refs, time * 4.4, 0.45);
-    espectro.group.position.y = Math.sin(time * 7.2) * 0.025;
+    const strategyBoost = espectro.strategy === "intercept" ? 1.22 : espectro.strategy === "recovery" ? 0.82 : 1;
+    const speed = espectro.speed * strategyBoost;
+    const step = Math.min(dist, speed * dt);
+    const steer = chooseSteeredStep(espectro, dx, dz, dist, step);
+    if (!steer) {
+      espectro.stuckTimer += dt;
+      return;
+    }
+
+    const nextX = espectro.group.position.x + steer.nx * step;
+    const nextZ = espectro.group.position.z + steer.nz * step;
+    let moved = false;
+    if (!isBlockedAt?.(nextX, nextZ, 0.56)) {
+      espectro.group.position.x = nextX;
+      espectro.group.position.z = nextZ;
+      moved = true;
+    } else if (!isBlockedAt?.(nextX, espectro.group.position.z, 0.56)) {
+      espectro.group.position.x = nextX;
+      moved = true;
+    } else if (!isBlockedAt?.(espectro.group.position.x, nextZ, 0.56)) {
+      espectro.group.position.z = nextZ;
+      moved = true;
+    }
+
+    const actualMove = Math.hypot(
+      espectro.group.position.x - espectro.lastPosition.x,
+      espectro.group.position.z - espectro.lastPosition.z,
+    );
+    espectro.lastPosition.copy(espectro.group.position);
+    if (!moved || actualMove < speed * dt * 0.18) espectro.stuckTimer += dt;
+    else espectro.stuckTimer = Math.max(0, espectro.stuckTimer - dt * 2.2);
+
+    if (espectro.stuckTimer > 0.72) {
+      espectro.stuckTimer = 0;
+      espectro.recoverySide *= -1;
+      const sideX = steer.nz * espectro.recoverySide;
+      const sideZ = -steer.nx * espectro.recoverySide;
+      const recovery = new THREE.Vector3(
+        espectro.group.position.x - steer.nx * 2.2 + sideX * randomBetween(state.rng, 3.1, 5.2),
+        0,
+        espectro.group.position.z - steer.nz * 2.2 + sideZ * randomBetween(state.rng, 3.1, 5.2),
+      );
+      clampPointToWorld?.(recovery, 0.58);
+      if (isBlockedAt?.(recovery.x, recovery.z, 0.58)) {
+        recovery.copy(pickWanderTarget(espectro.group.position, state.rng));
+      }
+      espectro.target.copy(recovery);
+      espectro.strategy = "recovery";
+      espectro.strategyAge = 0;
+      espectro.decisionTimer = randomBetween(state.rng, 0.75, 1.35);
+    }
+
+    const turnRate = espectro.mode === "bike" ? Math.min(0.16, dt * 4.2) : Math.min(0.24, dt * 7.5);
+    espectro.group.rotation.y = espectro.group.rotation.y + ((((steer.angle - espectro.group.rotation.y) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI) * turnRate;
+    if (espectro.bike) {
+      espectro.pedalPhase += speed * dt * 1.35;
+      for (const wheel of espectro.bike.wheels) wheel.rotation.x += speed * dt / 0.36;
+      espectro.bike.crank.rotation.x = espectro.pedalPhase;
+      applyBiribaBikePose(espectro.rig.refs, espectro.pedalPhase, clamp01(speed / 6));
+      espectro.group.position.y = 0.18 + Math.abs(Math.sin(espectro.pedalPhase)) * 0.018;
+    } else {
+      const phase = time * (espectro.strategy === "intercept" ? 7.2 : 5.1);
+      if (speed > 2.25) animateRun(espectro.rig.refs, phase, clamp01(speed / 3.2));
+      else animateWalk(espectro.rig.refs, phase, clamp01(speed / 2.3));
+      espectro.group.position.y = Math.sin(time * 7.2) * 0.018;
+    }
   }
 
   function makeSecretState() {
@@ -367,17 +617,23 @@ export function createEspectroEvent({
       active: true,
       phase: "teleport",
       timer: 0.72,
-      savedPosition: { x: player.position.x, z: player.position.z },
+      savedPosition: {
+        x: player.position.x,
+        z: player.position.z,
+        floorY: getPlayerFloorY?.() ?? 0,
+      },
       ai: {
         rig,
         group: rig.group,
         target: new THREE.Vector3(SECRET_ARENA.x + 4.5, 0, SECRET_ARENA.z + 2),
         hits: 0,
         throwTimer: 1.0,
-        dodgeTimer: 0.4,
+        dodgeTimer: 0.18,
+        evadeCooldown: 0,
       },
       balls: [],
       playerHits: 0,
+      playerThrowCooldown: 0,
       throwQueued: false,
       endTimer: 0,
       disconnectQueued: false,
@@ -390,9 +646,11 @@ export function createEspectroEvent({
     playParanormalSound?.(1.0);
     state.secret = makeSecretState();
     removeEspectro();
+    setPlayerFloorY?.(0);
     playerVelocity.set(0, 0);
     player.position.set(SECRET_ARENA.x - 5.1, 0, SECRET_ARENA.z);
     player.rotation.y = Math.PI / 2;
+    onDuelStart?.(state.seed);
   }
 
   function removeSecretBalls(secret) {
@@ -419,6 +677,7 @@ export function createEspectroEvent({
       secretCourt = null;
     }
     if (!lost && secret.savedPosition) {
+      setPlayerFloorY?.(secret.savedPosition.floorY ?? 0);
       player.position.set(secret.savedPosition.x, 0, secret.savedPosition.z);
       playerVelocity.set(0, 0);
     }
@@ -436,7 +695,7 @@ export function createEspectroEvent({
     return true;
   }
 
-  function spawnSecretBall(x, z, dx, dz, owner) {
+  function spawnSecretBall(x, z, dx, dz, owner, speed = 9.2) {
     const mesh = createDodgeballMesh();
     mesh.position.set(x, 0.78, z);
     world.add(mesh);
@@ -447,28 +706,43 @@ export function createEspectroEvent({
       dx,
       dz,
       owner,
+      speed,
       life: 2.6,
       hit: false,
     });
   }
 
   function doPlayerThrow(secret) {
+    if (secret.playerThrowCooldown > 0) return;
+    secret.playerThrowCooldown = 0.62;
     const yaw = player.rotation.y;
     const dx = -Math.sin(yaw);
     const dz = -Math.cos(yaw);
-    spawnSecretBall(player.position.x + dx * 0.8, player.position.z + dz * 0.8, dx, dz, "player");
+    spawnSecretBall(player.position.x + dx * 0.8, player.position.z + dz * 0.8, dx, dz, "player", 9.2);
     playParanormalSound?.(0.22);
   }
 
   function doAiThrow(secret) {
     const ai = secret.ai;
-    let dx = player.position.x - ai.group.position.x;
-    let dz = player.position.z - ai.group.position.z;
+    const directDistance = Math.hypot(
+      player.position.x - ai.group.position.x,
+      player.position.z - ai.group.position.z,
+    );
+    const leadTime = THREE.MathUtils.clamp(directDistance / 11.5, 0.18, 0.62);
+    let dx = player.position.x + playerVelocity.x * leadTime - ai.group.position.x;
+    let dz = player.position.z + playerVelocity.y * leadTime - ai.group.position.z;
     const len = Math.hypot(dx, dz) || 1;
-    dx = dx / len + randomBetween(state.rng, -0.08, 0.08);
-    dz = dz / len + randomBetween(state.rng, -0.08, 0.08);
+    dx = dx / len + randomBetween(state.rng, -0.035, 0.035);
+    dz = dz / len + randomBetween(state.rng, -0.035, 0.035);
     const adjusted = Math.hypot(dx, dz) || 1;
-    spawnSecretBall(ai.group.position.x + (dx / adjusted) * 0.8, ai.group.position.z + (dz / adjusted) * 0.8, dx / adjusted, dz / adjusted, "espectro");
+    spawnSecretBall(
+      ai.group.position.x + (dx / adjusted) * 0.8,
+      ai.group.position.z + (dz / adjusted) * 0.8,
+      dx / adjusted,
+      dz / adjusted,
+      "espectro",
+      11.5,
+    );
     playParanormalSound?.(0.3);
   }
 
@@ -488,13 +762,47 @@ export function createEspectroEvent({
 
   function updateSecretAi(secret, dt, time) {
     const ai = secret.ai;
+    ai.evadeCooldown = Math.max(0, (ai.evadeCooldown || 0) - dt);
     ai.dodgeTimer -= dt;
-    if (ai.dodgeTimer <= 0 || Math.hypot(ai.target.x - ai.group.position.x, ai.target.z - ai.group.position.z) < 0.25) {
-      ai.dodgeTimer = randomBetween(state.rng, 0.35, 0.95);
+    let threat: any = null;
+    let threatTime = Infinity;
+    for (const ball of secret.balls) {
+      if (ball.owner !== "player" || ball.hit) continue;
+      const relX = ai.group.position.x - ball.x;
+      const relZ = ai.group.position.z - ball.z;
+      const along = relX * ball.dx + relZ * ball.dz;
+      const eta = along / Math.max(0.1, ball.speed || 9.2);
+      if (eta <= 0 || eta > 0.9 || eta >= threatTime) continue;
+      const closestX = ball.x + ball.dx * along;
+      const closestZ = ball.z + ball.dz * along;
+      if (Math.hypot(ai.group.position.x - closestX, ai.group.position.z - closestZ) > 1.45) continue;
+      threat = ball;
+      threatTime = eta;
+    }
+
+    if (threat && ai.evadeCooldown <= 0) {
+      const sideA = { x: -threat.dz, z: threat.dx };
+      const sideB = { x: threat.dz, z: -threat.dx };
+      const roomA = Math.min(
+        SECRET_ARENA.x + SECRET_ARENA.width / 2 - 0.85 - (ai.group.position.x + sideA.x * 4.8),
+        ai.group.position.x + sideA.x * 4.8 - (SECRET_ARENA.x + 0.55),
+        SECRET_ARENA.z + SECRET_ARENA.depth / 2 - 0.8 - (ai.group.position.z + sideA.z * 4.8),
+        ai.group.position.z + sideA.z * 4.8 - (SECRET_ARENA.z - SECRET_ARENA.depth / 2 + 0.8),
+      );
+      const side = roomA > -0.15 || state.rng() > 0.82 ? sideA : sideB;
       ai.target.set(
-        randomBetween(state.rng, SECRET_ARENA.x + 1.1, SECRET_ARENA.x + SECRET_ARENA.width / 2 - 1.4),
+        THREE.MathUtils.clamp(ai.group.position.x + side.x * randomBetween(state.rng, 4.1, 5.4), SECRET_ARENA.x + 0.55, SECRET_ARENA.x + SECRET_ARENA.width / 2 - 0.85),
         0,
-        randomBetween(state.rng, SECRET_ARENA.z - SECRET_ARENA.depth / 2 + 1.3, SECRET_ARENA.z + SECRET_ARENA.depth / 2 - 1.3)
+        THREE.MathUtils.clamp(ai.group.position.z + side.z * randomBetween(state.rng, 4.1, 5.4), SECRET_ARENA.z - SECRET_ARENA.depth / 2 + 0.8, SECRET_ARENA.z + SECRET_ARENA.depth / 2 - 0.8),
+      );
+      ai.evadeCooldown = 0.16;
+      ai.dodgeTimer = randomBetween(state.rng, 0.16, 0.3);
+    } else if (ai.dodgeTimer <= 0 || Math.hypot(ai.target.x - ai.group.position.x, ai.target.z - ai.group.position.z) < 0.25) {
+      ai.dodgeTimer = randomBetween(state.rng, 0.2, 0.48);
+      ai.target.set(
+        randomBetween(state.rng, SECRET_ARENA.x + 0.65, SECRET_ARENA.x + SECRET_ARENA.width / 2 - 0.85),
+        0,
+        randomBetween(state.rng, SECRET_ARENA.z - SECRET_ARENA.depth / 2 + 0.85, SECRET_ARENA.z + SECRET_ARENA.depth / 2 - 0.85)
       );
     }
 
@@ -502,26 +810,25 @@ export function createEspectroEvent({
     const dz = ai.target.z - ai.group.position.z;
     const dist = Math.hypot(dx, dz);
     if (dist > 0.01) {
-      const speed = 2.3 + Math.sin(time * 2.7) * 0.4;
+      const speed = threat ? 8.8 : 4.7 + Math.sin(time * 2.7) * 0.55;
       const nx = dx / dist;
       const nz = dz / dist;
       ai.group.position.x += nx * Math.min(dist, speed * dt);
       ai.group.position.z += nz * Math.min(dist, speed * dt);
       ai.group.rotation.y = ai.group.rotation.y + ((((Math.atan2(player.position.x - ai.group.position.x, player.position.z - ai.group.position.z) - ai.group.rotation.y) % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) - Math.PI) * 0.14;
-      animateRun(ai.rig.refs, time * 6.4, 0.52);
+      animateRun(ai.rig.refs, time * (threat ? 11.2 : 8.4), threat ? 1 : 0.78);
     } else {
       setRestPose(ai.rig.refs, time, 2.4);
     }
 
     ai.throwTimer -= dt;
     if (ai.throwTimer <= 0) {
-      ai.throwTimer = randomBetween(state.rng, 1.05, 1.85);
+      ai.throwTimer = randomBetween(state.rng, 0.72, 1.28);
       doAiThrow(secret);
     }
   }
 
   function updateSecretBalls(secret, dt) {
-    const speed = 8.6;
     for (let i = secret.balls.length - 1; i >= 0; i -= 1) {
       const ball = secret.balls[i];
       ball.life -= dt;
@@ -532,8 +839,8 @@ export function createEspectroEvent({
         secret.balls.splice(i, 1);
         continue;
       }
-      ball.x += ball.dx * speed * dt;
-      ball.z += ball.dz * speed * dt;
+      ball.x += ball.dx * (ball.speed || 9.2) * dt;
+      ball.z += ball.dz * (ball.speed || 9.2) * dt;
       ball.mesh.position.set(ball.x, 0.82 + Math.sin(ball.life * 5) * 0.08, ball.z);
 
       const out =
@@ -560,12 +867,13 @@ export function createEspectroEvent({
         }
       } else if (secret.ai?.group) {
         const d = Math.hypot(ball.x - secret.ai.group.position.x, ball.z - secret.ai.group.position.z);
-        if (d < 0.68) {
+        if (d < 0.42) {
           ball.hit = true;
           secret.ai.hits += 1;
+          onDuelHit?.(state.seed, secret.ai.hits);
           flashTarget(secret.ai.group, 0xc8f7ff);
           playParanormalSound?.(0.55);
-          if (secret.ai.hits >= 3) {
+          if (secret.ai.hits >= 5) {
             secret.phase = "won";
             secret.endTimer = 0.9;
           }
@@ -589,6 +897,7 @@ export function createEspectroEvent({
     }
 
     if (secret.phase === "playing") {
+      secret.playerThrowCooldown = Math.max(0, secret.playerThrowCooldown - dt);
       if (secret.throwQueued) {
         secret.throwQueued = false;
         doPlayerThrow(secret);
@@ -614,6 +923,8 @@ export function createEspectroEvent({
     }
 
     if (secret.phase === "won" && secret.endTimer <= 0) {
+      onConsumed?.(state.seed, "won");
+      state.activePayload = null;
       endSecret({ lost: false });
     }
   }
@@ -648,6 +959,14 @@ export function createEspectroEvent({
   function update(dt, time) {
     if (state.activePayload?.expiresAt <= Date.now()) {
       despawnEvent();
+      return;
+    }
+    if (
+      !state.activePayload &&
+      !state.espectro &&
+      !state.secret?.active &&
+      state.veilPower <= 0
+    ) {
       return;
     }
     updateEspectro(dt, time);

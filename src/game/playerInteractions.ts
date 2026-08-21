@@ -41,6 +41,10 @@ function getEntityPosition<TItem extends PlayerPositionSource>(entity: TItem) {
   return entity.position || entity.group?.position || null;
 }
 
+function isVerticallyReachable(playerPosition: THREE.Vector3, targetPosition: THREE.Vector3, maxDelta = 2.2) {
+  return Math.abs(playerPosition.y - targetPosition.y) <= maxDelta;
+}
+
 export function getNearestTarget(
   playerPosition: THREE.Vector3,
   npcs: Iterable<PlayerPositionSource>,
@@ -54,6 +58,7 @@ export function getNearestTarget(
   for (const npc of npcs) {
     const position = getEntityPosition(npc);
     if (!position) continue;
+    if (!isVerticallyReachable(playerPosition, position)) continue;
     const distance = getDistance2D(playerPosition, position);
     if (distance < npc.radius && distance < bestDistance) {
       best = npc;
@@ -64,6 +69,7 @@ export function getNearestTarget(
   for (const duck of ducks) {
     const position = getEntityPosition(duck);
     if (!position) continue;
+    if (!isVerticallyReachable(playerPosition, position)) continue;
     const distance = getDistance2D(playerPosition, position);
     if (distance < duck.radius && distance < bestDistance) {
       best = duck;
@@ -73,7 +79,9 @@ export function getNearestTarget(
 
   for (const item of interactables) {
     if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(playerPosition, item.position ?? item.group?.position ?? playerPosition);
+    const position = item.position ?? item.group?.position ?? playerPosition;
+    if (!isVerticallyReachable(playerPosition, position)) continue;
+    const distance = getDistance2D(playerPosition, position);
     if (distance < item.radius && distance < bestDistance) {
       best = item;
       bestDistance = distance;
@@ -107,7 +115,9 @@ export function getNearestCameraFocusTarget(
 
   for (const item of interactables) {
     if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(playerPosition, item.position ?? item.group?.position ?? playerPosition);
+    const position = item.position ?? item.group?.position ?? playerPosition;
+    if (!isVerticallyReachable(playerPosition, position, 3.4)) continue;
+    const distance = getDistance2D(playerPosition, position);
     if (distance < 28 && distance < bestDistance) {
       best = {
         kind: "point",
@@ -133,7 +143,9 @@ export function getNearestInteractable(
 
   for (const item of interactables) {
     if (!isInteractableAvailableForPlayer(item)) continue;
-    const distance = getDistance2D(playerPosition, item.position ?? item.group?.position ?? playerPosition);
+    const position = item.position ?? item.group?.position ?? playerPosition;
+    if (!isVerticallyReachable(playerPosition, position)) continue;
+    const distance = getDistance2D(playerPosition, position);
     if (distance > bestDistance) continue;
     best = item;
     bestDistance = distance;
